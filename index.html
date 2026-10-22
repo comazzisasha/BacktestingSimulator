@@ -899,37 +899,70 @@ function splitCSVLine(line) {
   out.push(cur);
   return out.map(s => s.trim());
 }
+// Column names & parsing rules match engine.py (CSV_COLUMNS, _iso_date, _num) exactly;
+// tests/test_engine.py runs this function under Node to prove both give the same data.
+const CSV_COLUMNS = {
+  date: ['date', 'observation_date', 'ex/eff date', 'ex-date', 'ex date', 'ex-dividend date', 'timestamp', 'time'],
+  close: ['close/last', 'close', 'price', 'last'],
+  adj_close: ['adj close', 'adj. close', 'adj_close', 'adjusted close', 'adjclose'],
+  open: ['open'], high: ['high'], low: ['low'], volume: ['volume', 'vol.'],
+  dividend: ['dividends', 'dividend', 'cash amount', 'amount', 'dividend amount'],
+  split: ['stock splits', 'split', 'splits', 'split ratio', 'ratio'],
+};
+function csvHeader(text) {
+  const first = text.replace(/^﻿/, '').split(/\r?\n/).find(l => l.trim());
+  return first ? splitCSVLine(first).map(h => h.toLowerCase()) : [];
+}
+// 'prices' | 'dividends' | 'splits' | 'rates' (date + one value column, e.g. FRED), like engine.csv_kind
+function csvKind(head) {
+  const has = k => CSV_COLUMNS[k].some(n => head.includes(n));
+  if (!has('date')) throw new Error('No Date column found. Use a price, dividend or split history CSV.');
+  if (has('close') || has('adj_close')) return 'prices';
+  if (has('dividend')) return 'dividends';
+  if (has('split')) return 'splits';
+  if (head.length === 2) return 'rates';
+  throw new Error('No Close, Dividends, Stock Splits or single value column found.');
+}
+function csvNum(s) {
+  if (s == null) return NaN;
+  s = String(s).trim().replace(/[$,%]/g, '');
+  if (['', '.', '-', 'N/A', 'n/a', 'null', 'None', 'NaN', 'nan'].includes(s)) return NaN;
+  const v = Number(s); return Number.isFinite(v) ? v : NaN;
+}
+function csvDate(s) {
+  s = String(s || '').replace(/"/g, '').trim();
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/), y, mo, d;
+  if (m) { y = +m[3]; mo = +m[1]; d = +m[2]; } else { m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return null; y = +m[1]; mo = +m[2]; d = +m[3]; }
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? dt.toISOString().slice(0, 10) : null;
+}
+// Prices: the raw close is the trading price; an adjusted close is passed on so the engine can
+// recover dividends from it. With an adjusted close alone, it becomes the price.
 function parseCSV(text) {
   const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim());
   if (lines.length < 3) throw new Error('This file has fewer than 2 rows of prices. Download a longer range, e.g. 10Y.');
   const head = splitCSVLine(lines[0]).map(h => h.toLowerCase());
-  const col = (...names) => { for (const n of names) { const i = head.indexOf(n); if (i >= 0) return i; } return -1; };
-  const iD = col('date'), iC = col('close/last', 'close', 'price'), iA = col('adj close', 'adj. close', 'adj_close');
+  const col = key => { for (const n of CSV_COLUMNS[key]) { const i = head.indexOf(n); if (i >= 0) return i; } return -1; };
+  const iD = col('date'), iC = col('close'), iA = col('adj_close');
   const iO = col('open'), iH = col('high'), iL = col('low'), iV = col('volume');
   if (iD < 0 || (iC < 0 && iA < 0)) throw new Error('No Date & Close columns found. Use the CSV from Nasdaq.com’s “Download Historical Data” button.');
-  const num = s => { if (s == null) return NaN; s = String(s).replace(/[$,\s]/g, ''); if (!s || s === 'N/A' || s === '-' || s === 'null') return NaN; return Number(s); };
-  const parseDate = s => {
-    s = s.replace(/"/g, '').trim();
-    let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
-    m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
-  };
+  const iP = iC >= 0 ? iC : iA, useAdj = iC >= 0 && iA >= 0;
   const rows = [];
   for (const line of lines.slice(1)) {
-    const c = splitCSVLine(line); const d = parseDate(c[iD] || ''); if (!d) continue;
-    let close = iC >= 0 ? num(c[iC]) : NaN;
-    let o = iO >= 0 ? num(c[iO]) : NaN, h = iH >= 0 ? num(c[iH]) : NaN, l = iL >= 0 ? num(c[iL]) : NaN;
-    if (iA >= 0) { const adj = num(c[iA]); if (isFinite(adj) && adj > 0) { const f = isFinite(close) && close > 0 ? adj / close : 1; close = adj; o *= f; h *= f; l *= f; } }
-    if (!(close > 0)) continue;
-    rows.push([d, o > 0 ? o : NaN, h > 0 ? h : NaN, l > 0 ? l : NaN, close, iV >= 0 ? num(c[iV]) : NaN]);
+    const c = splitCSVLine(line); const d = csvDate(c[iD]); const close = csvNum(c[iP]);
+    if (!d || !(close > 0)) continue;
+    const at = i => (i >= 0 ? csvNum(c[i]) : NaN);
+    rows.push([d, at(iO), at(iH), at(iL), close, at(iV), useAdj ? at(iA) : NaN]);
   }
   rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   const uniq = [];
   for (const r of rows) { if (uniq.length && uniq[uniq.length - 1][0] === r[0]) uniq[uniq.length - 1] = r; else uniq.push(r); }
   if (uniq.length < 2) throw new Error('No valid price rows found. Check that the file is a daily price history.');
-  const pick = k => uniq.map(r => (isFinite(r[k]) ? r[k] : null));
-  return { dates: uniq.map(r => r[0]), open: pick(1), high: pick(2), low: pick(3), close: uniq.map(r => r[4]), volume: pick(5) };
+  const pick = k => uniq.map(r => (Number.isFinite(r[k]) ? r[k] : null));
+  const out = { dates: uniq.map(r => r[0]), open: pick(1), high: pick(2), low: pick(3), close: uniq.map(r => r[4]), volume: pick(5) };
+  if (useAdj && uniq.every(r => r[6] > 0)) out.adj_close = pick(6);
+  if (iC < 0) out.price_basis = 'total_return';
+  return out;
 }
 function tickerFromFilename(name) {
   const stem = name.replace(/\.[^.]+$/, '').trim();
