@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Docs · QuantLab</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reference manual. Sticky contents on the left, one readable column on the right.
+   Same Geist look as the app: neutral greys, hairline borders, blue links. */
+:root {
+  --bg: #FAFAFA; --panel: #FFFFFF; --sunk: #F5F5F5; --hover: #F0F0F0; --fg: #171717; --fg-2: #4D4D4D; --fg-3: #6B6B6B;
+  --border: #E5E5E5; --border-strong: #C9C9C9; --link: #0062D1; --focus: #0070F3; --warn: #9E5700; --primary: #171717; --primary-fg: #FFFFFF;
+  --shadow: 0 1px 1px rgba(0, 0, 0, 0.02), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --f-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --bg: #0A0A0A; --panel: #111111; --sunk: #161616; --hover: #1C1C1C; --fg: #EDEDED; --fg-2: #B4B4B4; --fg-3: #8F8F8F;
+    --border: #262626; --border-strong: #3D3D3D; --link: #52A8FF; --focus: #52A8FF; --warn: #F2A33A; --primary: #EDEDED; --primary-fg: #0A0A0A;
+    --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 2px 8px rgba(0, 0, 0, 0.5); color-scheme: dark; }
+}
+:root[data-theme="dark"] { --bg: #0A0A0A; --panel: #111111; --sunk: #161616; --hover: #1C1C1C; --fg: #EDEDED; --fg-2: #B4B4B4; --fg-3: #8F8F8F;
+  --border: #262626; --border-strong: #3D3D3D; --link: #52A8FF; --focus: #52A8FF; --warn: #F2A33A; --primary: #EDEDED; --primary-fg: #0A0A0A;
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 2px 8px rgba(0, 0, 0, 0.5); color-scheme: dark; }
+* { box-sizing: border-box; }
+html { scroll-padding-top: 80px; -webkit-text-size-adjust: 100%; }
+@media (pointer: fine) { html { overscroll-behavior: none; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--f-sans); font-size: 15px; line-height: 1.65; -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
+a { color: var(--link); text-underline-offset: 2px; touch-action: manipulation; }
+a:hover { text-decoration-thickness: 2px; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.skip { position: fixed; left: 16px; top: 8px; z-index: 50; background: var(--primary); color: var(--primary-fg); padding: 8px 14px; border-radius: 6px; font-weight: 500; text-decoration: none; transform: translateY(-160%); }
+.skip:focus { transform: none; }
+.top { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--panel) 92%, transparent); backdrop-filter: saturate(1.4) blur(8px); border-bottom: 1px solid var(--border);
+  min-height: 60px; padding: 8px max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px)); display: flex; gap: 8px 24px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 720px) { .top { position: static; } html { scroll-padding-top: 16px; } }
+.brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 600; font-size: 16px; letter-spacing: -0.02em; text-decoration: none; color: var(--fg); min-height: 32px; }
+.brand svg { width: 22px; height: 22px; }
+.top nav { display: flex; gap: 4px; flex-wrap: wrap; }
+.top nav a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 10px; border-radius: 6px; color: var(--fg-3); text-decoration: none; font-weight: 500; font-size: 14px; }
+.top nav a:hover { color: var(--fg); background: var(--hover); }
+.top nav a[aria-current="page"] { color: var(--fg); background: var(--sunk); box-shadow: inset 0 0 0 1px var(--border); }
+.wrap { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 48px; max-width: 1180px; margin: 0 auto;
+  padding: 32px max(16px, env(safe-area-inset-right, 0px)) 80px max(16px, env(safe-area-inset-left, 0px)); }
+@media (max-width: 860px) { .wrap { grid-template-columns: minmax(0, 1fr); gap: 24px; } .toc { position: static !important; } }
+.toc { position: sticky; top: 84px; align-self: start; font-size: 14px; }
+.toc h2 { font-size: 13px; font-weight: 500; color: var(--fg-3); margin: 0 0 8px; padding: 0; border: 0; }
+.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 1px; }
+.toc a { display: flex; align-items: center; min-height: 30px; padding: 0 10px; border-radius: 6px; color: var(--fg-2); text-decoration: none; }
+.toc a:hover { color: var(--fg); background: var(--hover); }
+@media (pointer: coarse) { .toc a, .top nav a, .brand { min-height: 44px; } }
+main { min-width: 0; max-width: 78ch; }
+main:focus { outline: none; }
+h1 { font-weight: 600; font-size: 36px; letter-spacing: -0.035em; line-height: 1.15; margin: 0 0 8px; text-wrap: balance; }
+.lede { font-size: 17px; color: var(--fg-2); margin: 0 0 24px; text-wrap: pretty; }
+h2 { font-weight: 600; font-size: 24px; letter-spacing: -0.025em; margin: 56px 0 8px; padding-top: 24px; border-top: 1px solid var(--border); text-wrap: balance; scroll-margin-top: 80px; }
+h3 { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; margin: 28px 0 6px; scroll-margin-top: 80px; }
+p, li { text-wrap: pretty; }
+code { font-family: var(--f-mono); font-size: 0.86em; background: var(--sunk); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+pre { font-family: var(--f-mono); font-size: 13px; line-height: 1.6; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; overflow-x: auto; box-shadow: var(--shadow); overscroll-behavior-x: contain; }
+pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+.scroll { overflow-x: auto; margin: 14px 0; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); box-shadow: var(--shadow); overscroll-behavior-x: contain; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+thead th { font-size: 13px; color: var(--fg-3); font-weight: 500; }
+tbody tr:last-child td { border-bottom: 0; }
+td code { white-space: nowrap; }
+tr.group td { font-weight: 600; font-size: 14px; color: var(--fg); padding-top: 16px; border-bottom-color: var(--border-strong); }
+.note { border: 1px solid var(--border); border-left: 3px solid var(--warn); background: var(--panel); border-radius: 10px; padding: 12px 16px; margin: 16px 0; box-shadow: var(--shadow); }
+.note p { margin: 0; }
+kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; background: var(--panel); white-space: nowrap; }
+.timeline { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+.timeline div { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; font-size: 14px; box-shadow: var(--shadow); }
+.timeline b { display: block; font-weight: 600; margin-bottom: 2px; }
+@media (max-width: 600px) { .timeline { grid-template-columns: minmax(0, 1fr); } }
+</style>
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#111111" media="(prefers-color-scheme: dark)">
+</head>
+<body>
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+  <a class="brand" href="index.html#backtest" translate="no"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M5 16l4-5 4 3 6-8"/></svg>QuantLab</a>
+  <nav aria-label="Sections"><a href="index.html#backtest">Backtest</a><a href="index.html#tools">Research Tools</a><a href="index.html#data">Data</a><a href="docs.html" aria-current="page">Docs</a></nav>
+</header>
+<div class="wrap">
+  <nav class="toc" aria-labelledby="toc-h">
+    <h2 id="toc-h">On This Page</h2>
+    <ol>
+      <li><a href="#quick-start">Quick Start</a></li>
+      <li><a href="#data">Getting Data</a></li>
+      <li><a href="#strategy-api">Writing a Strategy</a></li>
+      <li><a href="#ctx">The ctx Object</a></li>
+      <li><a href="#indicators">Indicators</a></li>
+      <li><a href="#signals">Vectorized Signals</a></li>
+      <li><a href="#execution">Execution & Costs</a></li>
+      <li><a href="#statistics">Statistics</a></li>
+      <li><a href="#strategies">Built-In Strategies</a></li>
+      <li><a href="#tools">Research Tools</a></li>
+      <li><a href="#pitfalls">Pitfalls</a></li>
+      <li><a href="#running">Running It Yourself</a></li>
+      <li><a href="#layout">How the Code Is Organized</a></li>
+    </ol>
+  </nav>
+
+  <main id="content" tabindex="-1">
+    <h1>QuantLab Documentation</h1>
+    <p class="lede">QuantLab backtests trading strategies written in Python against daily price history. Everything runs in your browser. Python runs through Pyodide, and your data and code never leave the machine.</p>
+
+    <h2 id="quick-start">Quick Start</h2>
+    <ol>
+      <li>On the <b>Data</b> tab, 23 instruments (10 years of daily Nasdaq data) are already loaded. Drop more CSV files there to add your own.</li>
+      <li>On <b>Backtest</b>, pick an instrument and a benchmark, and choose a strategy from <b>Start from</b>.</li>
+      <li>Edit the code and press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> (<kbd>⌘</kbd>+<kbd>Enter</kbd> on a Mac) or <b>Run backtest</b>.</li>
+      <li>Read the headline numbers, then check the drawdown chart and the trades table to understand <em>why</em> the result looks the way it does.</li>
+      <li>Use <b>Research tools</b> to see whether the result survives different parameters, a different period, and reshuffled returns.</li>
+    </ol>
+    <p>A strategy is a Python function that runs once per trading day and returns how much of your account to have invested:</p>
+<pre><code>PARAMS = {"n": 200}
+
+def on_bar(ctx):
+    avg = ctx.sma(PARAMS["n"])      # 200-day simple moving average
+    if isnan(avg):                  # not enough history yet
+        return 0.0
+    return 1.0 if ctx.price > avg else 0.0   # 100% invested or 100% cash</code></pre>
+    <p>Editor shortcuts: <kbd>Tab</kbd> and <kbd>Shift</kbd>+<kbd>Tab</kbd> indent, <kbd>Ctrl</kbd>+<kbd>/</kbd> toggles comments, <kbd>Ctrl</kbd>+<kbd>S</kbd> saves the strategy in this browser. Press <kbd>Esc</kbd> then <kbd>Tab</kbd> to move focus out of the editor. Your current draft is kept automatically.</p>
+
+    <h2 id="data">Getting Data</h2>
+    <p>QuantLab reads the CSV export from Nasdaq.com’s historical quotes page. Columns are <code>Date, Close/Last, Volume, Open, High, Low</code>, newest row first, and prices may start with <code>$</code>. Yahoo Finance exports (<code>Date, Open, High, Low, Close, Adj Close, Volume</code>) also work. When <code>Adj Close</code> is present, all prices are scaled by it so dividends and splits are included.</p>
+    <ol>
+      <li>Open <code>https://www.nasdaq.com/market-activity/etf/spy/historical</code>. Stocks use <code>/stocks/aapl/historical</code> instead.</li>
+      <li>Choose <b>10Y</b>, the longest range offered, and download.</li>
+      <li>Drop the file on the Data tab. Nasdaq names every file <code>HistoricalData_&lt;number&gt;.csv</code>, so you’ll be asked for the ticker. Renaming the file to <code>SPY.csv</code> first skips the question.</li>
+    </ol>
+    <p>Uploaded files are stored in your browser (IndexedDB) and reappear the next time you open QuantLab in the same browser. To bundle files with the site for everyone, put them in <code>data/</code> and list them in <code>data/manifest.json</code>.</p>
+    <p>The suggested starting set covers the main asset classes: <code>SPY QQQ IWM DIA</code> (US stocks), <code>TLT IEF SHY</code> (Treasuries), <code>GLD SLV USO</code> (commodities), <code>EFA EEM</code> (international), <code>XLK XLF XLE XLV</code> (sectors), and <code>AAPL MSFT NVDA AMZN JPM XOM KO</code> (single stocks).</p>
+    <div class="note"><p><b>Dividends.</b> Nasdaq's Close/Last is adjusted for splits but not for dividends. Buy-and-hold results for dividend payers such as SPY (about 1.3% a year) or TLT (about 3–4%) are therefore understated. Strategies and benchmarks are measured on the same prices, so comparisons between them stay fair.</p></div>
+
+    <h2 id="strategy-api">Writing a Strategy</h2>
+    <p>Your code is ordinary Python 3.12. It must define <code>on_bar(ctx)</code>, or <code>signals(data)</code> for the <a href="#signals">vectorized style</a>. A few names are available without importing them: <code>math</code>, <code>statistics</code>, <code>random</code>, <code>datetime</code>, <code>qt</code> (indicator functions), <code>isnan</code> and <code>NAN</code>. The rest of the standard library can be imported normally. NumPy and pandas are not available.</p>
+
+    <h3>What on_bar Returns</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>Return</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>1.0</code></td><td>Hold the asset with 100% of equity.</td></tr>
+        <tr><td><code>0.5</code></td><td>Hold 50% of equity in the asset and the rest in cash.</td></tr>
+        <tr><td><code>0.0</code></td><td>Sell everything and hold cash.</td></tr>
+        <tr><td><code>-1.0</code></td><td>Short 100% of equity. Requires <b>Allow shorting</b>; otherwise it is treated as 0.</td></tr>
+        <tr><td><code>2.0</code></td><td>200% long with borrowed money. Requires <b>Max leverage</b> of 2 or more; the value is capped at that limit.</td></tr>
+        <tr><td><code>None</code> (or no return)</td><td>Do nothing and keep the current position. Use this for “stay in the trade until the exit rule fires”.</td></tr>
+      </tbody>
+    </table></div>
+    <p>A weight is a <em>target</em>, so returning <code>1.0</code> every day trades only once. Small drifts are ignored by the <b>rebalance band</b> (2% of equity by default), so returning <code>0.5</code> every day doesn’t trigger a tiny trade each day.</p>
+
+    <h3>Share Orders</h3>
+    <p>To think in shares instead, call these and return nothing:</p>
+<pre><code>ctx.order(10)               # buy 10 shares (negative sells)
+ctx.order_target_shares(0)  # end up with exactly 0 shares</code></pre>
+    <p>Orders that need more cash than you have are reduced to what you can afford. Sells beyond your position are reduced too, unless shorting is on. Each reduction is counted in the <b>Orders reduced</b> statistic. If on_bar returns a weight, that weight wins over any share orders from the same bar.</p>
+
+    <h3>Parameters, Memory & Setup</h3>
+<pre><code>PARAMS = {"fast": 20, "slow": 100}   # numbers here can be swept in Research tools
+
+def init(ctx):                      # optional: runs once before the first bar
+    ctx.state["peak"] = 0.0
+
+def on_bar(ctx):
+    ctx.state["peak"] = max(ctx.state["peak"], ctx.price)   # ctx.state persists between bars
+    if ctx.price &lt; 0.9 * ctx.state["peak"]:
+        return 0.0
+    return 1.0 if ctx.sma(PARAMS["fast"]) &gt; ctx.sma(PARAMS["slow"]) else 0.0</code></pre>
+    <p><code>print()</code> and <code>ctx.log(...)</code> output appears in the <b>Output</b> panel under the results. <code>ctx.log</code> prefixes each line with the bar's date. If your code raises an error, the message, the line number and the bar's date are shown, and the line is marked in the editor.</p>
+
+    <h2 id="ctx">The ctx Object</h2>
+    <p>On each bar, <code>ctx</code> holds everything known at that day's close, and nothing from later days.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Attribute</th><th>Description</th></tr></thead>
+      <tbody>
+        <tr class="group"><td colspan="2">Prices</td></tr>
+        <tr><td><code>ctx.close</code>, <code>open</code>, <code>high</code>, <code>low</code>, <code>volume</code></td><td>Price history up to today. <code>ctx.close[-1]</code> is today, <code>ctx.close[-2]</code> yesterday, <code>ctx.close[-20:]</code> the last 20 closes as a list, and <code>len(ctx.close)</code> the bars so far. Reaching past today raises <code>IndexError</code>.</td></tr>
+        <tr><td><code>ctx.price</code></td><td>Today's close.</td></tr>
+        <tr class="group"><td colspan="2">Time</td></tr>
+        <tr><td><code>ctx.date</code></td><td>Today as text, e.g. <code>"2024-03-15"</code>.</td></tr>
+        <tr><td><code>ctx.day</code></td><td>Today as a <code>datetime.date</code>: <code>ctx.day.month</code>, <code>ctx.day.day</code>, <code>ctx.day.year</code>.</td></tr>
+        <tr><td><code>ctx.weekday</code></td><td>0 = Monday … 4 = Friday.</td></tr>
+        <tr><td><code>ctx.i</code>, <code>ctx.bar</code></td><td>Index in the full history, and bars since the backtest's start date (0 on the first bar).</td></tr>
+        <tr class="group"><td colspan="2">Account</td></tr>
+        <tr><td><code>ctx.cash</code>, <code>ctx.position</code>, <code>ctx.equity</code></td><td>Cash, shares held (negative when short), and cash plus position value at today's close.</td></tr>
+        <tr><td><code>ctx.weight</code></td><td>Position value / equity right now.</td></tr>
+        <tr><td><code>ctx.is_flat</code>, <code>is_long</code>, <code>is_short</code></td><td>Position state.</td></tr>
+        <tr><td><code>ctx.entry_price</code>, <code>entry_date</code>, <code>bars_in_trade</code></td><td>About the open trade: average entry price, entry date, and bars since entry. NaN, None and 0 when flat.</td></tr>
+        <tr class="group"><td colspan="2">Other</td></tr>
+        <tr><td><code>ctx.params</code></td><td>The same dict as <code>PARAMS</code>.</td></tr>
+        <tr><td><code>ctx.state</code></td><td>A dict for your own values; it persists between bars.</td></tr>
+        <tr><td><code>ctx.ticker</code></td><td>Instrument symbol.</td></tr>
+      </tbody>
+    </table></div>
+
+    <h2 id="indicators">Indicators</h2>
+    <p>Indicator methods on <code>ctx</code> return today's value. Each one is computed once over the whole history and then read bar by bar, so they are fast even inside parameter sweeps. Every indicator is <em>causal</em>: its value on a day only uses that day and earlier. Before enough history exists, they return <code>NaN</code>. Comparisons with NaN are always False, and you can check for it with <code>isnan(x)</code>.</p>
+    <p>Every method accepts <code>ago=k</code> to read the value from k bars back. For example, a crossover happened today if <code>ctx.sma(50) &gt; ctx.sma(200)</code> and <code>ctx.sma(50, ago=1) &lt;= ctx.sma(200, ago=1)</code>.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Method</th><th>Returns</th></tr></thead>
+      <tbody>
+        <tr><td><code>ctx.sma(n, ago=0, src="close")</code></td><td>Simple moving average of the last n bars. <code>src</code> can be open, high, low, close, volume, hl2 or hlc3.</td></tr>
+        <tr><td><code>ctx.ema(n)</code>, <code>ctx.wma(n)</code></td><td>Exponential (α = 2/(n+1), seeded with the SMA) and linearly weighted averages.</td></tr>
+        <tr><td><code>ctx.rsi(n=14)</code></td><td>Relative Strength Index, 0–100, using Wilder smoothing.</td></tr>
+        <tr><td><code>ctx.macd(12, 26, 9)</code></td><td><code>(macd_line, signal_line, histogram)</code>.</td></tr>
+        <tr><td><code>ctx.bbands(n=20, k=2)</code></td><td><code>(middle, upper, lower)</code> Bollinger Bands: SMA ± k standard deviations.</td></tr>
+        <tr><td><code>ctx.keltner(n=20, mult=2)</code></td><td><code>(middle, upper, lower)</code>: EMA ± mult × ATR.</td></tr>
+        <tr><td><code>ctx.donchian(n=20)</code></td><td><code>(upper, lower, middle)</code>: highest high and lowest low of n bars.</td></tr>
+        <tr><td><code>ctx.highest(n, src="high")</code>, <code>ctx.lowest(n, src="low")</code></td><td>Rolling max and min, <em>including today</em>. For breakouts compare against yesterday's value: <code>ctx.price &gt; ctx.highest(55, ago=1)</code>.</td></tr>
+        <tr><td><code>ctx.atr(n=14)</code></td><td>Average True Range in price units, a measure of daily movement.</td></tr>
+        <tr><td><code>ctx.adx(n=14)</code></td><td><code>(adx, plus_di, minus_di)</code>: trend strength and direction.</td></tr>
+        <tr><td><code>ctx.stoch(k=14, d=3)</code></td><td><code>(%K, %D)</code> stochastic oscillator, 0–100.</td></tr>
+        <tr><td><code>ctx.williams_r(n=14)</code>, <code>ctx.cci(n=20)</code></td><td>Williams %R (−100 to 0) and Commodity Channel Index.</td></tr>
+        <tr><td><code>ctx.roc(n)</code></td><td>Rate of change: price / price n bars ago − 1. <code>ctx.roc(252)</code> is the 12-month return.</td></tr>
+        <tr><td><code>ctx.zscore(n)</code></td><td>(price − n-bar mean) / n-bar standard deviation.</td></tr>
+        <tr><td><code>ctx.vol(n=20)</code></td><td>Annualized volatility of daily log returns over n bars (0.20 = 20%).</td></tr>
+        <tr><td><code>ctx.obv()</code></td><td>On-Balance Volume.</td></tr>
+        <tr><td><code>ctx.custom(name, fn)</code></td><td>Your own indicator. <code>fn(data)</code> receives the full history and must return one value per bar, using only bars up to that one. The result is cached.</td></tr>
+      </tbody>
+    </table></div>
+    <p>The same calculations exist as plain-list functions in <code>qt</code>, for use with <code>ctx.close[-n:]</code> or inside <code>signals</code>: <code>qt.sma, ema, wma, wilder, rolling_std, rolling_max, rolling_min, returns, log_returns, roc, zscore, realized_vol, rsi, macd, bbands, true_range, atr, stochastic, williams_r, cci, adx, obv, donchian, keltner, shift, crossover, crossunder, drawdown, mean, stdev, percentile, correlation</code>.</p>
+<pre><code>def on_bar(ctx):
+    closes = ctx.close[-60:]                  # list of the last 60 closes
+    rsi_of_last_60 = qt.rsi(closes, 14)[-1]   # same RSI, computed on a slice
+    ...</code></pre>
+
+    <h2 id="signals">Vectorized Signals</h2>
+    <p>Instead of <code>on_bar</code>, you can define <code>signals(data)</code>. It receives the whole history at once (<code>data.close</code>, <code>data.open</code>, <code>data.high</code>, <code>data.low</code>, <code>data.volume</code>, <code>data.dates</code>, <code>data.days</code> as lists) and returns one target weight per bar, or <code>None</code> to hold.</p>
+<pre><code>def signals(data):
+    fast = qt.sma(data.close, 50)
+    slow = qt.sma(data.close, 200)
+    return [1.0 if f &gt; s else 0.0 for f, s in zip(fast, slow)]</code></pre>
+    <p>The engine still applies weight <code>i</code> on bar <code>i + 1</code>. However, nothing stops <code>signals</code> from reading <code>data.close[i + 1]</code> by mistake. To catch that, QuantLab re-runs your function on histories cut off at several dates and compares the results. If any weight changes, the run is flagged <b>Look-ahead detected</b>, and its numbers are not achievable.</p>
+
+    <h2 id="execution">Execution & Costs</h2>
+    <div class="timeline">
+      <div><b>Day t, at the close</b>on_bar sees prices up to day t and returns a weight or places orders.</div>
+      <div><b>Day t+1, at the open</b>The order fills at the open price (or at the close with <i>Orders fill at: Next close</i>), plus slippage and commission.</div>
+      <div><b>Day t+1, at the close</b>Equity is marked at the closing price. on_bar runs again.</div>
+    </div>
+    <p>This one-day delay is the most important rule in backtesting. Deciding and filling at the same price is a common backtest mistake, and it makes results look better than they could be in practice.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>Starting cash</td><td>$10,000</td><td>Initial equity. Small accounts with fractional shares off can only buy whole shares.</td></tr>
+        <tr><td>Commission bps</td><td>0</td><td>Charged on traded value. 1 bp = 0.01%, so 10 bps on a $10,000 trade is $10.</td></tr>
+        <tr><td>Per fill $</td><td>0</td><td>Flat fee on every fill.</td></tr>
+        <tr><td>Slippage bps</td><td>2</td><td>Buys fill this much above the price and sells this much below. It models the bid/ask spread and market impact.</td></tr>
+        <tr><td>Orders fill at</td><td>Next open</td><td>Next open or next close.</td></tr>
+        <tr><td>Max leverage</td><td>1×</td><td>Largest allowed position value / equity, long or short.</td></tr>
+        <tr><td>Rebalance band</td><td>2%</td><td>Weight changes smaller than this share of equity are skipped. Entries and full exits always trade.</td></tr>
+        <tr><td>Risk-free %/yr</td><td>0</td><td>Subtracted in Sharpe, Sortino and alpha. Idle cash does not earn it.</td></tr>
+        <tr><td>Random seed</td><td>42</td><td>Seeds <code>random</code>, so random strategies are reproducible.</td></tr>
+        <tr><td>Fractional shares</td><td>On</td><td>When off, positions are rounded toward zero to whole shares.</td></tr>
+        <tr><td>Allow shorting</td><td>Off</td><td>When off, negative weights become 0 and sells stop at zero shares.</td></tr>
+      </tbody>
+    </table></div>
+    <p>A <b>trade</b> is a round trip: from flat to a position and back to flat, or a flip from long to short. Adding to or trimming a position stays inside the same trade. A trade’s P&amp;L is the change in account equity from entry to exit, including costs, so the P&amp;L of all trades adds up to the total profit. A position still open on the last day is listed as <i>open</i> and left out of the trade statistics.</p>
+    <p>The <b>benchmark</b> is buy-and-hold of the chosen instrument on the same dates, with no costs. If you choose a different benchmark, its prices are matched to your instrument’s dates, carrying forward the last price on any day it didn’t trade.</p>
+
+    <h2 id="statistics">Statistics</h2>
+    <p>All statistics come from the daily equity curve, marked at each close, and from the list of trades. Annualization assumes 252 trading days. Years are measured in calendar days divided by 365.25.</p>
+<div class="scroll"><table><thead><tr><th>Statistic</th><th>Key</th><th>Meaning</th></tr></thead><tbody>
+<tr class="group"><td colspan="3">Returns</td></tr>
+<tr><td>Total return</td><td><code>total_return</code></td><td>Final equity / starting equity - 1.</td></tr>
+<tr><td>CAGR</td><td><code>cagr</code></td><td>Compound annual growth rate: (final / start) ^ (1 / years) - 1.</td></tr>
+<tr><td>Final equity</td><td><code>final_equity</code></td><td>Account value on the last bar.</td></tr>
+<tr><td>Best day</td><td><code>best_day</code></td><td>Largest one-day return.</td></tr>
+<tr><td>Worst day</td><td><code>worst_day</code></td><td>Largest one-day loss.</td></tr>
+<tr><td>Best month</td><td><code>best_month</code></td><td>Largest calendar-month return.</td></tr>
+<tr><td>Worst month</td><td><code>worst_month</code></td><td>Largest calendar-month loss.</td></tr>
+<tr><td>Best year</td><td><code>best_year</code></td><td>Largest calendar-year return (first and last years may be partial).</td></tr>
+<tr><td>Worst year</td><td><code>worst_year</code></td><td>Worst calendar-year return.</td></tr>
+<tr><td>Positive days</td><td><code>pct_pos_days</code></td><td>Share of days with a gain.</td></tr>
+<tr><td>Positive months</td><td><code>pct_pos_months</code></td><td>Share of months with a gain.</td></tr>
+<tr class="group"><td colspan="3">Risk</td></tr>
+<tr><td>Volatility (ann.)</td><td><code>volatility</code></td><td>Standard deviation of daily returns x sqrt(252).</td></tr>
+<tr><td>Downside deviation</td><td><code>downside_dev</code></td><td>Root-mean-square of returns below the risk-free rate, annualized.</td></tr>
+<tr><td>Max drawdown</td><td><code>max_drawdown</code></td><td>Largest peak-to-trough fall in equity.</td></tr>
+<tr><td>Longest drawdown</td><td><code>max_dd_days</code></td><td>Most trading days spent below a previous equity high.</td></tr>
+<tr><td>Average drawdown</td><td><code>avg_drawdown</code></td><td>Mean depth of all drawdown episodes.</td></tr>
+<tr><td>Ulcer index</td><td><code>ulcer_index</code></td><td>sqrt(mean(drawdown^2)): punishes deep and long drawdowns.</td></tr>
+<tr><td>VaR 95% (1 day)</td><td><code>var_95</code></td><td>Historical 1-day Value at Risk: the loss exceeded on 5% of days.</td></tr>
+<tr><td>CVaR 95% (1 day)</td><td><code>cvar_95</code></td><td>Expected shortfall: the average loss on the worst 5% of days.</td></tr>
+<tr><td>Skew</td><td><code>skew</code></td><td>Asymmetry of daily returns. Negative = fat left tail.</td></tr>
+<tr><td>Excess kurtosis</td><td><code>kurtosis</code></td><td>Tail heaviness vs. a normal distribution (0 = normal).</td></tr>
+<tr class="group"><td colspan="3">Risk-adjusted</td></tr>
+<tr><td>Sharpe ratio</td><td><code>sharpe</code></td><td>(mean daily return - rf) / std x sqrt(252).</td></tr>
+<tr><td>Sortino ratio</td><td><code>sortino</code></td><td>Like Sharpe but only penalizes downside volatility.</td></tr>
+<tr><td>Calmar ratio</td><td><code>calmar</code></td><td>CAGR / |max drawdown|.</td></tr>
+<tr><td>Omega ratio</td><td><code>omega</code></td><td>Sum of daily gains / sum of daily losses (threshold 0).</td></tr>
+<tr><td>Tail ratio</td><td><code>tail_ratio</code></td><td>|95th percentile| / |5th percentile| of daily returns.</td></tr>
+<tr class="group"><td colspan="3">Vs benchmark</td></tr>
+<tr><td>Beta</td><td><code>beta</code></td><td>Sensitivity to the benchmark: cov(r, rb) / var(rb).</td></tr>
+<tr><td>Alpha (ann.)</td><td><code>alpha</code></td><td>Jensen&#x27;s alpha: return not explained by beta x benchmark, annualized.</td></tr>
+<tr><td>Correlation</td><td><code>correlation</code></td><td>Correlation of daily returns with the benchmark.</td></tr>
+<tr><td>R-squared</td><td><code>r_squared</code></td><td>Share of return variance explained by the benchmark.</td></tr>
+<tr><td>Tracking error</td><td><code>tracking_error</code></td><td>Annualized std of (strategy - benchmark) daily returns.</td></tr>
+<tr><td>Information ratio</td><td><code>information_ratio</code></td><td>Annualized excess return / tracking error.</td></tr>
+<tr><td>Up capture</td><td><code>up_capture</code></td><td>Average strategy return on benchmark up days / benchmark&#x27;s.</td></tr>
+<tr><td>Down capture</td><td><code>down_capture</code></td><td>Average strategy return on benchmark down days / benchmark&#x27;s. Lower is better.</td></tr>
+<tr><td>Excess CAGR</td><td><code>excess_cagr</code></td><td>Strategy CAGR - benchmark CAGR.</td></tr>
+<tr class="group"><td colspan="3">Trading</td></tr>
+<tr><td>Trades</td><td><code>n_trades</code></td><td>Closed round trips (flat -&gt; position -&gt; flat).</td></tr>
+<tr><td>Win rate</td><td><code>win_rate</code></td><td>Share of closed trades with a profit.</td></tr>
+<tr><td>Average trade</td><td><code>avg_trade</code></td><td>Mean return per closed trade.</td></tr>
+<tr><td>Average win</td><td><code>avg_win</code></td><td>Mean return of winning trades.</td></tr>
+<tr><td>Average loss</td><td><code>avg_loss</code></td><td>Mean return of losing trades.</td></tr>
+<tr><td>Best trade</td><td><code>best_trade</code></td><td>Largest single-trade return.</td></tr>
+<tr><td>Worst trade</td><td><code>worst_trade</code></td><td>Largest single-trade loss.</td></tr>
+<tr><td>Profit factor</td><td><code>profit_factor</code></td><td>Gross profit / gross loss over closed trades.</td></tr>
+<tr><td>Expectancy</td><td><code>expectancy</code></td><td>Average dollar profit per closed trade.</td></tr>
+<tr><td>Avg. bars held</td><td><code>avg_bars</code></td><td>Mean length of a closed trade in bars.</td></tr>
+<tr><td>Max win streak</td><td><code>max_consec_wins</code></td><td>Most winning trades in a row.</td></tr>
+<tr><td>Max loss streak</td><td><code>max_consec_losses</code></td><td>Most losing trades in a row.</td></tr>
+<tr><td>Time in market</td><td><code>exposure</code></td><td>Share of bars with an open position.</td></tr>
+<tr><td>Avg. exposure</td><td><code>avg_leverage</code></td><td>Mean |position value| / equity.</td></tr>
+<tr><td>Turnover (ann.)</td><td><code>turnover</code></td><td>Traded value / average equity per year (2.0 = account traded twice a year).</td></tr>
+<tr><td>Fills</td><td><code>n_fills</code></td><td>Number of executed orders.</td></tr>
+<tr><td>Costs paid</td><td><code>total_costs</code></td><td>Commissions plus slippage.</td></tr>
+<tr><td>Orders reduced</td><td><code>orders_clipped</code></td><td>Share orders cut down for lack of cash or the no-short rule.</td></tr>
+</tbody></table></div>
+    <h3>How to Read Them Together</h3>
+    <ul>
+      <li><b>Sharpe</b> is the usual headline, but it treats upside and downside swings the same. A Sortino much higher than Sharpe means most of the volatility is on the upside.</li>
+      <li><b>Max drawdown</b> and <b>longest drawdown</b> are what it feels like to run the strategy with real money. A 50% drawdown needs a 100% gain to recover.</li>
+      <li><b>Beta below 1 with positive alpha</b> means the strategy earned more than its market exposure explains. A low beta alone just means it held less of the asset.</li>
+      <li><b>Win rate</b> means little alone. Trend followers often win 35% of trades and still profit because their average win is much larger than their average loss; check <b>profit factor</b>.</li>
+      <li>Fewer than about 30 trades or 3 years of data is too little to tell skill from luck. Run the Monte Carlo tool.</li>
+    </ul>
+
+    <h2 id="strategies">Built-In Strategies</h2>
+    <p>These are the standard textbook rules every quant learns. They are starting points to modify, not recommendations.</p>
+<div class="scroll"><table><thead><tr><th>Strategy</th><th>Idea</th><th>PARAMS</th></tr></thead><tbody>
+<tr class="group"><td colspan="3">Baselines</td></tr>
+<tr><td>Buy &amp; Hold</td><td>Buy on the first bar and never sell. Every strategy should be compared with this.</td><td><code>{}</code></td></tr>
+<tr><td>Coin Flip (Random)</td><td>Every Monday, flip a coin to be invested or in cash. Run it to see what pure luck looks like.</td><td><code>{&quot;p_long&quot;: 0.5}</code></td></tr>
+<tr class="group"><td colspan="3">Trend Following</td></tr>
+<tr><td>SMA Crossover (Golden Cross)</td><td>Long when the 50-day average is above the 200-day average, in cash otherwise.</td><td><code>{&quot;fast&quot;: 50, &quot;slow&quot;: 200}</code></td></tr>
+<tr><td>EMA Crossover</td><td>Faster-reacting crossover using exponential moving averages (12/26 by default).</td><td><code>{&quot;fast&quot;: 12, &quot;slow&quot;: 26}</code></td></tr>
+<tr><td>Price Above 200-Day Average</td><td>Hold the asset only while it closes above its long moving average (Faber&#x27;s timing model).</td><td><code>{&quot;n&quot;: 200}</code></td></tr>
+<tr><td>Time-Series Momentum</td><td>Once a month, go long if the past 12 months’ return is positive; otherwise hold cash.</td><td><code>{&quot;lookback&quot;: 252}</code></td></tr>
+<tr><td>Donchian Breakout (Turtle)</td><td>Buy a close above the prior 55-day high; exit on a close below the prior 20-day low.</td><td><code>{&quot;entry&quot;: 55, &quot;exit&quot;: 20}</code></td></tr>
+<tr><td>MACD Crossover</td><td>Long while the MACD line is above its signal line.</td><td><code>{&quot;fast&quot;: 12, &quot;slow&quot;: 26, &quot;signal&quot;: 9}</code></td></tr>
+<tr><td>ADX Trend Strength</td><td>Long only when a trend is strong (ADX above 25) and pointing up (+DI above -DI).</td><td><code>{&quot;n&quot;: 14, &quot;threshold&quot;: 25}</code></td></tr>
+<tr><td>Trend with ATR Trailing Stop</td><td>Enter above the 100-day average; exit when price falls 3 ATRs below its highest close since entry.</td><td><code>{&quot;trend&quot;: 100, &quot;atr_n&quot;: 14, &quot;atr_mult&quot;: 3.0}</code></td></tr>
+<tr class="group"><td colspan="3">Mean Reversion</td></tr>
+<tr><td>RSI Oversold</td><td>Buy when RSI(14) drops below 30, sell when it recovers above 50.</td><td><code>{&quot;n&quot;: 14, &quot;buy_below&quot;: 30, &quot;sell_above&quot;: 50}</code></td></tr>
+<tr><td>RSI(2) Pullback in an Uptrend</td><td>Connors-style: in an uptrend (above the 200-day average), buy when RSI(2) &lt; 10, exit above the 5-day average.</td><td><code>{&quot;rsi_n&quot;: 2, &quot;entry&quot;: 10, &quot;trend&quot;: 200, &quot;exit_ma&quot;: 5}</code></td></tr>
+<tr><td>Bollinger Band Reversion</td><td>Buy a close below the lower band, sell when price returns to the middle band.</td><td><code>{&quot;n&quot;: 20, &quot;k&quot;: 2.0}</code></td></tr>
+<tr><td>Z-Score Long/Short</td><td>Long when price is 2 std below its 20-day mean, short when 2 above, flat near the mean. Turn on shorting in settings.</td><td><code>{&quot;n&quot;: 20, &quot;entry_z&quot;: 2.0, &quot;exit_z&quot;: 0.5}</code></td></tr>
+<tr><td>Stochastic Oscillator</td><td>Buy when %K crosses above %D below 20 (oversold); exit when %K rises above 80.</td><td><code>{&quot;k&quot;: 14, &quot;d&quot;: 3, &quot;low&quot;: 20, &quot;high&quot;: 80}</code></td></tr>
+<tr class="group"><td colspan="3">Breakout</td></tr>
+<tr><td>Bollinger Breakout</td><td>Buy a close above the upper band (volatility expansion); exit below the middle band.</td><td><code>{&quot;n&quot;: 20, &quot;k&quot;: 2.0}</code></td></tr>
+<tr><td>Keltner Channel Breakout</td><td>Buy a close above the upper Keltner channel (EMA + 2 ATR); exit below the middle line.</td><td><code>{&quot;n&quot;: 20, &quot;mult&quot;: 2.0}</code></td></tr>
+<tr class="group"><td colspan="3">Risk Management</td></tr>
+<tr><td>Volatility Targeting</td><td>Always invested, but scale the position so its volatility stays near 15% a year.</td><td><code>{&quot;target_vol&quot;: 0.15, &quot;lookback&quot;: 20, &quot;max_weight&quot;: 1.0}</code></td></tr>
+<tr class="group"><td colspan="3">Calendar</td></tr>
+<tr><td>Turn of the Month</td><td>Hold only around month-end (from the 25th through the 3rd); historically a strong window for stocks.</td><td><code>{&quot;from_day&quot;: 25, &quot;to_day&quot;: 3}</code></td></tr>
+<tr><td>Buy Mon–Thu, Sell Friday</td><td>Your original idea with share orders: buy 1 share each Monday–Thursday &amp; sell everything on Friday.</td><td><code>{&quot;shares_per_day&quot;: 1}</code></td></tr>
+<tr class="group"><td colspan="3">Vectorized</td></tr>
+<tr><td>SMA Crossover (Vectorized)</td><td>The same golden cross written as signals(data), which builds every bar&#x27;s weight at once.</td><td><code>{&quot;fast&quot;: 50, &quot;slow&quot;: 200}</code></td></tr>
+</tbody></table></div>
+
+    <h2 id="tools">Research Tools</h2>
+    <p>Each tool uses the instrument, dates, settings and code currently on the Backtest tab.</p>
+    <h3>Parameter Sweep</h3>
+    <p>Choose one or two numeric entries from <code>PARAMS</code> and a list of values: <code>20:100:10</code> means 20, 30 … 100, and <code>5,10,20</code> lists values directly. Up to 400 runs. With <b>Tune on: First 70%</b>, each run is scored only on the first 70% of the period, and the last 30% is shown next to it as an out-of-sample check. <b>Use these values in the editor</b> writes the best combination into your PARAMS. Good parameters sit in a broad plateau of good results. A single bright cell is usually noise.</p>
+    <h3>Monte Carlo Resampling</h3>
+    <p>Takes the strategy’s daily returns and builds alternative histories by stitching together randomly chosen blocks of consecutive days (a circular block bootstrap). Blocks keep calm and volatile stretches together. The fan chart shows the range of paths, and the table shows percentiles of total return, CAGR and maximum drawdown. If the 5th percentile drawdown would be unbearable, size the strategy down.</p>
+    <h3>In-Sample vs Out-of-Sample</h3>
+    <p>Runs one continuous backtest and reports statistics separately before and after a split date. Indicator warm-up and open positions carry across the split. A strategy designed by looking at the whole chart will almost always look worse after the split, and that worse result is the realistic one.</p>
+    <h3>Instrument Analytics</h3>
+    <p>Buy-and-hold statistics for each loaded instrument, a correlation matrix of daily returns on the dates all of them share, and a growth-of-100 chart. Assets with low correlation combine into portfolios with smaller drawdowns.</p>
+
+    <h2 id="pitfalls">Pitfalls</h2>
+    <ul>
+      <li><b>Overfitting.</b> With enough parameters, any rule fits the past. Prefer few parameters and round numbers, and always check out of sample.</li>
+      <li><b>Look-ahead bias.</b> on_bar can’t see the future, but <code>signals</code> and <code>ctx.custom</code> can if you index past <code>i</code>. Watch for the look-ahead flag.</li>
+      <li><b>Survivorship bias.</b> Testing on AAPL or NVDA today picks winners in hindsight. The stocks that failed over the last 10 years aren’t in your list.</li>
+      <li><b>Costs.</b> A strategy trading daily pays slippage every day. Raise slippage to 5–10 bps and see whether the edge survives.</li>
+      <li><b>Regimes.</b> Ten years of daily data includes only a few bear markets. A rule that “always worked” may have worked in just one kind of market.</li>
+      <li><b>Dividends.</b> They aren’t in Nasdaq's prices; see <a href="#data">Getting data</a>.</li>
+    </ul>
+
+    <h2 id="running">Running It Yourself</h2>
+    <p>QuantLab is a static website: HTML, JavaScript and a Python file, with no server-side code. The Python runtime (Pyodide 0.26.4) is included in <code>pyodide/</code>, so it also works without internet access.</p>
+<pre><code># from the quantlab folder
+python -m http.server 8000
+# then open http://localhost:8000</code></pre>
+    <p>Opening <code>index.html</code> directly from disk doesn’t work, because browsers block pages loaded that way from reading <code>engine.py</code>. To publish the site, push the folder to a GitHub repository and turn on GitHub Pages.</p>
+    <p>The engine also works as a normal Python module, with no dependencies:</p>
+<pre><code>import engine
+ds = engine.load_csv("SPY.csv", "SPY")
+strat = engine.Strategy.from_code(open("my_strategy.py").read())
+res = engine.backtest(strat, ds, engine.Config(cash=10_000, slippage_bps=5))
+stats, bench = engine.summarize(res)
+print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['max_drawdown']:.2%}")</code></pre>
+    <p>Tests: <code>python tests/test_engine.py</code>, or <code>python -m pytest tests</code>.</p>
+
+    <h2 id="layout">How the Code Is Organized</h2>
+    <div class="scroll"><table>
+      <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, about 1900 lines.</td></tr>
+        <tr><td><code>templates.py</code></td><td>The built-in strategies, separated by <code>#%% id:</code> markers. Add your own by following the same format.</td></tr>
+        <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
+        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped.</td></tr>
+        <tr><td><code>data/</code></td><td>Bundled CSV files and <code>manifest.json</code>.</td></tr>
+        <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics and the look-ahead detector.</td></tr>
+        <tr><td><code>tools/build_docs.py</code></td><td>Regenerates this page's statistics and strategy tables from the code.</td></tr>
+      </tbody>
+    </table></div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,1775 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Backtest · QuantLab</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Backtest Python trading strategies on Nasdaq price data in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a two-column workbench. Inputs on the left rail (market, code, settings);
+   the readout on the right, summary first, then charts, then detail tables.
+   Visual language follows Geist: neutral greys, hairline borders, black/white primary actions.
+   Chart colors are a color-blind-safe blue/orange pair, with green/red reserved for gain/loss. */
+:root {
+  --bg: #FAFAFA;
+  --panel: #FFFFFF;
+  --sunk: #F5F5F5;
+  --hover: #F0F0F0;
+  --fg: #171717;
+  --fg-2: #4D4D4D;
+  --fg-3: #6B6B6B;
+  --border: #E5E5E5;
+  --border-strong: #C9C9C9;
+  --grid: #EEEEEE;
+  --primary: #171717;
+  --primary-fg: #FFFFFF;
+  --link: #0062D1;
+  --focus: #0070F3;
+  --strat: #0062D1;
+  --bench: #C46F00;
+  --gain: #0A7A50;
+  --loss: #C93A1E;
+  --warn: #9E5700;
+  --syn-kw: #C2185B;
+  --syn-str: #0A7A50;
+  --syn-num: #0062D1;
+  --syn-fn: #7A3DC2;
+  --syn-com: #8A8A8A;
+  --syn-ctx: #A84F00;
+  --shadow: 0 1px 1px rgba(0, 0, 0, 0.02), 0 2px 6px rgba(0, 0, 0, 0.04);
+  --shadow-pop: 0 2px 4px rgba(0, 0, 0, 0.06), 0 10px 30px rgba(0, 0, 0, 0.12);
+  --f-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --r-lg: 10px;
+  --r: 6px;
+  --gap: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0A0A0A; --panel: #111111; --sunk: #161616; --hover: #1C1C1C; --fg: #EDEDED; --fg-2: #B4B4B4; --fg-3: #8F8F8F;
+    --border: #262626; --border-strong: #3D3D3D; --grid: #1F1F1F; --primary: #EDEDED; --primary-fg: #0A0A0A;
+    --link: #52A8FF; --focus: #52A8FF; --strat: #3E95FF; --bench: #F2A33A; --gain: #3CC48A; --loss: #FF6A55; --warn: #F2A33A;
+    --syn-kw: #FF7AB0; --syn-str: #62D49A; --syn-num: #6CB4FF; --syn-fn: #C9A2FF; --syn-com: #6E6E6E; --syn-ctx: #F2A33A;
+    --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 2px 8px rgba(0, 0, 0, 0.5);
+    --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 12px 32px rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0A0A0A; --panel: #111111; --sunk: #161616; --hover: #1C1C1C; --fg: #EDEDED; --fg-2: #B4B4B4; --fg-3: #8F8F8F;
+  --border: #262626; --border-strong: #3D3D3D; --grid: #1F1F1F; --primary: #EDEDED; --primary-fg: #0A0A0A;
+  --link: #52A8FF; --focus: #52A8FF; --strat: #3E95FF; --bench: #F2A33A; --gain: #3CC48A; --loss: #FF6A55; --warn: #F2A33A;
+  --syn-kw: #FF7AB0; --syn-str: #62D49A; --syn-num: #6CB4FF; --syn-fn: #C9A2FF; --syn-com: #6E6E6E; --syn-ctx: #F2A33A;
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.02), 0 2px 8px rgba(0, 0, 0, 0.5);
+  --shadow-pop: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 12px 32px rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { scroll-padding-top: 84px; -webkit-text-size-adjust: 100%; }
+@media (pointer: fine) { html { overscroll-behavior: none; } }
+body { margin: 0; background: var(--bg); color: var(--fg); font-family: var(--f-sans); font-size: 14px; line-height: 1.5;
+  -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 30; background: var(--panel); }
+a { color: var(--link); text-underline-offset: 2px; }
+a:hover { text-decoration-thickness: 2px; }
+button, input, select, textarea { font: inherit; color: inherit; }
+a, button, input, select, label, summary { touch-action: manipulation; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+h1, h2, h3 { text-wrap: balance; margin: 0; letter-spacing: -0.01em; }
+p { text-wrap: pretty; }
+.sr { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mono, code, kbd { font-family: var(--f-mono); }
+.tnum, td.n { font-variant-numeric: tabular-nums; }
+code { font-size: 0.88em; background: var(--sunk); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+kbd { font-size: 11px; padding: 1px 5px; border: 1px solid currentColor; border-radius: 4px; opacity: 0.7; font-weight: 500; }
+
+.skip { position: fixed; left: max(16px, env(safe-area-inset-left, 0px)); top: calc(8px + env(safe-area-inset-top, 0px)); z-index: 50;
+  background: var(--primary); color: var(--primary-fg); padding: 8px 14px; border-radius: var(--r); font-weight: 500; text-decoration: none;
+  transform: translateY(-160%); }
+.skip:focus { transform: none; }
+
+/* ---------- header ---------- */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20; background: color-mix(in srgb, var(--panel) 92%, transparent);
+  backdrop-filter: saturate(1.4) blur(8px); border-bottom: 1px solid var(--border); }
+@media (max-width: 720px) { .top { position: static; } html { scroll-padding-top: 16px; } }
+.top-in { display: flex; align-items: center; gap: 8px 24px; flex-wrap: wrap; min-height: 60px; padding-block: 8px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: 1680px; margin: 0 auto; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--fg); text-decoration: none; font-weight: 600; font-size: 16px; letter-spacing: -0.02em; min-height: 32px; }
+.brand svg { width: 22px; height: 22px; }
+.tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.tabs a { display: inline-flex; align-items: center; min-height: 32px; padding: 0 10px; border-radius: var(--r); color: var(--fg-3); text-decoration: none; font-weight: 500; }
+.tabs a:hover { color: var(--fg); background: var(--hover); }
+.tabs a[aria-current="page"] { color: var(--fg); background: var(--sunk); box-shadow: inset 0 0 0 1px var(--border); }
+.status { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--fg-2); min-height: 32px; }
+.status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-3); flex: none; }
+.status[data-state="ready"] .dot { background: var(--gain); }
+.status[data-state="busy"] .dot { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
+.status[data-state="error"] .dot { background: var(--loss); }
+@keyframes pulse { 50% { opacity: 0.3; } }
+
+/* ---------- page ---------- */
+main { display: block; max-width: 1680px; margin: 0 auto; padding-block: 20px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+main:focus { outline: none; }
+.bench { display: grid; grid-template-columns: minmax(340px, 460px) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 1060px) { .bench { grid-template-columns: minmax(0, 1fr); } }
+.rail, .readout { display: grid; gap: var(--gap); min-width: 0; }
+@media (min-width: 1061px) { .rail { position: sticky; top: 76px; } }
+
+.panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); min-width: 0; }
+.panel-h { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 14px 16px 0; }
+.panel-b { padding: 12px 16px 16px; display: grid; gap: 12px; min-width: 0; }
+h2 { font-size: 15px; font-weight: 600; }
+h3 { font-size: 14px; font-weight: 600; }
+.spacer { flex: 1 1 auto; }
+.muted { color: var(--fg-3); font-size: 13px; }
+
+/* ---------- form controls ---------- */
+.field { display: grid; gap: 6px; min-width: 0; align-content: start; }
+.field > label, .label { font-size: 13px; font-weight: 500; color: var(--fg-2); }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 480px) { .grid3 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+input[type="text"], input[type="date"], select {
+  width: 100%; min-width: 0; height: 36px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: var(--r);
+  background-color: var(--panel); color: var(--fg); font-size: 14px; font-variant-numeric: tabular-nums; }
+input::placeholder { color: var(--fg-3); }
+input:hover, select:hover { border-color: var(--fg-3); }
+input:focus-visible, select:focus-visible { outline: 2px solid var(--focus); outline-offset: 0; border-color: var(--focus); border-radius: var(--r); }
+input[aria-invalid="true"] { border-color: var(--loss); }
+select option { background-color: var(--panel); color: var(--fg); }
+.ferr { margin: 0; font-size: 12.5px; color: var(--loss); }
+.ferr::before { content: "⚠ "; }
+.help { margin: 0; font-size: 12.5px; color: var(--fg-3); }
+.check { display: inline-flex; align-items: center; gap: 8px; min-height: 32px; padding-right: 6px; font-size: 14px; color: var(--fg-2); cursor: pointer; }
+.check input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }
+
+.btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 36px; padding: 0 14px;
+  border-radius: var(--r); border: 1px solid var(--border-strong); background: var(--panel); color: var(--fg); font-weight: 500; font-size: 14px;
+  cursor: pointer; white-space: nowrap; text-decoration: none; transition: background-color 0.15s, border-color 0.15s, color 0.15s; }
+.btn:hover { background: var(--hover); border-color: var(--fg-3); }
+.btn:active { background: var(--sunk); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+.btn.primary:hover { background: color-mix(in srgb, var(--primary) 82%, var(--bg)); }
+.btn.small { min-height: 30px; padding: 0 10px; font-size: 13px; }
+.btn.danger { color: var(--loss); }
+.btn.danger:hover { border-color: var(--loss); }
+.btn.armed { background: var(--loss); border-color: var(--loss); color: #fff; }
+.btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.btn.is-loading::before { content: ""; width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent;
+  animation: spin 0.7s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn kbd { border-color: currentColor; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.seg { display: inline-flex; padding: 2px; gap: 2px; background: var(--sunk); border: 1px solid var(--border); border-radius: var(--r); }
+.seg:focus-within { border-color: var(--border-strong); }
+.seg button { min-height: 28px; min-width: 40px; border: 0; background: transparent; padding: 0 10px; border-radius: 4px; font-size: 13px;
+  font-weight: 500; cursor: pointer; color: var(--fg-3); transition: background-color 0.15s, color 0.15s; }
+.seg button:hover { color: var(--fg); }
+.seg button[aria-pressed="true"] { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 1px var(--border); }
+
+details.settings > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap;
+  padding: 14px 16px; min-height: 48px; border-radius: var(--r-lg); }
+details.settings > summary::-webkit-details-marker { display: none; }
+details.settings > summary:hover { background: var(--hover); }
+details.settings > summary .chev { margin-left: auto; transition: transform 0.15s; color: var(--fg-3); }
+details.settings[open] > summary .chev { transform: rotate(180deg); }
+details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
+
+/* ---------- editor ---------- */
+.about { margin: 0; color: var(--fg-2); font-size: 13.5px; min-height: 1.5em; }
+.editor { --lh: 20px; position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); height: 440px; min-height: 220px; resize: vertical;
+  overflow: hidden; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--sunk); font-family: var(--f-mono);
+  font-size: 12.5px; line-height: var(--lh); }
+.editor:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.ed-gutter { overflow: hidden; padding: 10px 8px 70px 10px; color: var(--fg-3); text-align: right; user-select: none; border-right: 1px solid var(--border); min-width: 3.2em; }
+.ed-gutter div { height: var(--lh); }
+.ed-gutter .err { color: var(--loss); font-weight: 600; }
+.ed-main { position: relative; overflow: hidden; }
+.ed-main pre, .ed-main textarea { margin: 0; padding: 10px 12px 40px; font: inherit; line-height: inherit; tab-size: 4; white-space: pre; letter-spacing: 0; word-spacing: 0; }
+.ed-main pre { position: absolute; inset: 0; pointer-events: none; color: var(--fg); overflow: hidden; }
+.ed-main pre code { display: block; font: inherit; background: none; border: 0; padding: 0; }
+.ed-main textarea { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; outline: none; resize: none; background: transparent;
+  color: transparent; caret-color: var(--fg); overflow: auto; overscroll-behavior: contain; }
+.ed-main textarea::selection { background: color-mix(in srgb, var(--focus) 30%, transparent); color: transparent; }
+.ed-err { position: absolute; left: 0; right: 0; height: var(--lh); background: color-mix(in srgb, var(--loss) 15%, transparent); pointer-events: none; }
+.tok-kw { color: var(--syn-kw); }
+.tok-str { color: var(--syn-str); }
+.tok-num { color: var(--syn-num); }
+.tok-fn { color: var(--syn-fn); }
+.tok-com { color: var(--syn-com); font-style: italic; }
+.tok-ctx { color: var(--syn-ctx); }
+.save-form { display: grid; gap: 6px; }
+
+/* ---------- readout ---------- */
+.runline { display: grid; gap: 6px; }
+.runline h2 { font-size: 24px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.2; }
+.runline .meta { color: var(--fg-3); font-size: 13px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 500;
+  background: var(--sunk); color: var(--fg-2); border: 1px solid var(--border); }
+.chip.ok { color: var(--gain); }
+.chip.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
+.chip.ok::before { content: "✓"; }
+.chip.bad::before { content: "✕"; }
+.notes { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.notes li { font-size: 13.5px; padding: 10px 12px; border-radius: var(--r); background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--border)); }
+.notes li strong { color: var(--warn); font-weight: 600; }
+.errbox { border-color: color-mix(in srgb, var(--loss) 45%, var(--border)); }
+.errbox h2 { color: var(--loss); }
+.errbox .msg { font-family: var(--f-mono); font-size: 13px; word-break: break-word; margin: 0; }
+pre.trace { margin: 0; padding: 10px 12px; background: var(--sunk); border-radius: var(--r); font-family: var(--f-mono); font-size: 12px; overflow: auto;
+  white-space: pre; color: var(--fg-2); max-height: 260px; overscroll-behavior: contain; }
+
+.kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); overflow: hidden; }
+@media (max-width: 1320px) { .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 540px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kpi { padding: 14px 16px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); margin: 0 -1px -1px 0; min-width: 0; display: grid; gap: 2px; }
+.kpi dt { font-size: 13px; color: var(--fg-3); font-weight: 500; }
+.kpi dd { margin: 0; display: grid; gap: 2px; }
+.kpi .v, .kpi .b { display: block; }
+.kpi .v { font-size: 26px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.kpi .b { font-size: 12.5px; color: var(--fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pos { color: var(--gain); }
+.neg { color: var(--loss); }
+.is-empty .kpi .v { color: var(--fg-3); }
+
+.chart { position: relative; height: 300px; }
+.chart.short { height: 190px; }
+.chart.mid { height: 240px; }
+.chart-empty { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--fg-3); font-size: 13px;
+  border: 1px dashed var(--border); border-radius: var(--r); padding: 16px; }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--fg-2); margin: 0; padding: 0; list-style: none; }
+.legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+.two { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: var(--gap); }
+@media (max-width: 1560px) { .two { grid-template-columns: minmax(0, 1fr); } }
+
+.scroll { overflow-x: auto; overscroll-behavior-x: contain; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+caption { text-align: left; }
+th, td { padding: 7px 10px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
+thead th { font-size: 12.5px; font-weight: 500; color: var(--fg-3); position: sticky; top: 0; background: var(--panel); z-index: 1; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+tr.group th { padding-top: 16px; font-size: 13px; font-weight: 600; color: var(--fg); text-align: left; border-bottom: 1px solid var(--border-strong); position: static; }
+.metrics tbody th[scope="row"] { font-weight: 400; color: var(--fg-2); }
+.metrics td.n { font-family: var(--f-mono); font-size: 12.5px; }
+.metrics td.desc { white-space: normal; color: var(--fg-3); font-size: 12.5px; min-width: 240px; }
+.tablebox { max-height: 400px; overflow: auto; overscroll-behavior: contain; }
+.heat td, .heat th { text-align: center; font-family: var(--f-mono); font-size: 12px; padding: 6px 4px; border: 1px solid var(--panel); }
+.heat tbody th { font-family: var(--f-sans); font-weight: 600; font-size: 13px; text-align: left; padding-right: 10px; color: var(--fg); }
+.heat td.tot { font-weight: 600; }
+pre.logs { margin: 0; padding: 10px 12px; background: var(--sunk); border-radius: var(--r); font-family: var(--f-mono); font-size: 12px; max-height: 260px;
+  overflow: auto; white-space: pre; color: var(--fg-2); overscroll-behavior: contain; }
+.bar { height: 4px; background: var(--sunk); border-radius: 2px; overflow: hidden; }
+.bar > span { display: block; height: 100%; width: 100%; background: var(--primary); transform: scaleX(0); transform-origin: left; transition: transform 0.2s ease-out; }
+.empty-state { display: grid; gap: 10px; justify-items: start; padding: 24px 16px; }
+.empty-state p { margin: 0; color: var(--fg-2); max-width: 60ch; }
+
+/* ---------- tools & data ---------- */
+.stack { display: grid; gap: var(--gap); }
+.viewhead { display: grid; gap: 4px; }
+.viewhead h1 { font-size: 24px; font-weight: 600; letter-spacing: -0.025em; }
+.viewhead p { margin: 0; color: var(--fg-2); max-width: 75ch; }
+.ctxline { font-size: 13.5px; color: var(--fg-2); padding: 12px 16px; }
+.ctxline b { color: var(--fg); font-weight: 600; }
+.toolhead { display: grid; gap: 4px; }
+.toolhead p { margin: 0; color: var(--fg-2); max-width: 75ch; }
+.toolgrid { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 900px) { .toolgrid { grid-template-columns: minmax(0, 1fr); } }
+.toolform { display: grid; gap: 12px; }
+.out { display: grid; gap: 12px; min-width: 0; }
+.out-empty { color: var(--fg-3); font-size: 13.5px; padding: 18px; border: 1px dashed var(--border); border-radius: var(--r); }
+tr.best td { background: color-mix(in srgb, var(--focus) 10%, var(--panel)); font-weight: 600; }
+td.best { outline: 2px solid var(--fg); outline-offset: -2px; font-weight: 600; }
+fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
+legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); margin-bottom: 6px; }
+.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 0 8px; }
+
+.drop { display: grid; place-items: center; gap: 6px; text-align: center; padding: 32px 16px; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg);
+  background: var(--sunk); color: var(--fg-2); cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
+.drop:hover, .drop.over { border-color: var(--fg); background: var(--hover); }
+.drop:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+.drop strong { color: var(--fg); font-size: 15px; font-weight: 600; }
+.drop.dragging * { pointer-events: none; }
+.pending { display: grid; gap: 8px; }
+.pending form { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.7fr) minmax(0, 1.3fr) auto auto; gap: 10px; align-items: start;
+  padding: 12px; border: 1px solid var(--border-strong); border-radius: var(--r); }
+.pending form .btn { margin-top: 25px; }
+@media (max-width: 760px) { .pending form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .pending form .btn { margin-top: 0; } }
+.fname { font-family: var(--f-mono); font-size: 12.5px; word-break: break-all; }
+.dl-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px 16px; margin: 0; padding: 0; list-style: none; }
+.dl-list li { font-size: 13.5px; min-height: 28px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.steps { margin: 0; padding-left: 20px; color: var(--fg-2); display: grid; gap: 4px; }
+
+.toast { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 40;
+  display: flex; align-items: center; gap: 12px; background: var(--primary); color: var(--primary-fg); padding: 10px 12px 10px 14px; border-radius: var(--r-lg);
+  font-size: 13.5px; box-shadow: var(--shadow-pop); max-width: min(460px, calc(100vw - 32px)); }
+.toast .btn { min-height: 28px; background: transparent; color: inherit; border-color: color-mix(in srgb, var(--primary-fg) 40%, transparent); }
+.toast .btn:hover { background: color-mix(in srgb, var(--primary-fg) 12%, transparent); }
+
+/* ---------- touch devices: 44px targets & 16px inputs (no iOS zoom) ---------- */
+@media (pointer: coarse) {
+  .btn, .btn.small, .tabs a, .brand, .status { min-height: 44px; }
+  .seg button { min-height: 40px; min-width: 48px; }
+  input[type="text"], input[type="date"], select { height: 44px; font-size: 16px; }
+  .check { min-height: 44px; }
+  .editor { font-size: 16px; --lh: 24px; }
+  details.settings > summary { min-height: 52px; }
+  .dl-list li { min-height: 44px; }
+}
+@media (max-width: 640px) { input[type="text"], input[type="date"], select { font-size: 16px; } }
+@media (pointer: coarse) and (hover: none) { .kbd-only, #runKbd { display: none; } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  .btn.is-loading::before { border-right-color: currentColor; opacity: 0.5; }
+}
+</style>
+
+<a class="skip" href="#content">Skip to content</a>
+<header class="top">
+  <div class="top-in">
+    <a class="brand" href="#backtest" translate="no" aria-label="QuantLab home">
+      <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 20h18"/><path d="M5 16l4-5 4 3 6-8"/></svg>
+      QuantLab
+    </a>
+    <nav class="tabs" aria-label="Sections">
+      <a href="#backtest" data-tab="backtest">Backtest</a>
+      <a href="#tools" data-tab="tools">Research Tools</a>
+      <a href="#data" data-tab="data">Data</a>
+      <a href="docs.html">Docs</a>
+    </nav>
+    <div class="status" id="status" data-state="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="statusText">Loading Python…</span></div>
+  </div>
+</header>
+
+<main id="content" tabindex="-1">
+  <!-- ================================================================ BACKTEST -->
+  <section class="view" id="view-backtest" aria-labelledby="h-backtest">
+    <h1 class="sr" id="h-backtest">Backtest</h1>
+    <div class="bench">
+      <div class="rail">
+        <form class="panel" id="marketForm" aria-labelledby="h-market" novalidate>
+          <div class="panel-h"><h2 id="h-market">Market</h2></div>
+          <div class="panel-b">
+            <div class="grid2">
+              <div class="field"><label for="instrument">Instrument</label><select id="instrument" name="instrument" translate="no"></select></div>
+              <div class="field"><label for="benchmark">Benchmark</label><select id="benchmark" name="benchmark" translate="no"></select></div>
+              <div class="field"><label for="start">From</label><input type="date" id="start" name="from" aria-describedby="start-err"><p class="ferr" id="start-err" hidden></p></div>
+              <div class="field"><label for="end">To</label><input type="date" id="end" name="to" aria-describedby="end-err"><p class="ferr" id="end-err" hidden></p></div>
+            </div>
+            <div class="row"><span class="label" id="rangeLabel">Range</span>
+              <div class="seg" id="ranges" role="group" aria-labelledby="rangeLabel">
+                <button type="button" data-years="1" aria-pressed="false">1Y</button><button type="button" data-years="3" aria-pressed="false">3Y</button><button type="button" data-years="5" aria-pressed="false">5Y</button><button type="button" data-years="0" aria-pressed="false">Max</button>
+              </div>
+            </div>
+          </div>
+        </form>
+
+        <section class="panel" aria-labelledby="h-strategy">
+          <div class="panel-h"><h2 id="h-strategy">Strategy</h2><span class="spacer"></span><span class="muted" translate="no">Python 3.12</span></div>
+          <div class="panel-b">
+            <div class="field"><label for="template">Start From</label><select id="template" name="template"></select></div>
+            <p class="about" id="about"></p>
+            <div class="editor" id="editor" translate="no">
+              <div class="ed-gutter" id="edGutter" aria-hidden="true"></div>
+              <div class="ed-main">
+                <div class="ed-err" id="edErr" hidden></div>
+                <pre aria-hidden="true"><code id="edHl"></code></pre>
+                <textarea id="code" name="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-label="Strategy code" aria-describedby="editorHelp"></textarea>
+              </div>
+            </div>
+            <p class="help kbd-only" id="editorHelp"><span id="kbdRun"></span> runs · Tab indents · <span id="kbdComment"></span> comments · Esc then Tab leaves the editor</p>
+            <div class="row">
+              <button class="btn primary" id="runBtn" type="button">Run Backtest <kbd aria-hidden="true" id="runKbd"></kbd></button>
+              <button class="btn" id="stopBtn" type="button" hidden>Stop Run</button>
+              <span class="spacer"></span>
+              <button class="btn small" id="saveBtn" type="button" aria-expanded="false" aria-controls="saveForm">Save As…</button>
+              <button class="btn small danger" id="delBtn" type="button" hidden>Delete Strategy</button>
+              <button class="btn small" id="resetBtn" type="button">Reset Code</button>
+            </div>
+            <form class="save-form" id="saveForm" hidden novalidate>
+              <div class="field"><label for="saveName">Strategy Name</label>
+                <input type="text" id="saveName" name="strategy-name" placeholder="My trend filter…" maxlength="60" autocomplete="off" aria-describedby="saveName-err">
+                <p class="ferr" id="saveName-err" hidden></p></div>
+              <div class="row"><button class="btn small primary" type="submit">Save Strategy</button><button class="btn small" id="saveCancel" type="button">Cancel</button></div>
+            </form>
+          </div>
+        </section>
+
+        <section class="panel" aria-labelledby="h-settings">
+          <details class="settings" id="settingsBox">
+            <summary><h2 id="h-settings">Account &amp; Execution</h2><span class="muted" id="settingsSummary"></span>
+              <svg class="chev" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4 4-4"/></svg></summary>
+            <form class="panel-b" id="settingsForm" novalidate>
+              <div class="grid3">
+                <div class="field"><label for="cfgCash">Starting Cash ($)</label><input type="text" inputmode="decimal" id="cfgCash" name="cash" value="10000" autocomplete="off" aria-describedby="cfgCash-err"><p class="ferr" id="cfgCash-err" hidden></p></div>
+                <div class="field"><label for="cfgCommBps">Commission (bps)</label><input type="text" inputmode="decimal" id="cfgCommBps" name="commission-bps" value="0" autocomplete="off" aria-describedby="cfgCommBps-err"><p class="ferr" id="cfgCommBps-err" hidden></p></div>
+                <div class="field"><label for="cfgCommFixed">Per Fill ($)</label><input type="text" inputmode="decimal" id="cfgCommFixed" name="commission-fixed" value="0" autocomplete="off" aria-describedby="cfgCommFixed-err"><p class="ferr" id="cfgCommFixed-err" hidden></p></div>
+                <div class="field"><label for="cfgSlip">Slippage (bps)</label><input type="text" inputmode="decimal" id="cfgSlip" name="slippage" value="2" autocomplete="off" aria-describedby="cfgSlip-err"><p class="ferr" id="cfgSlip-err" hidden></p></div>
+                <div class="field"><label for="cfgExec">Orders Fill At</label><select id="cfgExec" name="execution"><option value="open">Next open</option><option value="close">Next close</option></select></div>
+                <div class="field"><label for="cfgLev">Max Leverage (×)</label><input type="text" inputmode="decimal" id="cfgLev" name="leverage" value="1" autocomplete="off" aria-describedby="cfgLev-err"><p class="ferr" id="cfgLev-err" hidden></p></div>
+                <div class="field"><label for="cfgBand">Rebalance Band (%)</label><input type="text" inputmode="decimal" id="cfgBand" name="band" value="2" autocomplete="off" aria-describedby="cfgBand-err"><p class="ferr" id="cfgBand-err" hidden></p></div>
+                <div class="field"><label for="cfgRf">Risk-Free (%/yr)</label><input type="text" inputmode="decimal" id="cfgRf" name="risk-free" value="0" autocomplete="off" aria-describedby="cfgRf-err"><p class="ferr" id="cfgRf-err" hidden></p></div>
+                <div class="field"><label for="cfgSeed">Random Seed</label><input type="text" inputmode="numeric" id="cfgSeed" name="seed" value="42" autocomplete="off" aria-describedby="cfgSeed-err"><p class="ferr" id="cfgSeed-err" hidden></p></div>
+              </div>
+              <div class="row" style="gap:4px 18px">
+                <label class="check"><input type="checkbox" id="cfgFrac" name="fractional" checked> Fractional shares</label>
+                <label class="check"><input type="checkbox" id="cfgShort" name="short"> Allow shorting</label>
+              </div>
+              <p class="help">1&nbsp;bps = 0.01%. Orders placed at a bar’s close fill on the next bar, so your strategy never trades on data it couldn’t have seen.</p>
+              <div class="row"><button class="btn small primary" type="submit">Apply &amp; Run</button></div>
+            </form>
+          </details>
+        </section>
+      </div>
+
+      <div class="readout">
+        <section class="panel errbox" id="errBox" hidden aria-labelledby="h-err" tabindex="-1">
+          <div class="panel-h"><h2 id="h-err">Your Strategy Raised an Error</h2></div>
+          <div class="panel-b">
+            <p class="msg" id="errMsg"></p>
+            <pre class="trace" id="errTrace" translate="no"></pre>
+            <p class="help" id="errHint"></p>
+            <div class="row"><button class="btn small" id="errJump" type="button" hidden>Jump to Line</button><button class="btn small" id="errReset" type="button">Reset Code</button></div>
+          </div>
+        </section>
+
+        <section id="results" class="readout is-empty" aria-labelledby="resTitle" aria-busy="true">
+          <div class="runline">
+            <h2 id="resTitle">Preparing Your First Backtest…</h2>
+            <p class="meta" id="resMeta">The first visit downloads a 12&nbsp;MB Python runtime; later visits load from your browser’s cache.</p>
+            <div class="chips" id="resChips"></div>
+          </div>
+          <ul class="notes" id="notes" hidden></ul>
+
+          <dl class="kpis panel" id="kpis"></dl>
+
+          <section class="panel" aria-labelledby="h-eq">
+            <div class="panel-h"><h3 id="h-eq">Equity</h3><ul class="legend" id="eqLegend"></ul><span class="spacer"></span>
+              <div class="seg" id="eqScale" role="group" aria-label="Equity scale"><button type="button" aria-pressed="true" data-scale="linear">Linear</button><button type="button" aria-pressed="false" data-scale="log">Log</button></div>
+            </div>
+            <div class="panel-b"><div class="chart"><canvas id="chEquity" role="img" aria-label="Equity curve"></canvas><div class="chart-empty">Equity curve appears after the first run.</div></div></div>
+          </section>
+
+          <section class="panel" aria-labelledby="h-dd">
+            <div class="panel-h"><h3 id="h-dd">Drawdown</h3><span class="muted" id="ddInfo"></span></div>
+            <div class="panel-b"><div class="chart short"><canvas id="chDD" role="img" aria-label="Drawdown chart"></canvas><div class="chart-empty">Drawdowns appear after the first run.</div></div></div>
+          </section>
+
+          <section class="panel" aria-labelledby="h-px">
+            <div class="panel-h"><h3 id="h-px">Price &amp; Trades</h3><ul class="legend" id="pxLegend"></ul></div>
+            <div class="panel-b"><div class="chart"><canvas id="chPrice" role="img" aria-label="Price with buy and sell markers"></canvas><div class="chart-empty">Prices & fills appear after the first run.</div></div></div>
+          </section>
+
+          <div class="two">
+            <section class="panel" aria-labelledby="h-heat">
+              <div class="panel-h"><h3 id="h-heat">Monthly Returns</h3><span class="spacer"></span>
+                <div class="seg" id="heatWhich" role="group" aria-label="Monthly returns for"><button type="button" aria-pressed="true" data-which="strategy">Strategy</button><button type="button" aria-pressed="false" data-which="bench">Benchmark</button></div>
+              </div>
+              <div class="panel-b scroll"><table class="heat" id="heat"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div>
+            </section>
+            <section class="panel" aria-labelledby="h-hist">
+              <div class="panel-h"><h3 id="h-hist">Daily Return Distribution</h3></div>
+              <div class="panel-b"><div class="chart mid"><canvas id="chHist" role="img" aria-label="Histogram of daily returns"></canvas><div class="chart-empty">Return histogram appears after the first run.</div></div></div>
+            </section>
+          </div>
+
+          <section class="panel" aria-labelledby="h-roll">
+            <div class="panel-h"><h3 id="h-roll">Rolling Sharpe Ratio</h3><span class="muted" id="rollInfo"></span></div>
+            <div class="panel-b"><div class="chart short"><canvas id="chRoll" role="img" aria-label="Rolling Sharpe ratio"></canvas><div class="chart-empty">Rolling Sharpe appears after the first run.</div></div></div>
+          </section>
+
+          <section class="panel" aria-labelledby="h-stats">
+            <div class="panel-h"><h3 id="h-stats">All Statistics</h3><span class="spacer"></span><label class="check"><input type="checkbox" id="showDesc" name="definitions"> Show definitions</label></div>
+            <div class="panel-b scroll"><table class="metrics" id="metricsTable"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div>
+          </section>
+
+          <section class="panel" aria-labelledby="h-trades">
+            <div class="panel-h"><h3 id="h-trades">Trades</h3><span class="muted" id="tradeInfo"></span></div>
+            <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Trades table"><table id="tradesTable"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div></div>
+          </section>
+
+          <section class="panel" id="logPanel" aria-labelledby="h-logs" hidden>
+            <div class="panel-h"><h3 id="h-logs">Output</h3><span class="muted"><code translate="no">print()</code> &amp; <code translate="no">ctx.log()</code> from your strategy</span></div>
+            <div class="panel-b"><pre class="logs" id="logs" translate="no" tabindex="0"></pre></div>
+          </section>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ TOOLS -->
+  <section class="view stack" id="view-tools" aria-labelledby="h-tools" hidden>
+    <div class="viewhead"><h1 id="h-tools">Research Tools</h1><p>Stress-test your strategy before you trust it.</p></div>
+    <div class="panel ctxline" id="toolCtx"></div>
+
+    <section class="panel" id="sweep" aria-labelledby="h-sweep">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-sweep">Parameter Sweep</h2><p>Re-run your strategy for every combination of <code translate="no">PARAMS</code> values & score each run. Tune on older data, then check the result on data the tuning never saw.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="sweepForm" novalidate>
+          <div class="grid2">
+            <div class="field"><label for="swP1">Parameter 1</label><select id="swP1" name="param-1" translate="no"></select></div>
+            <div class="field"><label for="swV1">Values</label><input type="text" id="swV1" name="values-1" placeholder="20:100:10…" autocomplete="off" spellcheck="false" aria-describedby="swV1-help swV1-err"><p class="ferr" id="swV1-err" hidden></p></div>
+            <div class="field"><label for="swP2">Parameter 2</label><select id="swP2" name="param-2" translate="no"></select></div>
+            <div class="field"><label for="swV2">Values</label><input type="text" id="swV2" name="values-2" placeholder="150, 200, 250…" autocomplete="off" spellcheck="false" aria-describedby="swV2-err"><p class="ferr" id="swV2-err" hidden></p></div>
+            <div class="field"><label for="swMetric">Score By</label><select id="swMetric" name="metric"></select></div>
+            <div class="field"><label for="swSplit">Tune On</label><select id="swSplit" name="tune-on"><option value="">Whole period</option><option value="0.7" selected>First 70% (check on last 30%)</option><option value="0.5">First 50% (check on last 50%)</option></select></div>
+          </div>
+          <p class="help" id="swV1-help">Use <code translate="no">start:stop:step</code> or a comma-separated list. Up to 400 runs.</p>
+          <div class="row"><button class="btn primary" id="swRun" type="submit">Run Sweep</button><button class="btn" id="swStop" type="button" hidden>Cancel Sweep</button><span class="muted tnum" id="swCount" aria-live="polite"></span></div>
+          <div class="bar" id="swBar" hidden role="progressbar" aria-label="Sweep progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </form>
+        <div class="out" id="swOut" aria-live="polite"><p class="out-empty">Pick a parameter & a list of values, then run the sweep.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="montecarlo" aria-labelledby="h-mc">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-mc">Monte Carlo Resampling</h2><p>Shuffle blocks of your strategy’s daily returns into hundreds of alternative histories. A wide spread means the result depends heavily on the order of good & bad days.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="mcForm" novalidate>
+          <div class="grid3">
+            <div class="field"><label for="mcPaths">Paths</label><input type="text" inputmode="numeric" id="mcPaths" name="paths" value="500" autocomplete="off" aria-describedby="mcPaths-err"><p class="ferr" id="mcPaths-err" hidden></p></div>
+            <div class="field"><label for="mcBlock">Block (days)</label><input type="text" inputmode="numeric" id="mcBlock" name="block" value="20" autocomplete="off" aria-describedby="mcBlock-err"><p class="ferr" id="mcBlock-err" hidden></p></div>
+            <div class="field"><label for="mcSeed">Seed</label><input type="text" inputmode="numeric" id="mcSeed" name="seed" value="7" autocomplete="off" aria-describedby="mcSeed-err"><p class="ferr" id="mcSeed-err" hidden></p></div>
+          </div>
+          <div class="row"><button class="btn primary" id="mcRun" type="submit">Run Simulation</button></div>
+        </form>
+        <div class="out" id="mcOut" aria-live="polite"><p class="out-empty">Runs your current strategy, then resamples its daily returns.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="split" aria-labelledby="h-split">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-split">In-Sample vs Out-of-Sample</h2><p>Split one continuous backtest at a date & compare the parts. An edge that disappears after the split was probably fitted to the past.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="splitForm" novalidate>
+          <div class="grid2">
+            <div class="field"><label for="spPct">Split at (% of Range)</label><input type="text" inputmode="numeric" id="spPct" name="split-pct" value="70" autocomplete="off" aria-describedby="spPct-err"><p class="ferr" id="spPct-err" hidden></p></div>
+            <div class="field"><label for="spDate">Or at Date</label><input type="date" id="spDate" name="split-date" aria-describedby="spDate-err"><p class="ferr" id="spDate-err" hidden></p></div>
+          </div>
+          <div class="row"><button class="btn primary" id="spRun" type="submit">Compare Periods</button></div>
+        </form>
+        <div class="out" id="spOut" aria-live="polite"><p class="out-empty">Runs your current strategy & splits the result.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="analytics" aria-labelledby="h-an">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-an">Instrument Analytics</h2><p>Buy-&-hold statistics for each loaded instrument & how their daily returns move together. Low or negative correlation is what makes diversification work.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="anForm" novalidate>
+          <fieldset aria-describedby="anList-err"><legend>Instruments</legend><div id="anList" class="checks" translate="no"></div></fieldset>
+          <p class="ferr" id="anList-err" hidden></p>
+          <div class="row"><button class="btn small" id="anAll" type="button">Select All</button><button class="btn small" id="anNone" type="button">Clear All</button></div>
+          <div class="grid2">
+            <div class="field"><label for="anStart">From</label><input type="date" id="anStart" name="an-from"></div>
+            <div class="field"><label for="anEnd">To</label><input type="date" id="anEnd" name="an-to"></div>
+          </div>
+          <div class="row"><button class="btn primary" id="anRun" type="submit">Analyze Instruments</button></div>
+        </form>
+        <div class="out" id="anOut" aria-live="polite"><p class="out-empty">Choose instruments, then run the analysis.</p></div>
+      </div>
+    </section>
+  </section>
+
+  <!-- ================================================================ DATA -->
+  <section class="view stack" id="view-data" aria-labelledby="h-data" hidden>
+    <div class="viewhead"><h1 id="h-data">Data</h1><p>Manage the price histories your backtests run on.</p></div>
+    <section class="panel" aria-labelledby="h-add">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-add">Add Price Data</h2><p>Drop CSV files from Nasdaq.com or Yahoo Finance. They’re parsed in your browser & stored there; nothing is uploaded.</p></div></div>
+      <div class="panel-b">
+        <label class="drop" id="drop" for="fileInput">
+          <strong>Drop CSV Files Here</strong>
+          <span>or click to choose files · <code translate="no">SPY.csv</code> is recognized automatically</span>
+          <input type="file" id="fileInput" name="files" accept=".csv,text/csv" multiple class="sr">
+        </label>
+        <div class="pending" id="pending" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-inst">
+      <div class="panel-h"><h2 id="h-inst">Loaded Instruments</h2><span class="muted" id="instCount"></span></div>
+      <div class="panel-b scroll"><table id="instTable"></table></div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-nasdaq">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-nasdaq">Getting Files from Nasdaq.com</h2></div></div>
+      <div class="panel-b">
+        <ol class="steps">
+          <li>Open the ticker’s page, e.g. <a href="https://www.nasdaq.com/market-activity/etf/spy/historical" target="_blank" rel="noopener">nasdaq.com/market-activity/etf/spy/historical</a>. Stocks use <code translate="no">/stocks/aapl/historical</code>.</li>
+          <li>Choose <b>10Y</b>, then <b>Download Historical Data</b>.</li>
+          <li>Rename the file to the ticker, e.g. <code translate="no">SPY.csv</code>, & drop it above. Unrenamed files ask for the ticker.</li>
+        </ol>
+        <ul class="dl-list" id="dlList" translate="no"></ul>
+      </div>
+    </section>
+  </section>
+</main>
+
+<div class="toast" id="toast" hidden role="status" aria-live="polite"><span id="toastMsg"></span><button class="btn small" id="toastAction" type="button" hidden></button></div>
+
+<script src="vendor/chart.umd.js"></script>
+<script>
+'use strict';
+/* =========================================================================
+   QuantLab front end
+   - Data: bundled CSVs (data/manifest.json) + files you drop (IndexedDB)
+   - Engine: engine.py in Pyodide inside a Web Worker (worker.js)
+   - State: tab in the hash, market & strategy choices in the query string
+   ========================================================================= */
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const PYODIDE_CDN = 'https://cdn.jsdelivr.net/npm/pyodide@0.26.4/';
+const CHART_CDN = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js';
+const IS_MAC = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
+const LOCALE = (() => {
+  // First valid language tag the browser offers (some systems report tags like "en-US@posix").
+  for (const tag of [...(navigator.languages || []), navigator.language]) {
+    if (!tag) continue;
+    const clean = String(tag).split(/[@.]/)[0].replace(/_/g, '-');
+    try { const [c] = Intl.getCanonicalLocales(clean); if (c) return c; } catch (e) { /* try next */ }
+  }
+  return 'en-US';
+})();
+const TOOL_SECTIONS = ['sweep', 'montecarlo', 'split', 'analytics'];
+
+const RECOMMENDED = [
+  ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
+  ['TLT', '20+ yr Treasuries', 'etf'], ['IEF', '7–10 yr Treasuries', 'etf'], ['SHY', '1–3 yr Treasuries', 'etf'],
+  ['GLD', 'Gold', 'etf'], ['SLV', 'Silver', 'etf'], ['USO', 'Crude oil', 'etf'],
+  ['EFA', 'Developed ex-US', 'etf'], ['EEM', 'Emerging markets', 'etf'],
+  ['XLK', 'Tech sector', 'etf'], ['XLF', 'Financials', 'etf'], ['XLE', 'Energy', 'etf'], ['XLV', 'Health care', 'etf'],
+  ['AAPL', 'Apple', 'stocks'], ['MSFT', 'Microsoft', 'stocks'], ['NVDA', 'Nvidia', 'stocks'], ['AMZN', 'Amazon', 'stocks'],
+  ['JPM', 'JPMorgan Chase', 'stocks'], ['XOM', 'Exxon Mobil', 'stocks'], ['KO', 'Coca-Cola', 'stocks'],
+];
+
+/* ------------------------------------------------- locale-aware formats -- */
+const nf = {};
+function NF(key, opts) { return nf[key] || (nf[key] = new Intl.NumberFormat(LOCALE, opts)); }
+const UTC_DAY = { timeZone: 'UTC' };
+const dfDay = new Intl.DateTimeFormat(LOCALE, { year: 'numeric', month: 'short', day: 'numeric', ...UTC_DAY });
+const dfMonth = new Intl.DateTimeFormat(LOCALE, { year: 'numeric', month: 'short', ...UTC_DAY });
+const toDate = iso => new Date(iso + 'T00:00:00Z');
+const fmt = {
+  pct: (v, d = 2, signed = false) => (v == null ? '—' : NF(`p${d}${signed}`, { style: 'percent', minimumFractionDigits: d, maximumFractionDigits: d, signDisplay: signed ? 'exceptZero' : 'auto' }).format(v)),
+  num: (v, d = 2) => (v == null ? '—' : Math.abs(v) >= 1e5 ? NF('sci', { notation: 'scientific', maximumFractionDigits: 2 }).format(v) : NF('n' + d, { minimumFractionDigits: d, maximumFractionDigits: d }).format(v)),
+  int: v => (v == null ? '—' : NF('int', { maximumFractionDigits: 0 }).format(Math.round(v))),
+  money: v => (v == null ? '—' : NF('usd2', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
+  moneyAxis: v => NF('usd0', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(v),
+  days: v => (v == null ? '—' : NF('int', { maximumFractionDigits: 0 }).format(Math.round(v)) + ' days'),
+  price: v => (v == null ? '—' : NF('px', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
+  date: iso => (iso ? dfDay.format(toDate(iso)) : '—'),
+  month: iso => (iso ? dfMonth.format(toDate(iso)) : ''),
+};
+const UNSIGNED = new Set(['volatility', 'downside_dev', 'exposure', 'avg_leverage', 'win_rate', 'pct_pos_days', 'pct_pos_months', 'tracking_error',
+  'up_capture', 'down_capture', 'var_95', 'cvar_95', 'ulcer_index']);
+const fmtMetric = (f, v, key) => (f === 'pct' ? fmt.pct(v, 2, !UNSIGNED.has(key)) : (fmt[f] || fmt.num)(v));
+const sign = v => (v == null ? '' : v > 0 ? 'pos' : v < 0 ? 'neg' : '');
+let METRICS = [];
+
+/* ------------------------------------------------------------- storage -- */
+const store = {
+  get(k, fallback) { try { const v = localStorage.getItem('ql.' + k); return v == null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
+  set(k, v) { try { localStorage.setItem('ql.' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
+};
+const idb = {
+  db: null,
+  async open() {
+    if (this.db) return this.db;
+    this.db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('quantlab', 1);
+      req.onupgradeneeded = () => req.result.createObjectStore('instruments', { keyPath: 'ticker' });
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return this.db;
+  },
+  async tx(mode, fn) {
+    const db = await this.open();
+    return new Promise((resolve, reject) => {
+      const t = db.transaction('instruments', mode); const r = fn(t.objectStore('instruments'));
+      t.oncomplete = () => resolve(r && r.result); t.onerror = () => reject(t.error);
+    });
+  },
+  async all() { try { return (await this.tx('readonly', s => s.getAll())) || []; } catch (e) { return []; } },
+  async put(rec) { try { await this.tx('readwrite', s => s.put(rec)); return true; } catch (e) { return false; } },
+  async del(ticker) { try { await this.tx('readwrite', s => s.delete(ticker)); } catch (e) { /* ignore */ } },
+};
+
+/* ------------------------------------------------------------ URL state -- */
+const url = {
+  read() { try { return new URLSearchParams(location.search); } catch (e) { return new URLSearchParams(); } },
+  write() {
+    const p = new URLSearchParams();
+    const set = (k, v) => { if (v) p.set(k, v); };
+    set('ticker', $('#instrument').value); set('bench', $('#benchmark').value);
+    set('from', $('#start').value); set('to', $('#end').value);
+    const t = $('#template').value; if (t && t.startsWith('tpl:')) set('strategy', t.slice(4));
+    if ($('#settingsBox').open) p.set('settings', 'open');
+    const q = p.toString();
+    try { history.replaceState(history.state, '', (q ? '?' + q : location.pathname) + location.hash); } catch (e) { /* sandboxed frame */ }
+  },
+};
+
+/* ------------------------------------------------------------ CSV input -- */
+function splitCSVLine(line) {
+  const out = []; let cur = ''; let q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+    else if (ch === ',' && !q) { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+function parseCSV(text) {
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim());
+  if (lines.length < 3) throw new Error('This file has fewer than 2 rows of prices. Download a longer range, e.g. 10Y.');
+  const head = splitCSVLine(lines[0]).map(h => h.toLowerCase());
+  const col = (...names) => { for (const n of names) { const i = head.indexOf(n); if (i >= 0) return i; } return -1; };
+  const iD = col('date'), iC = col('close/last', 'close', 'price'), iA = col('adj close', 'adj. close', 'adj_close');
+  const iO = col('open'), iH = col('high'), iL = col('low'), iV = col('volume');
+  if (iD < 0 || (iC < 0 && iA < 0)) throw new Error('No Date & Close columns found. Use the CSV from Nasdaq.com’s “Download Historical Data” button.');
+  const num = s => { if (s == null) return NaN; s = String(s).replace(/[$,\s]/g, ''); if (!s || s === 'N/A' || s === '-' || s === 'null') return NaN; return Number(s); };
+  const parseDate = s => {
+    s = s.replace(/"/g, '').trim();
+    let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+    m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[1]}-${m[2]}-${m[3]}` : null;
+  };
+  const rows = [];
+  for (const line of lines.slice(1)) {
+    const c = splitCSVLine(line); const d = parseDate(c[iD] || ''); if (!d) continue;
+    let close = iC >= 0 ? num(c[iC]) : NaN;
+    let o = iO >= 0 ? num(c[iO]) : NaN, h = iH >= 0 ? num(c[iH]) : NaN, l = iL >= 0 ? num(c[iL]) : NaN;
+    if (iA >= 0) { const adj = num(c[iA]); if (isFinite(adj) && adj > 0) { const f = isFinite(close) && close > 0 ? adj / close : 1; close = adj; o *= f; h *= f; l *= f; } }
+    if (!(close > 0)) continue;
+    rows.push([d, o > 0 ? o : NaN, h > 0 ? h : NaN, l > 0 ? l : NaN, close, iV >= 0 ? num(c[iV]) : NaN]);
+  }
+  rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const uniq = [];
+  for (const r of rows) { if (uniq.length && uniq[uniq.length - 1][0] === r[0]) uniq[uniq.length - 1] = r; else uniq.push(r); }
+  if (uniq.length < 2) throw new Error('No valid price rows found. Check that the file is a daily price history.');
+  const pick = k => uniq.map(r => (isFinite(r[k]) ? r[k] : null));
+  return { dates: uniq.map(r => r[0]), open: pick(1), high: pick(2), low: pick(3), close: uniq.map(r => r[4]), volume: pick(5) };
+}
+function tickerFromFilename(name) {
+  const stem = name.replace(/\.[^.]+$/, '').trim();
+  if (/^historicaldata/i.test(stem) || /^\d+$/.test(stem) || /\s|\(/.test(stem)) return null;
+  const t = stem.toUpperCase();
+  return /^[A-Z0-9.^=\-]{1,15}$/.test(t) ? t : null;
+}
+
+/* ---------------------------------------------------------- instruments -- */
+const instruments = new Map();
+function addInstrument(rec) {
+  const d = rec.data;
+  instruments.set(rec.ticker, { ...rec, start: d.dates[0], end: d.dates[d.dates.length - 1], n: d.dates.length, last: d.close[d.close.length - 1] });
+  py.forget(rec.ticker);
+}
+async function loadBundled() {
+  let manifest;
+  try { manifest = await (await fetch('data/manifest.json', { cache: 'no-cache' })).json(); } catch (e) { return; }
+  await Promise.all((manifest.instruments || []).map(async m => {
+    try {
+      const text = await (await fetch('data/' + m.file)).text();
+      if (!instruments.has(m.ticker) || instruments.get(m.ticker).source === 'bundled')
+        addInstrument({ ticker: m.ticker, name: m.name || m.ticker, source: 'bundled', synthetic: !!m.synthetic, data: parseCSV(text) });
+    } catch (e) { console.warn('could not load', m.file, e); }
+  }));
+}
+async function loadUploads() { for (const rec of await idb.all()) addInstrument(rec); }
+function sortedTickers() { return [...instruments.values()].sort((a, b) => (a.synthetic - b.synthetic) || a.ticker.localeCompare(b.ticker)).map(r => r.ticker); }
+
+/* -------------------------------------------------------- python bridge -- */
+class PyError extends Error { constructor(info) { super(info.message || 'Python error'); this.info = info; } }
+const py = {
+  mode: null, worker: null, seq: 0, waiting: new Map(), loaded: new Set(), ready: null, engineSrc: null,
+  indexURLs() { return [new URL('pyodide/', location.href).href, PYODIDE_CDN]; },
+  start(engineSrc) { this.engineSrc = engineSrc; this.ready = this._start(); return this.ready; },
+  async _start() {
+    try {
+      this._spawn();
+      await this._post({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() }, 180000);
+      this.mode = 'worker';
+    } catch (e) {
+      console.warn('Worker unavailable, running Python on the page:', e);
+      this._kill();
+      await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'runtime.js'; s.onload = res; s.onerror = () => rej(new Error('runtime.js is missing')); document.head.appendChild(s); });
+      await this._inline({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() });
+      this.mode = 'inline';
+    }
+  },
+  _spawn() {
+    this.worker = new Worker('worker.js');
+    this.worker.onmessage = e => { const w = this.waiting.get(e.data.id); if (w) { this.waiting.delete(e.data.id); clearTimeout(w.t); e.data.ok ? w.resolve(e.data.result) : w.reject(new Error(e.data.error)); } };
+    this.worker.onerror = e => { if (e.preventDefault) e.preventDefault(); for (const w of this.waiting.values()) w.reject(new Error(e.message || 'worker error')); this.waiting.clear(); };
+  },
+  _kill() { if (this.worker) { this.worker.terminate(); this.worker = null; } },
+  _post(msg, timeout = 0) {
+    return new Promise((resolve, reject) => {
+      const id = ++this.seq;
+      const t = timeout ? setTimeout(() => { this.waiting.delete(id); reject(new Error('timed out')); }, timeout) : null;
+      this.waiting.set(id, { resolve, reject, t });
+      this.worker.postMessage({ ...msg, id });
+    });
+  },
+  _inline(msg) { return new Promise((resolve, reject) => { setTimeout(() => self.QLRuntime.onMessage({ ...msg, id: 0 }, r => (r.ok ? resolve(r.result) : reject(new Error(r.error)))), 30); }); },
+  async call(method, payload) {
+    await this.ready;
+    const msg = { type: 'call', method, payload: JSON.stringify(payload) };
+    const raw = this.mode === 'worker' ? await this._post(msg) : await this._inline(msg);
+    const out = JSON.parse(raw);
+    if (!out.ok) throw new PyError(out.error);
+    return out.result;
+  },
+  forget(ticker) { this.loaded.delete(ticker); },
+  async ensure(tickers) {
+    for (const t of new Set(tickers.filter(Boolean))) {
+      if (this.loaded.has(t)) continue;
+      const rec = instruments.get(t);
+      if (!rec) throw new Error(`No data is loaded for ${t}. Add it on the Data tab.`);
+      await this.call('load_data', { ticker: t, data: rec.data });
+      this.loaded.add(t);
+    }
+  },
+  canStop() { return this.mode === 'worker'; },
+  async restart() {
+    for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
+    this.waiting.clear(); this._kill(); this.loaded.clear();
+    this.ready = (async () => { this._spawn(); await this._post({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() }, 180000); })();
+    return this.ready;
+  },
+};
+
+/* --------------------------------------------- status, loading & toasts -- */
+let busyCount = 0;
+function setStatus(state, text) { $('#status').dataset.state = state; $('#statusText').textContent = text; }
+function busy(on, label) {
+  busyCount = Math.max(0, busyCount + (on ? 1 : -1));
+  if (busyCount > 0) { setStatus('busy', label || 'Running…'); $('#stopBtn').hidden = !py.canStop(); }
+  else { if ($('#status').dataset.state !== 'error') setStatus('ready', 'Python ready'); $('#stopBtn').hidden = true; }
+}
+// Loading buttons keep their label, show a spinner after 150 ms & keep it for at least 400 ms.
+function loadingOn(btn) {
+  btn.disabled = true; btn.setAttribute('aria-busy', 'true'); btn._shown = 0;
+  btn._timer = setTimeout(() => { btn.classList.add('is-loading'); btn._shown = performance.now(); }, 150);
+}
+function loadingOff(btn) {
+  clearTimeout(btn._timer);
+  const done = () => { btn.classList.remove('is-loading'); btn.disabled = false; btn.removeAttribute('aria-busy'); };
+  const left = btn._shown ? 400 - (performance.now() - btn._shown) : 0;
+  return left > 0 ? new Promise(r => setTimeout(() => { done(); r(); }, left)) : (done(), Promise.resolve());
+}
+let toastTimer = null;
+function toast(msg, action) {
+  const t = $('#toast'); $('#toastMsg').textContent = msg; t.hidden = false;
+  const b = $('#toastAction');
+  if (action) { b.hidden = false; b.textContent = action.label; b.onclick = () => { t.hidden = true; action.run(); }; } else b.hidden = true;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, action ? 8000 : 4000);
+}
+
+/* -------------------------------------------------- field validation ----- */
+function parseNumber(raw) {
+  let s = String(raw == null ? '' : raw).trim().replace(/[\s$%_]/g, '');
+  if (/^-?\d+,\d{1,3}$/.test(s) && !/\./.test(s) && !/^-?\d{1,3},\d{3}$/.test(s)) s = s.replace(',', '.');
+  s = s.replace(/,/g, '');
+  if (s === '' || !/^-?(\d+\.?\d*|\.\d+)(e-?\d+)?$/i.test(s)) return NaN;
+  return Number(s);
+}
+function setFieldError(id, msg) {
+  const el = $('#' + id), e = $('#' + id + '-err');
+  if (msg) { if (el) el.setAttribute('aria-invalid', 'true'); if (e) { e.textContent = msg; e.hidden = false; } }
+  else { if (el) el.removeAttribute('aria-invalid'); if (e) { e.textContent = ''; e.hidden = true; } }
+  return !msg;
+}
+// Validates a list of [id, check(value) -> error|null]; focuses the first invalid field.
+function validate(rules) {
+  let first = null; const values = {};
+  for (const [id, check] of rules) {
+    const raw = $('#' + id).value; const err = check(raw, values);
+    setFieldError(id, err);
+    if (err && !first) first = id;
+    values[id] = parseNumber(raw);
+  }
+  if (first) { const el = $('#' + first); el.focus(); }
+  return !first;
+}
+const between = (lo, hi, unit = '', integer = false, example = null) => raw => {
+  const v = parseNumber(raw);
+  if (!isFinite(v)) return `Enter a number${unit ? ' in ' + unit : ''}, e.g. ${example != null ? example : lo === 0 ? hi / 10 : lo}.`;
+  if (integer && !Number.isInteger(v)) return 'Enter a whole number.';
+  if (v < lo || v > hi) return `Enter a value from ${fmt.num(lo, Number.isInteger(lo) ? 0 : 1)} to ${fmt.num(hi, 0)}.`;
+  return null;
+};
+
+/* ------------------------------------------------------------ editor ---- */
+const KW = 'False|None|True|and|as|assert|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield';
+const TOKEN_RE = new RegExp([
+  '(#[^\\n]*)',
+  '("""[\\s\\S]*?(?:"""|$)|\'\'\'[\\s\\S]*?(?:\'\'\'|$)|[rbfRBF]{0,2}"(?:\\\\.|[^"\\\\\\n])*"?|[rbfRBF]{0,2}\'(?:\\\\.|[^\'\\\\\\n])*\'?)',
+  '\\b(' + KW + ')\\b', '\\b(ctx|qt|PARAMS|data|self)\\b', '\\b(\\d+(?:\\.\\d*)?(?:[eE][+-]?\\d+)?|\\.\\d+)\\b', '\\b([A-Za-z_]\\w*)(?=\\s*\\()',
+].join('|'), 'g');
+const TOKEN_CLASS = [null, 'com', 'str', 'kw', 'ctx', 'num', 'fn'];
+function highlight(src) {
+  let out = '', last = 0, m; TOKEN_RE.lastIndex = 0;
+  while ((m = TOKEN_RE.exec(src))) {
+    if (m[0] === '') { TOKEN_RE.lastIndex++; continue; }
+    out += esc(src.slice(last, m.index));
+    let k = 1; while (m[k] === undefined) k++;
+    out += `<span class="tok-${TOKEN_CLASS[k]}">${esc(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  return out + esc(src.slice(last)) + '\n ';
+}
+const editor = {
+  init() {
+    this.ta = $('#code'); this.hl = $('#edHl'); this.gutter = $('#edGutter'); this.errEl = $('#edErr');
+    this.ta.addEventListener('input', () => { this.clearError(); this.render(); onCodeChanged(); });
+    this.ta.addEventListener('scroll', () => this.sync());
+    this.ta.addEventListener('keydown', e => this.keys(e));
+    this.render();
+  },
+  get value() { return this.ta.value; },
+  set value(v) { this.ta.value = v; this.clearError(); this.render(); this.ta.scrollTop = 0; },
+  lh() { return parseFloat(getComputedStyle($('#editor')).lineHeight) || 20; },
+  render() {
+    const v = this.ta.value; this.hl.innerHTML = highlight(v);
+    const lines = v.split('\n').length;
+    if (this.gutter.childElementCount !== lines) { let h = ''; for (let i = 1; i <= lines; i++) h += `<div>${i}</div>`; this.gutter.innerHTML = h; }
+    this.markGutter(); this.sync();
+  },
+  sync() {
+    const pre = this.hl.parentElement; pre.scrollTop = this.ta.scrollTop; pre.scrollLeft = this.ta.scrollLeft; this.gutter.scrollTop = this.ta.scrollTop;
+    if (this.errLine) this.errEl.style.transform = `translateY(${10 + (this.errLine - 1) * this.lh() - this.ta.scrollTop}px)`;
+  },
+  markGutter() { $$('.ed-gutter div.err').forEach(d => d.classList.remove('err')); if (this.errLine && this.gutter.children[this.errLine - 1]) this.gutter.children[this.errLine - 1].classList.add('err'); },
+  showError(line) {
+    this.errLine = line || null; this.errEl.hidden = !line; this.errEl.style.top = '0'; this.markGutter(); this.sync();
+    if (line) { const lh = this.lh(), top = (line - 1) * lh, h = this.ta.clientHeight; if (top < this.ta.scrollTop || top > this.ta.scrollTop + h - 3 * lh) this.ta.scrollTop = Math.max(0, top - h / 3); }
+  },
+  clearError() { if (this.errLine) { this.errLine = null; this.errEl.hidden = true; this.markGutter(); } },
+  goToLine(line) {
+    const lines = this.ta.value.split('\n'); let pos = 0; for (let i = 0; i < line - 1 && i < lines.length; i++) pos += lines[i].length + 1;
+    this.ta.focus(); this.ta.setSelectionRange(pos, pos + (lines[line - 1] || '').length); this.showError(line);
+  },
+  insert(text) {
+    const ta = this.ta; ta.focus();
+    if (!document.execCommand || !document.execCommand('insertText', false, text)) { ta.setRangeText(text, ta.selectionStart, ta.selectionEnd, 'end'); ta.dispatchEvent(new Event('input')); }
+  },
+  selectedLines() {
+    const ta = this.ta, v = ta.value; const a = v.lastIndexOf('\n', ta.selectionStart - 1) + 1;
+    let b = v.indexOf('\n', ta.selectionEnd - (ta.selectionEnd > ta.selectionStart && v[ta.selectionEnd - 1] === '\n' ? 1 : 0)); if (b < 0) b = v.length;
+    return [a, b];
+  },
+  replaceLines(fn) { const ta = this.ta; const [a, b] = this.selectedLines(); const next = fn(ta.value.slice(a, b).split('\n')).join('\n'); ta.setSelectionRange(a, b); this.insert(next); ta.setSelectionRange(a, a + next.length); },
+  keys(e) {
+    const ta = this.ta, mod = IS_MAC ? e.metaKey : e.ctrlKey;
+    if (mod && e.key === 'Enter') { e.preventDefault(); runBacktest(); return; }
+    if (mod && (e.key === '/' || e.code === 'Slash')) {
+      e.preventDefault();
+      this.replaceLines(ls => { const all = ls.filter(l => l.trim()).every(l => /^\s*#/.test(l)); return ls.map(l => (all ? l.replace(/^(\s*)# ?/, '$1') : l.trim() ? l.replace(/^(\s*)/, '$1# ') : l)); });
+      return;
+    }
+    if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); openSave(); return; }
+    if (e.key === 'Escape') { this.escaped = true; return; }
+    if (e.key === 'Tab') {
+      if (this.escaped) { this.escaped = false; return; }
+      e.preventDefault();
+      const multi = ta.value.slice(ta.selectionStart, ta.selectionEnd).includes('\n');
+      if (e.shiftKey) this.replaceLines(ls => ls.map(l => l.replace(/^ {1,4}/, '')));
+      else if (multi) this.replaceLines(ls => ls.map(l => (l.trim() ? '    ' + l : l)));
+      else { const v = ta.value; const col = ta.selectionStart - (v.lastIndexOf('\n', ta.selectionStart - 1) + 1); this.insert(' '.repeat(4 - (col % 4))); }
+      return;
+    }
+    this.escaped = false;
+    if (e.key === 'Enter' && !e.shiftKey && !e.altKey && !e.isComposing) {
+      e.preventDefault();
+      const v = ta.value, p = ta.selectionStart; const line = v.slice(v.lastIndexOf('\n', p - 1) + 1, p);
+      let ind = (line.match(/^\s*/) || [''])[0];
+      if (/:\s*(#.*)?$/.test(line)) ind += '    ';
+      else if (/^\s*(return|pass|break|continue|raise)\b/.test(line)) ind = ind.slice(0, Math.max(0, ind.length - 4));
+      this.insert('\n' + ind); return;
+    }
+    if (e.key === 'Backspace' && ta.selectionStart === ta.selectionEnd) {
+      const v = ta.value, p = ta.selectionStart; const before = v.slice(v.lastIndexOf('\n', p - 1) + 1, p);
+      if (before.length && /^ +$/.test(before)) { e.preventDefault(); const n = (before.length % 4) || 4; ta.setSelectionRange(p - n, p); this.insert(''); }
+    }
+  },
+};
+
+/* ---------------------------------------------------------- templates --- */
+let templates = [];
+function parseTemplates(text) {
+  return text.split(/^#%% id: /m).slice(1).map(part => {
+    const lines = part.split('\n'); const meta = { id: lines[0].trim() }; const code = [];
+    for (const l of lines.slice(1)) { const m = l.match(/^#%% (\w+): (.*)$/); if (m) meta[m[1]] = m[2].trim(); else code.push(l); }
+    meta.code = code.join('\n').replace(/^\n+/, '').replace(/\s+$/, '') + '\n';
+    return meta;
+  });
+}
+function myStrategies() { return store.get('mine', {}); }
+function fillTemplateSelect(selected) {
+  const sel = $('#template'); const groups = {};
+  for (const t of templates) (groups[t.group] = groups[t.group] || []).push(t);
+  let html = ''; const mine = myStrategies();
+  if (Object.keys(mine).length) html += '<optgroup label="My Strategies">' + Object.keys(mine).sort().map(n => `<option value="mine:${esc(n)}">${esc(n)}</option>`).join('') + '</optgroup>';
+  for (const [g, list] of Object.entries(groups)) html += `<optgroup label="${esc(g)}">` + list.map(t => `<option value="tpl:${t.id}">${esc(t.name)}</option>`).join('') + '</optgroup>';
+  sel.innerHTML = html;
+  if (selected && [...sel.options].some(o => o.value === selected)) sel.value = selected;
+}
+function currentSource() {
+  const v = $('#template').value || '';
+  if (v.startsWith('mine:')) { const name = v.slice(5); return { kind: 'mine', name, code: myStrategies()[name] || '', about: 'Your saved strategy, stored in this browser.' }; }
+  const t = templates.find(x => 'tpl:' + x.id === v);
+  return t ? { kind: 'tpl', name: t.name, code: t.code, about: t.about || '' } : { kind: 'none', name: 'Custom Strategy', code: '', about: '' };
+}
+function loadSelectedTemplate() {
+  const src = currentSource(); editor.value = src.code; $('#about').textContent = src.about; $('#delBtn').hidden = src.kind !== 'mine';
+  store.set('draft', { template: $('#template').value, code: editor.value }); url.write(); onCodeChanged(); hideError();
+}
+let codeTimer = null, paramsCache = null;
+function onCodeChanged() {
+  store.set('draft', { template: $('#template').value, code: editor.value });
+  paramsCache = null; clearTimeout(codeTimer); codeTimer = setTimeout(refreshParams, 600);
+}
+function openSave() {
+  const src = currentSource(); $('#saveForm').hidden = false; $('#saveBtn').setAttribute('aria-expanded', 'true');
+  $('#saveName').value = src.kind === 'mine' ? src.name : ''; setFieldError('saveName', null); $('#saveName').focus();
+}
+function closeSave(returnFocus = true) {
+  const wasOpen = !$('#saveForm').hidden;
+  $('#saveForm').hidden = true; $('#saveBtn').setAttribute('aria-expanded', 'false');
+  if (wasOpen && returnFocus) $('#saveBtn').focus();
+}
+function doSave(e) {
+  e.preventDefault();
+  const name = $('#saveName').value.trim();
+  if (!name) { setFieldError('saveName', 'Enter a name, e.g. “My trend filter”.'); $('#saveName').focus(); return; }
+  const mine = myStrategies(); mine[name] = editor.value; store.set('mine', mine);
+  fillTemplateSelect('mine:' + name); $('#about').textContent = 'Your saved strategy, stored in this browser.'; $('#delBtn').hidden = false;
+  closeSave(); store.set('template', 'mine:' + name); url.write(); toast(`Saved “${name}” in this browser.`);
+}
+function armConfirm(btn, label, onConfirm) {
+  if (btn.dataset.armed === '1') { btn.dataset.armed = ''; btn.classList.remove('armed'); btn.textContent = btn.dataset.label; onConfirm(); return; }
+  btn.dataset.label = btn.textContent; btn.dataset.armed = '1'; btn.classList.add('armed'); btn.textContent = label;
+  setTimeout(() => { if (btn.isConnected && btn.dataset.armed === '1') { btn.dataset.armed = ''; btn.classList.remove('armed'); btn.textContent = btn.dataset.label; } }, 4000);
+}
+function doDelete() {
+  const src = currentSource(); if (src.kind !== 'mine') return;
+  armConfirm($('#delBtn'), 'Confirm Delete', () => {
+    const mine = myStrategies(); const code = mine[src.name]; delete mine[src.name]; store.set('mine', mine);
+    fillTemplateSelect('tpl:sma_cross'); loadSelectedTemplate();
+    toast(`Deleted “${src.name}”.`, { label: 'Undo', run: () => { const m = myStrategies(); m[src.name] = code; store.set('mine', m); fillTemplateSelect('mine:' + src.name); loadSelectedTemplate(); toast(`Restored “${src.name}”.`); } });
+  });
+}
+
+/* ------------------------------------------------------------- charts --- */
+const charts = {};
+const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function alpha(hex, a) { const h = hex.replace('#', ''); const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16); return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`; }
+function palette() {
+  return { fg: cssVar('--fg'), fg2: cssVar('--fg-2'), fg3: cssVar('--fg-3'), grid: cssVar('--grid'), border: cssVar('--border'), strat: cssVar('--strat'),
+    bench: cssVar('--bench'), gain: cssVar('--gain'), loss: cssVar('--loss'), warn: cssVar('--warn'), panel: cssVar('--panel'), primary: cssVar('--primary') };
+}
+function kill(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+function xy(arr) { const out = new Array(arr.length); for (let i = 0; i < arr.length; i++) out[i] = { x: i, y: arr[i] == null ? null : arr[i] }; return out; }
+function baseOptions(dates, P, yFmt) {
+  return {
+    animation: false, parsing: false, normalized: true, responsive: true, maintainAspectRatio: false,
+    interaction: { mode: 'index', intersect: false, axis: 'x' },
+    plugins: {
+      legend: { display: false },
+      tooltip: { backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel, padding: 8, cornerRadius: 6, boxWidth: 8, boxHeight: 8,
+        callbacks: { title: items => (items.length ? fmt.date(dates[Math.round(items[0].parsed.x)]) : ''), label: c => ` ${c.dataset.label}: ${yFmt(c.parsed.y)}` } },
+    },
+    scales: {
+      x: { type: 'linear', min: 0, max: Math.max(1, dates.length - 1), grid: { color: P.grid, drawTicks: false }, border: { color: P.border },
+        ticks: { color: P.fg3, maxTicksLimit: 8, padding: 6, callback: v => fmt.month(dates[Math.round(v)]) } },
+      y: { grid: { color: P.grid, drawTicks: false }, border: { display: false }, ticks: { color: P.fg3, padding: 6, maxTicksLimit: 6, callback: v => yFmt(v) } },
+    },
+  };
+}
+function line(label, data, color, opts = {}) { return { type: 'line', label, data: xy(data), borderColor: color, backgroundColor: color, borderWidth: 1.6, pointRadius: 0, pointHoverRadius: 3, tension: 0, ...opts }; }
+const splitLinePlugin = {
+  id: 'splitLine',
+  afterDatasetsDraw(chart, args, o) {
+    if (o == null || o.index == null || o.index < 0) return;
+    const x = chart.scales.x.getPixelForValue(o.index); const { top, bottom } = chart.chartArea; const ctx = chart.ctx;
+    ctx.save(); ctx.strokeStyle = o.color; ctx.setLineDash([4, 4]); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bottom); ctx.stroke();
+    ctx.fillStyle = o.color; ctx.font = '12px ' + cssVar('--f-sans'); ctx.fillText(o.label || '', x + 6, top + 12); ctx.restore();
+  },
+};
+function legendHTML(items) { return items.map(([c, t, h]) => `<li><i style="background:${c}${h ? ';height:' + h + 'px' : ''}"></i>${esc(t)}</li>`).join(''); }
+
+/* ------------------------------------------------------------ backtest -- */
+let lastRun = null;
+const CFG_RULES = [
+  ['cfgCash', between(100, 1e9, 'dollars', false, '10,000')], ['cfgCommBps', between(0, 500, 'basis points')], ['cfgCommFixed', between(0, 1000, 'dollars')],
+  ['cfgSlip', between(0, 500, 'basis points')], ['cfgLev', between(0.1, 10)], ['cfgBand', between(0, 50, 'percent')],
+  ['cfgRf', between(0, 20, 'percent')], ['cfgSeed', between(0, 1e9, '', true, 42)],
+];
+const DATE_RULES = [
+  ['start', raw => { const r = instruments.get($('#instrument').value); if (!raw || !r) return null; if (raw > r.end) return `Pick a date before ${fmt.date(r.end)}.`; return null; }],
+  ['end', raw => { const s = $('#start').value; const r = instruments.get($('#instrument').value); if (!raw || !r) return null; if (raw < r.start) return `Pick a date after ${fmt.date(r.start)}.`; if (s && raw <= s) return 'Pick a date after “From”.'; return null; }],
+];
+function readConfig() {
+  const n = (id, d) => { const v = parseNumber($('#' + id).value); return isFinite(v) ? v : d; };
+  return { cash: n('cfgCash', 10000), commission_bps: n('cfgCommBps', 0), commission_fixed: n('cfgCommFixed', 0), slippage_bps: n('cfgSlip', 2),
+    execution: $('#cfgExec').value, max_leverage: n('cfgLev', 1), rebalance_band: n('cfgBand', 2) / 100, risk_free: n('cfgRf', 0) / 100,
+    seed: Math.round(n('cfgSeed', 42)), allow_short: $('#cfgShort').checked, fractional: $('#cfgFrac').checked };
+}
+function saveSettings() {
+  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed'].forEach(id => { s[id] = $('#' + id).value.trim(); });
+  s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked;
+  s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.start = $('#start').value; s.end = $('#end').value;
+  store.set('settings', s); summarizeSettings(); url.write();
+}
+function restoreSettings() {
+  const s = store.get('settings', null); if (!s) return null;
+  for (const [k, v] of Object.entries(s)) { const el = document.getElementById(k); if (!el || ['instrument', 'benchmark', 'start', 'end'].includes(k)) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v; }
+  return s;
+}
+function summarizeSettings() {
+  const c = readConfig(); const bits = [fmt.money(c.cash).replace(/\.00$/, ''), `${fmt.num(c.slippage_bps, c.slippage_bps % 1 ? 1 : 0)} bps slippage`];
+  if (c.commission_bps || c.commission_fixed) bits.push('commission');
+  if (c.allow_short) bits.push('shorting');
+  if (c.max_leverage !== 1) bits.push(`${fmt.num(c.max_leverage, 1)}× leverage`);
+  $('#settingsSummary').textContent = bits.join(' · ');
+}
+function payloadBase() {
+  return { ticker: $('#instrument').value, benchmark: $('#benchmark').value, code: editor.value, config: readConfig(), start: $('#start').value || null, end: $('#end').value || null };
+}
+function validInputs() {
+  if (!validate(DATE_RULES)) return false;
+  if (!validate(CFG_RULES)) { $('#settingsBox').open = true; validate(CFG_RULES); return false; }
+  return true;
+}
+
+async function runBacktest() {
+  if (!py.ready) return;
+  const btn = $('#runBtn'); if (btn.disabled) return;
+  const p = payloadBase();
+  if (!p.ticker) { showEmptyData(); return; }
+  if (!validInputs()) return;
+  closeSave(false);
+  loadingOn(btn); busy(true, 'Running backtest…'); $('#results').setAttribute('aria-busy', 'true');
+  const t0 = performance.now(); let done = null;
+  setStatus('busy', 'Running backtest…');
+  try {
+    await py.ensure([p.ticker, p.benchmark]);
+    const r = await py.call('run', p);
+    r.elapsed = performance.now() - t0; r.strategyName = currentSource().name;
+    lastRun = { payload: p, result: r }; hideError(); renderResults(r);
+    done = `Backtest finished: total return ${fmt.pct(r.metrics.total_return, 1, true)}, Sharpe ${fmt.num(r.metrics.sharpe)}`;
+  } catch (e) { showError(e); }
+  finally { $('#results').setAttribute('aria-busy', 'false'); busy(false); await loadingOff(btn); }
+  if (done) announce(done);
+}
+function announce(msg) { setStatus('ready', msg); setTimeout(() => { if (busyCount === 0 && $('#statusText').textContent === msg) setStatus('ready', 'Python ready'); }, 5000); }
+
+function hideError() { $('#errBox').hidden = true; editor.clearError(); }
+function showError(e) {
+  const info = e.info || { message: e.message, trace: '' };
+  if (info.message === 'Stopped') { toast('Run stopped. Edit your code & run again.'); return; }
+  $('#errBox').hidden = false;
+  $('#errMsg').textContent = info.message; $('#errTrace').textContent = info.trace || ''; $('#errTrace').hidden = !info.trace;
+  const jump = $('#errJump');
+  if (info.line) {
+    editor.showError(info.line); jump.hidden = false; jump.textContent = `Jump to Line ${info.line}`; jump.onclick = () => editor.goToLine(info.line);
+    $('#errHint').textContent = `Fix line ${info.line} in the editor, then run again. Earlier results are kept below.`;
+  } else { jump.hidden = true; $('#errHint').textContent = info.user === false ? 'This looks like a problem in QuantLab itself. Reset the code to a template to check, or reload the page.' : 'Fix the problem in the editor, then run again.'; }
+  $('#errBox').focus({ preventScroll: true }); $('#errBox').scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  setStatus('error', 'Strategy error');
+}
+function showEmptyData() {
+  $('#resTitle').textContent = 'Add Price Data to Start';
+  $('#resMeta').innerHTML = 'No instruments are loaded. <a href="#data">Go to the Data tab</a> & drop a Nasdaq CSV file.';
+}
+
+const KPI_TILES = [['Total Return', 'total_return', 'pct'], ['CAGR', 'cagr', 'pct'], ['Sharpe', 'sharpe', 'num'], ['Max Drawdown', 'max_drawdown', 'pct'], ['Volatility', 'volatility', 'pct'], ['Time in Market', 'exposure', 'pct']];
+function renderKpiSkeleton() {
+  $('#kpis').innerHTML = KPI_TILES.map(([lab]) => `<div class="kpi"><dt>${lab}</dt><dd><span class="v">—</span><span class="b">Benchmark —</span></dd></div>`).join('');
+}
+function renderResults(r) {
+  $('#results').classList.remove('is-empty'); $$('.chart-empty').forEach(el => el.remove());
+  const m = r.metrics, b = r.bench_metrics;
+  const benchName = r.benchmark === r.ticker ? `buy & hold ${r.ticker}` : r.benchmark;
+  $('#resTitle').textContent = `${r.strategyName} on ${r.ticker}`;
+  if (currentTab === 'backtest') document.title = `${r.strategyName} on ${r.ticker} · QuantLab`;
+  $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${fmt.num(r.elapsed / 1000, 2)} s`;
+  const chips = [`<span class="chip">${r.mode === 'signals' ? 'signals(data)' : 'on_bar(ctx)'}</span>`];
+  if (r.lookahead) chips.push(r.lookahead.violations.length ? '<span class="chip bad">Look-ahead detected</span>' : '<span class="chip ok">Look-ahead check passed</span>');
+  $('#resChips').innerHTML = chips.join('');
+
+  const notes = (r.notes || []).map(n => esc(n));
+  if (r.lookahead && r.lookahead.violations.length) {
+    const v = r.lookahead.violations[0];
+    notes.unshift(`<strong>Results not achievable.</strong> <code>signals(data)</code> uses future data: on ${fmt.date(v.date)} the weight was ${fmt.num(v.with_future)} with the full history but ${fmt.num(v.without_future)} with data up to that day (${r.lookahead.violations.length} of ${r.lookahead.checked} checks failed). Only use <code>data.close[:i + 1]</code> for weight <code>i</code>.`);
+  }
+  if (m.orders_clipped) notes.push(`<strong>${fmt.int(m.orders_clipped)} share orders were reduced</strong> to fit your cash, leverage limit, or the no-shorting rule.`);
+  if (m.n_fills === 0) notes.push('<strong>Your strategy never traded.</strong> Check the warm-up period of your indicators & loosen the entry condition.');
+  const inst = instruments.get(r.ticker); if (inst && inst.synthetic) notes.push('<strong>Synthetic data.</strong> This instrument is generated for demos, not real prices.');
+  $('#notes').innerHTML = notes.map(n => `<li>${n}</li>`).join(''); $('#notes').hidden = !notes.length;
+
+  $('#kpis').innerHTML = KPI_TILES.map(([lab, k, f]) => {
+    const v = m[k], bv = k === 'exposure' ? 1 : b[k];
+    const cls = (k === 'volatility' || k === 'exposure') ? '' : sign(v);
+    const sub = k === 'exposure' && m.n_trades != null ? `${fmt.int(m.n_trades)} closed trades` : `Benchmark ${fmtMetric(f, bv, k)}`;
+    return `<div class="kpi"><dt>${lab}</dt><dd><span class="v ${cls}">${fmtMetric(f, v, k)}</span><span class="b">${sub}</span></dd></div>`;
+  }).join('');
+
+  drawResultCharts(r); renderHeat(r); renderMetrics(r); renderTrades(r); toolContext();
+  $('#ddInfo').textContent = m.dd_trough ? `Worst ${fmt.pct(m.max_drawdown, 1)}, ${fmt.date(m.dd_peak)} to ${fmt.date(m.dd_trough)}, ${m.dd_recovery ? 'recovered ' + fmt.date(m.dd_recovery) : 'not yet recovered'}` : 'No drawdown';
+  $('#rollInfo').textContent = `${r.rolling.window}-day window, annualized`;
+  $('#logPanel').hidden = !r.logs; $('#logs').textContent = r.logs || '';
+}
+
+function drawResultCharts(r) {
+  if (!window.Chart) return;
+  const P = palette(); const d = r.dates;
+  const log = $('#eqScale [aria-pressed="true"]').dataset.scale === 'log';
+  kill('eq');
+  const eqOpts = baseOptions(d, P, v => fmt.money(v)); eqOpts.scales.y.ticks.callback = v => fmt.moneyAxis(v); eqOpts.scales.y.type = log ? 'logarithmic' : 'linear';
+  charts.eq = new Chart($('#chEquity'), { data: { datasets: [line('Strategy', r.equity, P.strat, { borderWidth: 2 }), line('Benchmark', r.bench_equity, P.bench, { borderWidth: 1.4, borderDash: [5, 3] })] }, options: eqOpts });
+  $('#eqLegend').innerHTML = legendHTML([[P.strat, 'Strategy'], [P.bench, r.benchmark === r.ticker ? 'Buy & hold (dashed)' : r.benchmark + ' (dashed)']]);
+  $('#chEquity').setAttribute('aria-label', `Equity curve: strategy ends at ${fmt.money(r.equity[r.equity.length - 1])}, benchmark at ${fmt.money(r.bench_equity[r.bench_equity.length - 1])}`);
+
+  kill('dd');
+  const ddOpts = baseOptions(d, P, v => fmt.pct(v, 0)); ddOpts.scales.y.max = 0;
+  charts.dd = new Chart($('#chDD'), { data: { datasets: [
+    line('Strategy', r.drawdown, P.loss, { fill: 'origin', backgroundColor: alpha(P.loss, 0.16), borderWidth: 1.2 }),
+    line('Benchmark', r.bench_drawdown, P.bench, { borderWidth: 1, borderDash: [4, 3] }),
+  ] }, options: ddOpts });
+
+  kill('px');
+  const buys = r.fills.filter(f => f.side === 'buy').map(f => ({ x: f.i, y: r.close[f.i] }));
+  const sells = r.fills.filter(f => f.side === 'sell').map(f => ({ x: f.i, y: r.close[f.i] }));
+  const many = r.fills.length > 400;
+  const pxOpts = baseOptions(d, P, v => fmt.price(v));
+  pxOpts.interaction = { mode: 'x', intersect: false };
+  pxOpts.scales.y1 = { position: 'right', min: 0, max: Math.max(1, ...r.exposure.map(Math.abs)) * 1.05, display: false, grid: { display: false } };
+  pxOpts.plugins.tooltip.callbacks.label = c => (c.dataset.label === 'Exposure' ? ` Exposure: ${fmt.pct(c.parsed.y, 0)}` : ` ${c.dataset.label}: ${fmt.price(c.parsed.y)}`);
+  charts.px = new Chart($('#chPrice'), { data: { datasets: [
+    line('Close', r.close, P.fg2, { borderWidth: 1.2 }),
+    { type: 'line', label: 'Exposure', data: xy(r.exposure.map(Math.abs)), yAxisID: 'y1', stepped: true, borderWidth: 0, pointRadius: 0, fill: 'origin', backgroundColor: alpha(P.strat, 0.10) },
+    { type: 'scatter', label: 'Buy', data: buys, pointStyle: 'triangle', pointRadius: many ? 2.5 : 5, backgroundColor: P.gain, borderColor: P.gain },
+    { type: 'scatter', label: 'Sell', data: sells, pointStyle: 'triangle', rotation: 180, pointRadius: many ? 2.5 : 5, backgroundColor: P.loss, borderColor: P.loss },
+  ] }, options: pxOpts });
+  $('#pxLegend').innerHTML = legendHTML([[P.fg2, 'Close'], [P.gain, '▲ Buy fill'], [P.loss, '▼ Sell fill'], [alpha(P.strat, 0.35), 'Exposure', 8]]);
+
+  kill('hist');
+  const e = r.hist.edges; const labels = e.slice(0, -1).map((v, i) => fmt.pct((v + e[i + 1]) / 2, 1));
+  charts.hist = new Chart($('#chHist'), { type: 'bar', data: { labels, datasets: [
+    { label: 'Strategy', data: r.hist.counts[0], backgroundColor: alpha(P.strat, 0.8), barPercentage: 1, categoryPercentage: 0.9 },
+    { label: 'Benchmark', data: r.hist.counts[1], backgroundColor: alpha(P.bench, 0.6), barPercentage: 1, categoryPercentage: 0.9 },
+  ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+    plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } },
+      tooltip: { backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel, callbacks: { label: c => ` ${c.dataset.label}: ${fmt.int(c.parsed.y)} days` } } },
+    scales: { x: { grid: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 7, maxRotation: 0 }, border: { color: P.border } },
+      y: { grid: { color: P.grid }, border: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 5 } } } } });
+
+  kill('roll');
+  charts.roll = new Chart($('#chRoll'), { data: { datasets: [line('Strategy', r.rolling.sharpe, P.strat, { borderWidth: 1.6 }), line('Benchmark', r.rolling.bench, P.bench, { borderWidth: 1.1, borderDash: [4, 3] })] }, options: baseOptions(d, P, v => fmt.num(v, 1)) });
+}
+
+function heatColor(v) { if (v == null) return 'transparent'; const P = palette(); return alpha(v >= 0 ? P.gain : P.loss, Math.min(1, Math.abs(v) / 0.08) * 0.5 + 0.06); }
+function renderHeat(r) {
+  const which = $('#heatWhich [aria-pressed="true"]').dataset.which; const rows = which === 'bench' ? r.bench_monthly : r.monthly;
+  const mon = Array.from({ length: 12 }, (_, i) => new Intl.DateTimeFormat(LOCALE, { month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(2020, i, 1))));
+  const cell = v => (v == null ? '' : NF('h1', { minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: 'exceptZero' }).format(v * 100));
+  let h = `<caption class="sr">Monthly returns in percent, ${which === 'bench' ? 'benchmark' : 'strategy'}</caption><thead><tr><th scope="col"><span class="sr">Year</span></th>` + mon.map(x => `<th scope="col">${x}</th>`).join('') + '<th scope="col">Year</th></tr></thead><tbody>';
+  for (const row of rows) h += `<tr><th scope="row">${row.year}</th>` + row.months.map(v => `<td style="background:${heatColor(v)}">${cell(v)}</td>`).join('') + `<td class="tot" style="background:${heatColor(row.total / 3)}">${cell(row.total)}</td></tr>`;
+  $('#heat').innerHTML = h + '</tbody>';
+}
+function renderMetrics(r) {
+  const showDesc = $('#showDesc').checked;
+  let h = `<thead><tr><th scope="col">Statistic</th><th scope="col" class="n">Strategy</th><th scope="col" class="n">Benchmark</th>${showDesc ? '<th scope="col">Definition</th>' : ''}</tr></thead><tbody>`;
+  let group = null;
+  for (const mm of METRICS) {
+    const v = r.metrics[mm.key], bv = r.bench_metrics[mm.key];
+    if (v === undefined && bv === undefined) continue;
+    if (mm.group !== group) { group = mm.group; h += `<tr class="group"><th colspan="${showDesc ? 4 : 3}" scope="colgroup">${esc(group)}</th></tr>`; }
+    h += `<tr><th scope="row">${esc(mm.label)}</th><td class="n">${fmtMetric(mm.fmt, v, mm.key)}</td><td class="n">${bv === undefined ? '' : fmtMetric(mm.fmt, bv, mm.key)}</td>${showDesc ? `<td class="desc">${esc(mm.desc)}</td>` : ''}</tr>`;
+  }
+  $('#metricsTable').innerHTML = h + '</tbody>';
+}
+function renderTrades(r) {
+  const t = r.trades; const max = 500;
+  $('#tradeInfo').textContent = `${fmt.int(t.filter(x => !x.open).length)} closed${t.some(x => x.open) ? ' + 1 open' : ''} · ${fmt.int(r.fills.length)} fills${t.length > max ? ` · showing the last ${max}` : ''}`;
+  if (!t.length) { $('#tradesTable').innerHTML = '<tbody><tr><td class="muted" style="white-space:normal">No trades. Your entry rule never fired; check indicator warm-up or loosen the condition.</td></tr></tbody>'; return; }
+  let h = '<thead><tr><th scope="col" class="n">#</th><th scope="col">Side</th><th scope="col">Entry</th><th scope="col">Exit</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Entry Price</th><th scope="col" class="n">Exit Price</th><th scope="col" class="n">Return</th><th scope="col" class="n">P&amp;L</th></tr></thead><tbody>';
+  for (let i = t.length - 1; i >= Math.max(0, t.length - max); i--) {
+    const x = t[i];
+    h += `<tr><td class="n">${i + 1}</td><td>${x.side}${x.open ? ' <span class="chip">open</span>' : ''}</td><td class="tnum">${fmt.date(x.entry_date)}</td><td class="tnum">${x.open ? '—' : fmt.date(x.exit_date)}</td><td class="n">${fmt.int(x.bars)}</td>` +
+      `<td class="n">${fmt.price(x.entry_price)}</td><td class="n">${x.open ? '—' : fmt.price(x.exit_price)}</td><td class="n ${sign(x.ret)}">${fmt.pct(x.ret, 2, true)}</td><td class="n ${sign(x.pnl)}">${fmt.money(x.pnl)}</td></tr>`;
+  }
+  $('#tradesTable').innerHTML = h + '</tbody>';
+}
+
+/* ------------------------------------------------------- market inputs -- */
+function fillInstrumentSelects(prefer) {
+  const list = sortedTickers();
+  const opt = t => { const r = instruments.get(t); return `<option value="${esc(t)}">${esc(t)}${r.synthetic ? ' (demo)' : ''} · ${esc(r.name || '')}</option>`; };
+  const inst = $('#instrument'), bench = $('#benchmark');
+  const cur = prefer || {}; const iv = cur.instrument || inst.value, bv = cur.benchmark !== undefined ? cur.benchmark : bench.value;
+  inst.innerHTML = list.map(opt).join('');
+  bench.innerHTML = '<option value="">Same instrument (buy & hold)</option>' + list.map(opt).join('');
+  const fallback = ['SPY', 'QQQ'].find(t => list.includes(t)) || list.find(t => !instruments.get(t).synthetic) || list[0] || '';
+  inst.value = list.includes(iv) ? iv : fallback; bench.value = list.includes(bv) ? bv : '';
+  updateDateBounds(); renderAnalyticsList();
+}
+function updateDateBounds() {
+  const r = instruments.get($('#instrument').value); if (!r) return;
+  for (const id of ['start', 'end', 'spDate']) { $('#' + id).min = r.start; $('#' + id).max = r.end; }
+  markRange();
+}
+function setRange(years) {
+  const r = instruments.get($('#instrument').value); if (!r) return;
+  $('#end').value = '';
+  if (!years) $('#start').value = '';
+  else { const d = toDate(r.end); d.setUTCFullYear(d.getUTCFullYear() - years); const s = d.toISOString().slice(0, 10); $('#start').value = s < r.start ? '' : s; }
+  setFieldError('start', null); setFieldError('end', null); markRange(); saveSettings();
+}
+function markRange() {
+  const r = instruments.get($('#instrument').value);
+  $$('#ranges button').forEach(b => b.setAttribute('aria-pressed', 'false'));
+  if (!r) return;
+  if (!$('#start').value && !$('#end').value) { $('#ranges [data-years="0"]').setAttribute('aria-pressed', 'true'); return; }
+  if ($('#end').value) return;
+  for (const y of [1, 3, 5]) { const d = toDate(r.end); d.setUTCFullYear(d.getUTCFullYear() - y); if (d.toISOString().slice(0, 10) === $('#start').value) $(`#ranges [data-years="${y}"]`).setAttribute('aria-pressed', 'true'); }
+}
+
+/* -------------------------------------------------------------- tools --- */
+function toolContext() {
+  const p = payloadBase(); const r = instruments.get(p.ticker);
+  const range = `${fmt.date(p.start || (r && r.start))} – ${fmt.date(p.end || (r && r.end))}`;
+  $('#toolCtx').innerHTML = `Using <b>${esc(currentSource().name)}</b> on <b translate="no">${esc(p.ticker || '—')}</b> (${esc(range)}) vs <b translate="no">${esc(p.benchmark || 'buy & hold')}</b>. Change these on the <a href="#backtest">Backtest tab</a>.`;
+}
+async function refreshParams() {
+  if (!py.ready) return;
+  try { await py.ready; const r = await py.call('inspect', { code: editor.value }); paramsCache = r.params; } catch (e) { paramsCache = {}; }
+  fillParamSelects();
+}
+function fillParamSelects() {
+  const keys = Object.entries(paramsCache || {}).filter(([, v]) => typeof v === 'number').map(([k]) => k);
+  const keep1 = $('#swP1').value, keep2 = $('#swP2').value;
+  $('#swP1').innerHTML = keys.length ? keys.map(k => `<option>${esc(k)}</option>`).join('') : '<option value="">No numeric PARAMS</option>';
+  $('#swP2').innerHTML = '<option value="">None</option>' + keys.map(k => `<option>${esc(k)}</option>`).join('');
+  if (keys.includes(keep1)) $('#swP1').value = keep1;
+  if (keys.includes(keep2) && keep2 !== $('#swP1').value) $('#swP2').value = keep2;
+  suggestValues('#swP1', '#swV1'); suggestValues('#swP2', '#swV2');
+}
+// Suggests a value range for a parameter, but never overwrites values you typed for the same parameter.
+function suggestValues(selId, inId) {
+  const k = $(selId).value; const el = $(inId);
+  if (!k) { if (!el.dataset.touched) el.value = ''; el.dataset.forKey = ''; updateSweepCount(); return; }
+  if (el.dataset.forKey === k && (el.value || el.dataset.touched)) { updateSweepCount(); return; }
+  if (el.dataset.forKey === '' && el.dataset.touched && el.value) { el.dataset.forKey = k; updateSweepCount(); return; }
+  el.dataset.touched = '';
+  const v = paramsCache[k]; let s;
+  if (Number.isInteger(v)) { const lo = Math.max(1, Math.round(v / 2)), hi = Math.max(lo + 1, Math.round(v * 2)); const step = Math.max(1, Math.round((hi - lo) / 8)); s = `${lo}:${hi}:${step}`; }
+  else s = [0.5, 0.75, 1, 1.25, 1.5].map(f => +(v * f).toPrecision(3)).join(', ');
+  el.value = s; el.dataset.forKey = k; updateSweepCount();
+}
+function parseValues(s) {
+  s = (s || '').trim(); if (!s) return [];
+  const m = s.match(/^(-?[\d.]+)\s*:\s*(-?[\d.]+)\s*(?::\s*([\d.]+))?$/);
+  if (m) {
+    const a = +m[1], b = +m[2], st = m[3] ? +m[3] : 1; if (!(st > 0) || !isFinite(a) || !isFinite(b)) return null;
+    const dec = Math.max((m[3] || '').split('.')[1]?.length || 0, (m[1].split('.')[1] || '').length);
+    const out = []; for (let x = a; x <= b + 1e-9 && out.length < 1000; x += st) out.push(+x.toFixed(dec)); return out;
+  }
+  const parts = s.split(/[,;\s]+/).filter(Boolean).map(Number);
+  return parts.every(isFinite) ? parts : null;
+}
+function updateSweepCount() {
+  const a = $('#swP1').value ? (parseValues($('#swV1').value) || []).length : 0;
+  const b = $('#swP2').value ? Math.max(1, (parseValues($('#swV2').value) || []).length) : 1;
+  const n = a * b; $('#swCount').textContent = n ? `${fmt.int(n)} run${n === 1 ? '' : 's'}` : '';
+}
+let sweepCancel = false, sweepRunning = false;
+async function runSweep(ev) {
+  ev.preventDefault();
+  const p1 = $('#swP1').value, p2 = $('#swP2').value;
+  const v1 = parseValues($('#swV1').value), v2 = p2 ? parseValues($('#swV2').value) : [null];
+  const ok = validate([
+    ['swV1', () => (!p1 ? 'Add a number to PARAMS in your strategy to sweep it.' : !v1 || !v1.length ? 'Enter values like 20:100:10 or 5, 10, 20.' : null)],
+    ['swV2', () => (!p2 ? null : p2 === p1 ? 'Pick a different parameter than Parameter 1.' : !v2 || !v2.length ? 'Enter values like 150, 200, 250.' : (v1 || []).length * v2.length > 400 ? `That’s ${fmt.int(v1.length * v2.length)} runs. Use fewer values (max 400).` : null)],
+  ]);
+  if (!ok) return;
+  if (v1.length > 400) { setFieldError('swV1', `That’s ${fmt.int(v1.length)} runs. Use a larger step (max 400).`); $('#swV1').focus(); return; }
+  const combos = []; for (const a of v1) for (const b of v2) combos.push([a, b]);
+  const metric = $('#swMetric').value, split = $('#swSplit').value ? parseFloat($('#swSplit').value) : null;
+  const base = payloadBase(); const out = $('#swOut'); const btn = $('#swRun'); const bar = $('#swBar');
+  sweepCancel = false; sweepRunning = true; loadingOn(btn); $('#swStop').hidden = false; bar.hidden = false; bar.firstElementChild.style.transform = 'scaleX(0)';
+  busy(true, 'Sweeping parameters…'); const results = [];
+  try {
+    await py.ensure([base.ticker, base.benchmark]);
+    for (let i = 0; i < combos.length && !sweepCancel; i++) {
+      const [a, b] = combos[i]; const params = { [p1]: a }; if (p2) params[p2] = b;
+      results.push({ a, b, r: await py.call('metrics', { ...base, params, split }) });
+      const f = (i + 1) / combos.length; bar.firstElementChild.style.transform = `scaleX(${f})`; bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
+      $('#swCount').textContent = `${fmt.int(i + 1)} of ${fmt.int(combos.length)}`;
+    }
+    renderSweep({ p1, p2, v1, v2, metric, split, results, cancelled: sweepCancel });
+  } catch (e) { out.innerHTML = `<p class="ferr">${esc(e.info ? e.info.message : e.message)} Fix the strategy on the Backtest tab, then run the sweep again.</p>`; }
+  finally { sweepRunning = false; busy(false); $('#swStop').hidden = true; bar.hidden = true; updateSweepCount(); await loadingOff(btn); }
+}
+function renderSweep(s) {
+  const mm = METRICS.find(x => x.key === s.metric); const f = v => fmtMetric(mm.fmt, v, mm.key);
+  const score = x => (s.split ? x.r.in_sample : x.r.full)[s.metric];
+  const valid = s.results.filter(x => score(x) != null);
+  const best = valid.reduce((acc, x) => (acc == null || score(x) > score(acc) ? x : acc), null);
+  const out = $('#swOut'); out.innerHTML = '';
+  const head = document.createElement('div'); head.className = 'stack'; head.style.gap = '6px';
+  const bestTxt = best ? `${s.p1} = ${best.a}${s.p2 ? `, ${s.p2} = ${best.b}` : ''}` : '—';
+  head.innerHTML = `<div class="row"><span>Best ${s.split ? 'in-sample ' : ''}${esc(mm.label)}: <b translate="no">${esc(bestTxt)}</b> → ${f(best && score(best))}${s.split && best ? `; out-of-sample ${f(best.r.out_of_sample[s.metric])}` : ''}</span><span class="spacer"></span>` +
+    (best ? '<button class="btn small" id="swApply" type="button">Use Best Values</button>' : '') + '</div>' +
+    (s.split && best ? `<p class="help">Tuned on data up to ${fmt.date(best.r.split_date)}. The out-of-sample number is the honest estimate; expect it to be worse.</p>` : '') +
+    (s.cancelled ? '<p class="help">Cancelled early; showing completed runs.</p>' : '');
+  out.appendChild(head);
+  if (best) $('#swApply').onclick = () => applyParams(s.p2 ? { [s.p1]: best.a, [s.p2]: best.b } : { [s.p1]: best.a });
+  const P = palette();
+  if (!s.p2) {
+    const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = '<canvas role="img"></canvas>'; out.appendChild(box);
+    box.firstChild.setAttribute('aria-label', `${mm.label} for each value of ${s.p1}`); kill('sweep');
+    const ds = [{ label: s.split ? 'In-sample' : 'Whole period', data: s.results.map(x => ({ x: x.a, y: score(x) })), borderColor: P.strat, backgroundColor: P.strat, pointRadius: 3, borderWidth: 2 }];
+    if (s.split) ds.push({ label: 'Out-of-sample', data: s.results.map(x => ({ x: x.a, y: x.r.out_of_sample[s.metric] })), borderColor: P.bench, backgroundColor: P.bench, pointRadius: 3, pointStyle: 'rectRot', borderWidth: 1.5, borderDash: [5, 4] });
+    charts.sweep = new Chart(box.firstChild, { type: 'line', data: { datasets: ds }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } }, tooltip: { backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel, callbacks: { title: it => `${s.p1} = ${it[0].parsed.x}`, label: c => ` ${c.dataset.label}: ${f(c.parsed.y)}` } } },
+      scales: { x: { type: 'linear', title: { display: true, text: s.p1, color: P.fg3 }, grid: { color: P.grid }, ticks: { color: P.fg3 } }, y: { grid: { color: P.grid }, ticks: { color: P.fg3, callback: v => f(v) } } } } });
+    const tbl = document.createElement('div'); tbl.className = 'tablebox'; tbl.tabIndex = 0; tbl.setAttribute('aria-label', 'Sweep results');
+    let h = `<table><thead><tr><th scope="col" class="n" translate="no">${esc(s.p1)}</th><th scope="col" class="n">${s.split ? 'In-Sample' : 'Score'}</th>${s.split ? '<th scope="col" class="n">Out-of-Sample</th>' : ''}<th scope="col" class="n">CAGR</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Trades</th></tr></thead><tbody>`;
+    for (const x of s.results) h += `<tr class="${x === best ? 'best' : ''}"><td class="n">${x.a}${x === best ? ' <span class="sr">(best)</span>' : ''}</td><td class="n">${f(score(x))}</td>${s.split ? `<td class="n">${f(x.r.out_of_sample[s.metric])}</td>` : ''}<td class="n">${fmt.pct(x.r.full.cagr, 2, true)}</td><td class="n">${fmt.pct(x.r.full.max_drawdown)}</td><td class="n">${fmt.int(x.r.full.n_trades)}</td></tr>`;
+    tbl.innerHTML = h + '</tbody></table>'; out.appendChild(tbl);
+  } else {
+    const vals = valid.map(score); const lo = Math.min(...vals), hi = Math.max(...vals);
+    const cell = x => { if (!x || score(x) == null) return '<td>—</td>'; const t = hi > lo ? (score(x) - lo) / (hi - lo) : 0.5; return `<td class="${x === best ? 'best' : ''}" style="background:${alpha(P.strat, 0.06 + 0.55 * t)}" title="${s.split ? 'Out-of-sample ' + f(x.r.out_of_sample[s.metric]) : ''}">${f(score(x))}${x === best ? '<span class="sr"> (best)</span>' : ''}</td>`; };
+    let h = `<div class="scroll"><table class="heat"><caption class="sr">${esc(mm.label)} by ${esc(s.p1)} (rows) & ${esc(s.p2)} (columns)</caption><thead><tr><th scope="col" translate="no">${esc(s.p1)} ↓ ${esc(s.p2)} →</th>${s.v2.map(b => `<th scope="col">${b}</th>`).join('')}</tr></thead><tbody>`;
+    for (const a of s.v1) h += `<tr><th scope="row">${a}</th>${s.v2.map(b => cell(s.results.find(x => x.a === a && x.b === b))).join('')}</tr>`;
+    const box = document.createElement('div'); box.innerHTML = h + `</tbody></table></div><p class="help">Cells show ${esc(mm.label)}${s.split ? ' on the in-sample part; hover a cell for its out-of-sample value' : ''}. The best cell is outlined. A broad region of good values is more trustworthy than one bright cell.</p>`;
+    out.appendChild(box);
+  }
+}
+function applyParams(values) {
+  let code = editor.value; const missing = [];
+  for (const [k, v] of Object.entries(values)) {
+    const re = new RegExp(`(["']${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\s*:\\s*)([^,}\\n]+)`);
+    if (re.test(code)) code = code.replace(re, `$1${v}`); else missing.push(k);
+  }
+  editor.value = code; onCodeChanged(); location.hash = '#backtest';
+  toast(missing.length ? `Couldn’t find ${missing.join(', ')} in PARAMS. Edit them by hand.` : 'Updated PARAMS. Run the backtest to see the full result.');
+}
+
+async function runMC(ev) {
+  ev.preventDefault();
+  if (!validate([['mcPaths', between(50, 5000, '', true, 500)], ['mcBlock', between(1, 250, 'days', true, 20)], ['mcSeed', between(0, 1e9, '', true, 7)]])) return;
+  const base = payloadBase(); const out = $('#mcOut'); const btn = $('#mcRun');
+  loadingOn(btn); busy(true, 'Simulating…');
+  try {
+    await py.ensure([base.ticker, base.benchmark]);
+    const r = await py.call('montecarlo', { ...base, paths: parseNumber($('#mcPaths').value), block: parseNumber($('#mcBlock').value), seed: parseNumber($('#mcSeed').value) });
+    out.innerHTML = '';
+    const box = document.createElement('div'); box.className = 'chart'; box.innerHTML = '<canvas role="img" aria-label="Fan chart of resampled equity paths"></canvas>'; out.appendChild(box);
+    const P = palette(); const cash = readConfig().cash; const sc = arr => arr.map(v => v * cash); kill('mc');
+    const o = baseOptions(r.dates, P, v => fmt.money(v)); o.scales.y.ticks.callback = v => fmt.moneyAxis(v);
+    o.plugins.legend = { display: true, align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10, filter: it => !it.text.startsWith('_') } };
+    o.plugins.tooltip.filter = c => !c.dataset.label.startsWith('_');
+    charts.mc = new Chart(box.firstChild, { data: { datasets: [
+      line('_p5', sc(r.fan['5']), 'transparent', { borderWidth: 0 }),
+      line('5th–95th percentile', sc(r.fan['95']), 'transparent', { borderWidth: 0, fill: 0, backgroundColor: alpha(P.strat, 0.12) }),
+      line('_p25', sc(r.fan['25']), 'transparent', { borderWidth: 0 }),
+      line('25th–75th percentile', sc(r.fan['75']), 'transparent', { borderWidth: 0, fill: 2, backgroundColor: alpha(P.strat, 0.24) }),
+      line('Median path', sc(r.fan['50']), P.strat, { borderWidth: 1.5, borderDash: [5, 4] }),
+      line('Your backtest', sc(r.actual), P.fg, { borderWidth: 1.8 }),
+    ] }, options: o });
+    const row = (lab, obj) => `<tr><th scope="row">${lab}</th>${['5', '25', '50', '75', '95'].map(q => `<td class="n">${fmt.pct(obj[q], 2, lab !== 'Max drawdown')}</td>`).join('')}</tr>`;
+    const t = document.createElement('div'); t.className = 'scroll';
+    t.innerHTML = `<table class="metrics"><caption class="sr">Percentiles of simulated outcomes</caption><thead><tr><th scope="col">Outcome</th><th scope="col" class="n">5th</th><th scope="col" class="n">25th</th><th scope="col" class="n">Median</th><th scope="col" class="n">75th</th><th scope="col" class="n">95th</th></tr></thead><tbody>` +
+      row('Total return', r.final) + row('CAGR', r.cagr) + row('Max drawdown', r.max_drawdown) + '</tbody></table>';
+    out.appendChild(t);
+    const p = document.createElement('p'); p.style.margin = '0';
+    p.innerHTML = `Your backtest: total return <b>${fmt.pct(r.actual_final, 2, true)}</b>, max drawdown <b>${fmt.pct(r.actual_mdd)}</b>. Across ${fmt.int(r.n_paths)} resampled paths (blocks of ${fmt.int(r.block)}&nbsp;days), <b>${fmt.pct(r.prob_loss, 1)}</b> lost money & <b>${fmt.pct(r.prob_worse_dd, 1)}</b> had a deeper drawdown than yours.`;
+    out.appendChild(p);
+  } catch (e) { out.innerHTML = `<p class="ferr">${esc(e.info ? e.info.message : e.message)} Fix the strategy on the Backtest tab, then try again.</p>`; }
+  finally { busy(false); await loadingOff(btn); }
+}
+
+async function runSplit(ev) {
+  ev.preventDefault();
+  const r0 = instruments.get($('#instrument').value);
+  if (!validate([['spPct', between(10, 90, 'percent')], ['spDate', raw => (raw && r0 && (raw <= r0.start || raw >= r0.end) ? `Pick a date between ${fmt.date(r0.start)} & ${fmt.date(r0.end)}.` : null)]])) return;
+  const base = payloadBase(); const out = $('#spOut'); const btn = $('#spRun');
+  loadingOn(btn); busy(true, 'Splitting…');
+  try {
+    await py.ensure([base.ticker, base.benchmark]);
+    const r = await py.call('split', { ...base, split: parseNumber($('#spPct').value) / 100, split_date: $('#spDate').value || null });
+    out.innerHTML = '';
+    const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = `<canvas role="img" aria-label="Equity with the split on ${esc(fmt.date(r.split_date))}"></canvas>`; out.appendChild(box);
+    const P = palette(); kill('split');
+    const o = baseOptions(r.dates, P, v => fmt.money(v)); o.scales.y.ticks.callback = v => fmt.moneyAxis(v);
+    o.plugins.splitLine = { index: r.dates.indexOf(r.split_date), color: P.fg2, label: 'Split · ' + fmt.date(r.split_date) };
+    charts.split = new Chart(box.firstChild, { data: { datasets: [line('Strategy', r.equity, P.strat, { borderWidth: 2 }), line('Benchmark', r.bench_equity, P.bench, { borderDash: [5, 3] })] }, options: o, plugins: [splitLinePlugin] });
+    const keys = ['total_return', 'cagr', 'volatility', 'sharpe', 'sortino', 'max_drawdown', 'calmar', 'win_rate', 'n_trades', 'exposure', 'beta', 'alpha'];
+    const I = r.in_sample, O = r.out_of_sample;
+    let h = `<div class="scroll"><table class="metrics"><caption class="sr">Statistics before & after the split</caption><thead><tr><th scope="col">Statistic</th><th scope="col" class="n">In-Sample<br><span class="muted">${fmt.date(I.start)} – ${fmt.date(I.end)}</span></th><th scope="col" class="n">Benchmark</th><th scope="col" class="n">Out-of-Sample<br><span class="muted">${fmt.date(O.start)} – ${fmt.date(O.end)}</span></th><th scope="col" class="n">Benchmark</th></tr></thead><tbody>`;
+    for (const key of keys) {
+      const mm = METRICS.find(x => x.key === key); if (!mm) continue;
+      const c = (o2, k) => (o2[k] === undefined ? '' : fmtMetric(mm.fmt, o2[k], k));
+      h += `<tr><th scope="row">${esc(mm.label)}</th><td class="n">${c(I.metrics, key)}</td><td class="n">${c(I.bench, key)}</td><td class="n">${c(O.metrics, key)}</td><td class="n">${c(O.bench, key)}</td></tr>`;
+    }
+    const t = document.createElement('div'); t.innerHTML = h + '</tbody></table></div>'; out.appendChild(t);
+  } catch (e) { out.innerHTML = `<p class="ferr">${esc(e.info ? e.info.message : e.message)} Fix the strategy on the Backtest tab, then try again.</p>`; }
+  finally { busy(false); await loadingOff(btn); }
+}
+
+function renderAnalyticsList() {
+  const keep = new Set($$('#anList input:checked').map(i => i.value)); const first = !$('#anList').childElementCount;
+  $('#anList').innerHTML = sortedTickers().map(t => `<label class="check"><input type="checkbox" name="an-ticker" value="${esc(t)}" ${first || keep.has(t) ? 'checked' : ''}> ${esc(t)}</label>`).join('');
+}
+async function runAnalytics(ev) {
+  ev.preventDefault();
+  const tickers = $$('#anList input:checked').map(i => i.value); const out = $('#anOut');
+  if (!tickers.length) { const e = $('#anList-err'); e.textContent = 'Select at least one instrument.'; e.hidden = false; const f = $('#anList input'); if (f) f.focus(); return; }
+  $('#anList-err').hidden = true;
+  const btn = $('#anRun'); loadingOn(btn); busy(true, 'Analyzing…');
+  try {
+    await py.ensure(tickers);
+    const r = await py.call('analytics', { tickers, start: $('#anStart').value || null, end: $('#anEnd').value || null, rf: readConfig().risk_free });
+    out.innerHTML = '';
+    let h = '<div class="scroll"><table class="metrics"><caption class="sr">Buy-and-hold statistics</caption><thead><tr><th scope="col">Ticker</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Last</th><th scope="col" class="n">Total</th><th scope="col" class="n">CAGR</th><th scope="col" class="n">Volatility</th><th scope="col" class="n">Sharpe</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Worst Day</th><th scope="col" class="n">Skew</th></tr></thead><tbody>';
+    for (const x of r.rows) h += `<tr><th scope="row" translate="no"><b>${esc(x.ticker)}</b></th><td class="tnum">${fmt.date(x.start)}</td><td class="tnum">${fmt.date(x.end)}</td><td class="n">${fmt.price(x.last)}</td><td class="n ${sign(x.total_return)}">${fmt.pct(x.total_return, 1, true)}</td><td class="n ${sign(x.cagr)}">${fmt.pct(x.cagr, 2, true)}</td><td class="n">${fmt.pct(x.volatility, 1)}</td><td class="n">${fmt.num(x.sharpe)}</td><td class="n">${fmt.pct(x.max_drawdown, 1)}</td><td class="n">${fmt.pct(x.worst_day, 1)}</td><td class="n">${fmt.num(x.skew)}</td></tr>`;
+    const t1 = document.createElement('div'); t1.innerHTML = h + '</tbody></table></div>'; out.appendChild(t1);
+    if (r.matrix.length > 1) {
+      const P = palette(); const col = v => (v == null ? 'transparent' : alpha(v >= 0 ? P.strat : P.bench, 0.06 + 0.6 * Math.abs(v)));
+      let c = `<h3>Correlation of Daily Returns</h3><p class="help">${fmt.int(r.common_bars)} shared days, ${fmt.date(r.common_start)} – ${fmt.date(r.common_end)}. Blue = move together, orange = move opposite.</p><div class="scroll"><table class="heat" translate="no"><caption class="sr">Correlation matrix</caption><thead><tr><th scope="col"><span class="sr">Ticker</span></th>${r.tickers.map(t => `<th scope="col">${esc(t)}</th>`).join('')}</tr></thead><tbody>`;
+      r.matrix.forEach((row, i) => { c += `<tr><th scope="row">${esc(r.tickers[i])}</th>${row.map(v => `<td style="background:${col(v)}">${v == null ? '' : NF('c2', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)}</td>`).join('')}</tr>`; });
+      const t2 = document.createElement('div'); t2.className = 'stack'; t2.style.gap = '6px'; t2.innerHTML = c + '</tbody></table></div>'; out.appendChild(t2);
+      const lbl = document.createElement('h3'); lbl.textContent = 'Growth of 100 on Shared Dates (Log Scale)'; out.appendChild(lbl);
+      const box = document.createElement('div'); box.className = 'chart'; box.innerHTML = '<canvas role="img" aria-label="Growth of 100 for each instrument"></canvas>'; out.appendChild(box);
+      const colors = ['#0062D1', '#C46F00', '#0A7A50', '#C93A1E', '#7A3DC2', '#2B9EB3', '#B5487A', '#6B7A00', '#4D4D4D', '#E07B39', '#3A6FB0', '#8C5A2B'];
+      kill('an'); const o = baseOptions(r.rebased_dates, P, v => fmt.num(v, 0));
+      o.plugins.legend = { display: true, align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } }; o.scales.y.type = 'logarithmic';
+      charts.an = new Chart(box.firstChild, { data: { datasets: r.tickers.map((t, i) => line(t, r.rebased[t], colors[i % colors.length], { borderWidth: 1.4, borderDash: i >= colors.length ? [4, 3] : [] })) }, options: o });
+    }
+  } catch (e) { out.innerHTML = `<p class="ferr">${esc(e.info ? e.info.message : e.message)} Try fewer instruments or a different date range.</p>`; }
+  finally { busy(false); await loadingOff(btn); }
+}
+
+/* --------------------------------------------------------------- data --- */
+const pendingFiles = [];
+async function handleFiles(files) {
+  let added = 0;
+  for (const f of files) {
+    if (!/\.csv$/i.test(f.name) && f.type !== 'text/csv') { toast(`${f.name} isn’t a CSV file. Export the Nasdaq download as .csv & try again.`); continue; }
+    try {
+      const data = parseCSV(await f.text()); const t = tickerFromFilename(f.name);
+      if (t) { await saveUpload(t, guessName(t), data, f.name, true); added++; }
+      else pendingFiles.push({ file: f.name, data, id: Math.random().toString(36).slice(2) });
+    } catch (e) { toast(`${f.name}: ${e.message}`); }
+  }
+  if (added) toast(`Added ${fmt.int(added)} instrument${added === 1 ? '' : 's'}.`);
+  renderPending();
+}
+function guessName(t) { const r = RECOMMENDED.find(x => x[0] === t); return r ? r[1] : t; }
+function renderPending() {
+  $('#pending').innerHTML = pendingFiles.map(p => {
+    const d = p.data;
+    return `<form data-id="${p.id}" novalidate aria-label="Name ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">${fmt.int(d.dates.length)} days · ${fmt.date(d.dates[0])} – ${fmt.date(d.dates[d.dates.length - 1])} · last close ${fmt.price(d.close[d.close.length - 1])}</span></div>` +
+      `<div class="field"><label for="tk-${p.id}">Ticker</label><input type="text" id="tk-${p.id}" name="ticker" placeholder="SPY…" maxlength="15" autocomplete="off" spellcheck="false" autocapitalize="characters" translate="no" aria-describedby="tk-${p.id}-err"><p class="ferr" id="tk-${p.id}-err" hidden></p></div>` +
+      `<div class="field"><label for="nm-${p.id}">Name (Optional)</label><input type="text" id="nm-${p.id}" name="instrument-name" placeholder="S&amp;P 500 ETF…" maxlength="60" autocomplete="off"></div>` +
+      `<button class="btn primary small" type="submit">Add Instrument</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
+  }).join('');
+  const first = $('#pending input'); if (first && matchMedia('(pointer: fine)').matches) first.focus();
+}
+async function saveUpload(ticker, name, data, filename, quiet) {
+  const rec = { ticker, name: name || ticker, source: 'upload', synthetic: false, data, filename };
+  addInstrument(rec); const ok = await idb.put(rec);
+  fillInstrumentSelects(); renderInstTable(); renderDownloadList();
+  if (!ok) toast(`Added ${ticker}, but this browser can’t store it. It will be gone after a reload.`);
+  else if (!quiet) toast(`Added ${ticker}.`);
+}
+function renderInstTable() {
+  const list = sortedTickers();
+  $('#instCount').textContent = `${fmt.int(list.length)} instrument${list.length === 1 ? '' : 's'}`;
+  if (!list.length) { $('#instTable').innerHTML = '<tbody><tr><td class="muted">No instruments yet. Drop a CSV file above to add one.</td></tr></tbody>'; return; }
+  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Days</th><th scope="col" class="n">Last Close</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
+  for (const t of list) {
+    const r = instruments.get(t);
+    const src = r.synthetic ? '<span class="chip">Synthetic demo</span>' : r.source === 'upload' ? '<span class="chip">Your file</span>' : '<span class="chip">Bundled</span>';
+    h += `<tr><th scope="row" translate="no">${esc(t)}</th><td>${esc(r.name || '')}</td><td>${src}</td><td class="tnum">${fmt.date(r.start)}</td><td class="tnum">${fmt.date(r.end)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.price(r.last)}</td>` +
+      `<td>${r.source === 'upload' ? `<button class="btn small danger" type="button" data-remove="${esc(t)}" aria-label="Remove ${esc(t)}">Remove</button>` : ''}</td></tr>`;
+  }
+  $('#instTable').innerHTML = h + '</tbody>';
+}
+function renderDownloadList() {
+  $('#dlList').innerHTML = RECOMMENDED.map(([t, n, kind]) => `<li><a href="https://www.nasdaq.com/market-activity/${kind}/${t.toLowerCase()}/historical" target="_blank" rel="noopener"><b>${t}</b></a> <span class="muted" translate="yes">${esc(n)}</span>${instruments.has(t) ? ' <span class="chip ok">Loaded</span>' : ''}</li>`).join('');
+}
+
+/* ---------------------------------------------------------------- tabs -- */
+const TAB_TITLES = { backtest: 'Backtest', tools: 'Research Tools', data: 'Data' };
+let currentTab = null;
+function route() {
+  const h = location.hash.slice(1);
+  if (TOOL_SECTIONS.includes(h)) { showTab('tools'); requestAnimationFrame(() => { const el = document.getElementById(h); if (el) el.scrollIntoView(); }); return; }
+  if (h === 'content') { $('#content').focus(); return; }
+  if (TAB_TITLES[h]) showTab(h);
+  else if (!currentTab) showTab(store.get('tab', 'backtest'));
+}
+function showTab(name) {
+  if (!TAB_TITLES[name]) name = 'backtest';
+  const changed = currentTab && currentTab !== name; currentTab = name;
+  for (const v of Object.keys(TAB_TITLES)) $('#view-' + v).hidden = v !== name;
+  $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); }
+  if (name === 'data') { renderInstTable(); renderDownloadList(); }
+  document.title = name === 'backtest' && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
+  store.set('tab', name);
+  if (changed) { const h1 = $(`#view-${name} h1`); if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } }
+}
+
+/* --------------------------------------------------------------- wiring -- */
+function setThemeColor() {
+  let m = document.head.querySelector('meta[name="theme-color"]');
+  if (!m) { m = document.createElement('meta'); m.name = 'theme-color'; document.head.appendChild(m); }
+  m.content = cssVar('--panel');
+}
+function wire() {
+  window.addEventListener('hashchange', route);
+  $('#kbdRun').innerHTML = IS_MAC ? '<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>Return</kbd>' : '<kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>Enter</kbd>';
+  $('#kbdComment').innerHTML = IS_MAC ? '<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>/</kbd>' : '<kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>/</kbd>';
+  $('#runKbd').textContent = IS_MAC ? '⌘ ↵' : 'Ctrl ↵';
+  $('#runBtn').onclick = runBacktest;
+  $('#marketForm').addEventListener('submit', e => { e.preventDefault(); runBacktest(); });
+  $('#settingsForm').addEventListener('submit', e => { e.preventDefault(); saveSettings(); runBacktest(); });
+  $('#settingsBox').addEventListener('toggle', () => url.write());
+  $('#stopBtn').onclick = async () => { sweepCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'mcRun', 'spRun', 'anRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
+  $('#template').onchange = loadSelectedTemplate;
+  $('#resetBtn').onclick = loadSelectedTemplate;
+  $('#errReset').onclick = () => { loadSelectedTemplate(); editor.ta.focus(); };
+  $('#saveBtn').onclick = () => ($('#saveForm').hidden ? openSave() : closeSave());
+  $('#saveForm').addEventListener('submit', doSave);
+  $('#saveCancel').onclick = closeSave;
+  $('#saveName').addEventListener('keydown', e => { if (e.key === 'Escape') closeSave(); });
+  $('#delBtn').onclick = doDelete;
+  $('#instrument').onchange = () => { updateDateBounds(); saveSettings(); runBacktest(); };
+  $('#benchmark').onchange = () => { saveSettings(); runBacktest(); };
+  ['start', 'end'].forEach(id => $('#' + id).addEventListener('change', () => { setFieldError(id, null); markRange(); saveSettings(); }));
+  $$('#ranges button').forEach(b => { b.onclick = () => { setRange(+b.dataset.years); runBacktest(); }; });
+  $$('#settingsForm input, #settingsForm select').forEach(el => el.addEventListener('change', () => { if (el.type === 'text') validate([CFG_RULES.find(r => r[0] === el.id)].filter(Boolean)) && saveSettings(); else saveSettings(); }));
+  $$('#eqScale button').forEach(b => { b.onclick = () => { $$('#eqScale button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); if (lastRun) drawResultCharts(lastRun.result); }; });
+  $$('#heatWhich button').forEach(b => { b.onclick = () => { $$('#heatWhich button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); if (lastRun) renderHeat(lastRun.result); }; });
+  $('#showDesc').onchange = () => { if (lastRun) renderMetrics(lastRun.result); };
+
+  $('#swP1').onchange = () => { $('#swV1').dataset.touched = ''; suggestValues('#swP1', '#swV1'); };
+  $('#swP2').onchange = () => { $('#swV2').dataset.touched = ''; suggestValues('#swP2', '#swV2'); };
+  $('#swV1').oninput = () => { $('#swV1').dataset.touched = '1'; setFieldError('swV1', null); updateSweepCount(); };
+  $('#swV2').oninput = () => { $('#swV2').dataset.touched = '1'; setFieldError('swV2', null); updateSweepCount(); };
+  $('#sweepForm').addEventListener('submit', runSweep);
+  $('#swStop').onclick = () => { sweepCancel = true; };
+  $('#mcForm').addEventListener('submit', runMC);
+  $('#splitForm').addEventListener('submit', runSplit);
+  $('#anForm').addEventListener('submit', runAnalytics);
+  $('#anAll').onclick = () => { $$('#anList input').forEach(i => { i.checked = true; }); $('#anList-err').hidden = true; };
+  $('#anNone').onclick = () => $$('#anList input').forEach(i => { i.checked = false; });
+
+  const drop = $('#drop'); let depth = 0;
+  drop.addEventListener('dragenter', e => { e.preventDefault(); depth++; drop.classList.add('over', 'dragging'); });
+  drop.addEventListener('dragover', e => e.preventDefault());
+  drop.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) drop.classList.remove('over', 'dragging'); });
+  drop.addEventListener('drop', e => { e.preventDefault(); depth = 0; drop.classList.remove('over', 'dragging'); handleFiles([...e.dataTransfer.files]); });
+  window.addEventListener('dragover', e => e.preventDefault());
+  window.addEventListener('drop', e => { e.preventDefault(); if (!(e.target.closest && e.target.closest('#drop')) && e.dataTransfer.files.length) { location.hash = '#data'; handleFiles([...e.dataTransfer.files]); } });
+  $('#fileInput').onchange = e => { handleFiles([...e.target.files]); e.target.value = ''; };
+  $('#pending').addEventListener('submit', async e => {
+    e.preventDefault(); const form = e.target; const p = pendingFiles.find(x => x.id === form.dataset.id); if (!p) return;
+    const t = $('#tk-' + p.id).value.trim().toUpperCase();
+    if (!/^[A-Z0-9.^=\-]{1,15}$/.test(t)) { setFieldError('tk-' + p.id, 'Enter a ticker such as SPY (letters, digits, “.” or “-”).'); $('#tk-' + p.id).focus(); return; }
+    pendingFiles.splice(pendingFiles.indexOf(p), 1);
+    await saveUpload(t, $('#nm-' + p.id).value.trim() || guessName(t), p.data, p.file);
+    renderPending();
+  });
+  $('#pending').addEventListener('click', e => {
+    const btn = e.target.closest('button[data-act="skip"]'); if (!btn) return;
+    const p = pendingFiles.find(x => x.id === btn.closest('form').dataset.id); if (p) { pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); toast(`Skipped ${p.file}.`); }
+  });
+  $('#instTable').addEventListener('click', e => {
+    const b = e.target.closest('button[data-remove]'); if (!b) return; const t = b.dataset.remove;
+    armConfirm(b, 'Confirm Remove', async () => {
+      const rec = instruments.get(t); instruments.delete(t); py.forget(t); await idb.del(t); await loadBundled();
+      fillInstrumentSelects(); renderInstTable(); renderDownloadList();
+      toast(`Removed ${t}.`, { label: 'Undo', run: () => saveUpload(rec.ticker, rec.name, rec.data, rec.filename) });
+    });
+  });
+  window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning) { e.preventDefault(); e.returnValue = ''; } });
+
+  const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } };
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rerender); } catch (e) { /* old browser */ }
+  new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+}
+function ensureChartLib() {
+  if (window.Chart) return Promise.resolve();
+  return new Promise((res, rej) => { const s = document.createElement('script'); s.src = CHART_CDN; s.onload = res; s.onerror = () => rej(new Error('Chart library failed to load')); document.head.appendChild(s); });
+}
+
+async function boot() {
+  setThemeColor(); renderKpiSkeleton(); editor.init(); wire(); route();
+  const settings = restoreSettings(); const q = url.read();
+  if (q.get('settings') === 'open') $('#settingsBox').open = true;
+  summarizeSettings();
+
+  let engineSrc, tplText;
+  try {
+    [engineSrc, tplText] = await Promise.all(['engine.py', 'templates.py'].map(f => fetch(f).then(r => { if (!r.ok) throw new Error(f); return r.text(); })));
+  } catch (e) {
+    setStatus('error', 'Needs a web server');
+    $('#resTitle').textContent = 'Serve QuantLab from a Web Server';
+    $('#resMeta').innerHTML = 'Browsers block pages opened straight from disk from reading <code translate="no">engine.py</code>. In the project folder run <code translate="no">python -m http.server</code>, then open <a href="http://localhost:8000">http://localhost:8000</a>.';
+    return;
+  }
+  templates = parseTemplates(tplText);
+  const draft = store.get('draft', null); const qs = q.get('strategy');
+  const wanted = qs && templates.some(t => t.id === qs) ? 'tpl:' + qs : draft ? draft.template : 'tpl:sma_cross';
+  fillTemplateSelect(wanted);
+  if (!$('#template').value) $('#template').value = 'tpl:sma_cross';
+  if (draft && draft.code && draft.template === $('#template').value) { editor.value = draft.code; const s = currentSource(); $('#about').textContent = s.about; $('#delBtn').hidden = s.kind !== 'mine'; }
+  else loadSelectedTemplate();
+
+  const pyReady = py.start(engineSrc);
+  await Promise.all([loadUploads(), loadBundled(), ensureChartLib().catch(() => toast('Charts couldn’t load. Numbers & tables still work; reload to try again.'))]);
+  if (window.Chart) { Chart.defaults.font.family = cssVar('--f-sans'); Chart.defaults.font.size = 12; }
+  const prefer = { ...(settings || {}) };
+  if (q.get('ticker')) prefer.instrument = q.get('ticker').toUpperCase();
+  if (q.has('bench')) prefer.benchmark = (q.get('bench') || '').toUpperCase();
+  fillInstrumentSelects(prefer);
+  const from = q.get('from') || (settings && settings.start), to = q.get('to') || (settings && settings.end);
+  if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) $('#start').value = from;
+  if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) $('#end').value = to;
+  updateDateBounds(); renderDownloadList(); url.write(); toolContext();
+  if (!instruments.size) showEmptyData();
+
+  try {
+    await pyReady;
+    setStatus('ready', 'Python ready');
+    METRICS = await py.call('metric_list', {});
+    $('#swMetric').innerHTML = ['sharpe', 'cagr', 'total_return', 'sortino', 'calmar', 'max_drawdown', 'win_rate', 'profit_factor', 'information_ratio', 'alpha']
+      .map(k => METRICS.find(m => m.key === k)).filter(Boolean).map(m => `<option value="${m.key}">${esc(m.label)}</option>`).join('');
+    refreshParams();
+    if (instruments.size) runBacktest();
+  } catch (e) {
+    console.error(e); setStatus('error', 'Python couldn’t start');
+    $('#resTitle').textContent = 'Python Couldn’t Start';
+    $('#resMeta').innerHTML = `${esc(String(e.message || e))}. Check your connection & <button class="btn small" type="button" onclick="location.reload()">Reload Page</button>`;
+  }
+}
+boot();
+</script>
+</html>
