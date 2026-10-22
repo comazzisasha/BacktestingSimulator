@@ -708,6 +708,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const PYODIDE_CDN = 'https://cdn.jsdelivr.net/npm/pyodide@0.26.4/';
+const PYODIDE_PACKAGES = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';  // wheels not bundled in pyodide/
 const CHART_CDN = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js';
 const IS_MAC = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
 const LOCALE = (() => {
@@ -921,23 +922,24 @@ class PyError extends Error { constructor(info) { super(info.message || 'Python 
 const py = {
   mode: null, worker: null, seq: 0, waiting: new Map(), loaded: new Set(), ready: null, engineSrc: null,
   indexURLs() { return [new URL('pyodide/', location.href).href, PYODIDE_CDN]; },
+  initMsg() { return { type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs(), packageURL: PYODIDE_PACKAGES }; },
   start(engineSrc) { this.engineSrc = engineSrc; this.ready = this._start(); return this.ready; },
   async _start() {
     try {
       this._spawn();
-      await this._post({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() }, 180000);
+      await this._post(this.initMsg(), 180000);
       this.mode = 'worker';
     } catch (e) {
       console.warn('Worker unavailable, running Python on the page:', e);
       this._kill();
       await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'runtime.js'; s.onload = res; s.onerror = () => rej(new Error('runtime.js is missing')); document.head.appendChild(s); });
-      await this._inline({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() });
+      await this._inline(this.initMsg());
       this.mode = 'inline';
     }
   },
   _spawn() {
     this.worker = new Worker('worker.js');
-    this.worker.onmessage = e => { const w = this.waiting.get(e.data.id); if (w) { this.waiting.delete(e.data.id); clearTimeout(w.t); e.data.ok ? w.resolve(e.data.result) : w.reject(new Error(e.data.error)); } };
+    this.worker.onmessage = e => { if (e.data.progress) { setStatus('busy', e.data.progress); return; } const w = this.waiting.get(e.data.id); if (w) { this.waiting.delete(e.data.id); clearTimeout(w.t); e.data.ok ? w.resolve(e.data.result) : w.reject(new Error(e.data.error)); } };
     this.worker.onerror = e => { if (e.preventDefault) e.preventDefault(); for (const w of this.waiting.values()) w.reject(new Error(e.message || 'worker error')); this.waiting.clear(); };
   },
   _kill() { if (this.worker) { this.worker.terminate(); this.worker = null; } },
@@ -949,7 +951,7 @@ const py = {
       this.worker.postMessage({ ...msg, id });
     });
   },
-  _inline(msg) { return new Promise((resolve, reject) => { setTimeout(() => self.QLRuntime.onMessage({ ...msg, id: 0 }, r => (r.ok ? resolve(r.result) : reject(new Error(r.error)))), 30); }); },
+  _inline(msg) { return new Promise((resolve, reject) => { setTimeout(() => self.QLRuntime.onMessage({ ...msg, id: 0 }, r => (r.progress ? setStatus('busy', r.progress) : r.ok ? resolve(r.result) : reject(new Error(r.error)))), 30); }); },
   async call(method, payload) {
     await this.ready;
     const msg = { type: 'call', method, payload: JSON.stringify(payload) };
@@ -972,7 +974,7 @@ const py = {
   async restart() {
     for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
     this.waiting.clear(); this._kill(); this.loaded.clear();
-    this.ready = (async () => { this._spawn(); await this._post({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() }, 180000); })();
+    this.ready = (async () => { this._spawn(); await this._post(this.initMsg(), 180000); })();
     return this.ready;
   },
 };
@@ -1334,7 +1336,10 @@ function renderResults(r) {
   if (currentTab === 'backtest') document.title = `${r.strategyName} on ${r.ticker} · QuantLab`;
   $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${fmt.num(r.elapsed / 1000, 2)} s`;
   const chips = [`<span class="chip">${r.mode === 'signals' ? 'signals(data)' : 'on_bar(ctx)'}</span>`];
-  if (r.lookahead) chips.push(r.lookahead.violations.length ? '<span class="chip bad">Look-ahead detected</span>' : '<span class="chip ok">Look-ahead check passed</span>');
+  if (r.lookahead) {
+    const lk = r.lookahead; const part = lk.planned && lk.checked < lk.planned ? ` (${fmt.int(lk.checked)} of ${fmt.int(lk.planned)} spot checks; the rest were skipped to save time)` : '';
+    chips.push(lk.violations.length ? '<span class="chip bad">Look-ahead detected</span>' : `<span class="chip ok" title="Recomputed signals with the future removed${esc(part)}">Look-ahead check passed${lk.checked < lk.planned ? ' (partial)' : ''}</span>`);
+  }
   $('#resChips').innerHTML = chips.join('');
 
   const notes = (r.notes || []).map(n => esc(n));

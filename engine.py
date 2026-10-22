@@ -507,6 +507,58 @@ def drawdown(x):
     return out
 
 
+def walk_forward(X, y, fit_predict, min_train=252, retrain_every=21, horizon=1, window=None, fill=NAN):
+    """Out-of-sample model predictions for every bar, without look-ahead.
+
+    X             one row of features per bar (list of lists or a 2-D NumPy array).
+                  Rows containing NaN are skipped for training and get `fill`.
+    y             one label per bar describing what happens AFTER that bar, e.g. the
+                  next day's return. y[i] only becomes known `horizon` bars later.
+    fit_predict   fit_predict(X_train, y_train, X_new) -> one prediction per row of X_new.
+                  Gets NumPy arrays when X is one, else lists.
+
+    Retrains every `retrain_every` bars, starting once `min_train` labelled rows
+    exist. A model trained at bar t only sees rows j with j + horizon <= t (labels
+    already known at t's close), the most recent `window` of them if set, and
+    predicts bars t .. t + retrain_every - 1. Returns one value per bar.
+    """
+    n = len(X)
+    if len(y) != n:
+        raise ValueError("walk_forward: X has %d rows but y has %d" % (n, len(y)))
+    retrain_every, horizon = max(1, int(retrain_every)), max(1, int(horizon))
+    is_array = hasattr(X, "shape")
+    take_x = (lambda idx: X[idx]) if is_array else (lambda idx: [X[j] for j in idx])
+    y_array = hasattr(y, "shape")
+    take_y = (lambda idx: y[idx]) if y_array else (lambda idx: [y[j] for j in idx])
+    ok_x = [all(v == v for v in row) for row in X]
+    ok_y = [not isnan(v) for v in y]
+    out = [fill] * n
+    known = []          # usable training rows whose labels are known by bar t
+    t = 0
+    started = False
+    while t < n:
+        j = t - horizon
+        if j >= 0 and ok_x[j] and ok_y[j]:
+            known.append(j)
+        if not started and len(known) < min_train:
+            t += 1
+            continue
+        started = True
+        train = known[-int(window):] if window else known
+        new = [k for k in range(t, min(t + retrain_every, n)) if ok_x[k]]
+        if new and train:
+            preds = fit_predict(take_x(train), take_y(train), take_x(new))
+            for k, p in zip(new, preds):
+                out[k] = float(p)
+        # collect the labels that become known before the next retrain
+        for t2 in range(t + 1, min(t + retrain_every, n)):
+            j = t2 - horizon
+            if j >= 0 and ok_x[j] and ok_y[j]:
+                known.append(j)
+        t += retrain_every
+    return out
+
+
 qt = SimpleNamespace(
     sma=sma, ema=ema, wma=wma, wilder=wilder, rolling_std=rolling_std,
     rolling_max=rolling_max, rolling_min=rolling_min, returns=returns,
@@ -960,7 +1012,7 @@ def _namespace():
         "__name__": "strategy",
         "__builtins__": __builtins__,
         "math": math, "statistics": statistics, "random": random,
-        "datetime": _dt, "qt": qt, "NAN": NAN, "isnan": isnan,
+        "datetime": _dt, "qt": qt, "NAN": NAN, "isnan": isnan, "walk_forward": walk_forward,
     }
 
 
@@ -981,6 +1033,10 @@ def format_error(exc, bar_date=None):
     frames = traceback.extract_tb(exc.__traceback__)
     user = [f for f in frames if f.filename == STRATEGY_FILENAME]
     msg = "%s: %s" % (type(exc).__name__, exc)
+    if isinstance(exc, ModuleNotFoundError) and sys.platform == "emscripten":
+        msg += (". In the browser, strategies can import NumPy, pandas, SciPy and scikit-learn plus the "
+                "standard library. PyTorch, TensorFlow and other packages without a WebAssembly build "
+                "only work when you run engine.py in regular Python.")
     if bar_date:
         msg += "  (on bar %s)" % bar_date
     if user:
@@ -1363,6 +1419,7 @@ def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_o
         commission=acct.commission, slippage=acct.slippage,
         traded_notional=acct.traded_notional, clipped=acct.clipped,
         logs=logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
+        signals=sig,
     )
 
 
@@ -1990,21 +2047,31 @@ def permutation_test(res, n_perm=500, seed=7):
     }
 
 
-def lookahead_check(strategy, ds, full_signals, samples=8):
+def lookahead_check(strategy, ds, full_signals, samples=8, budget=None):
     """For signals(data) strategies: recompute the signal using only data up to bar k
     and compare with the full-history value. Any difference means the signal for bar k
-    used later bars."""
+    used later bars. With a time budget in seconds (for slow strategies such as
+    machine-learning models), stops after the budget once two samples are done."""
+    import time
     n = ds.n
     lo = max(1, n // 5)
     picks = sorted(set(lo + (n - 1 - lo) * j // max(1, samples - 1) for j in range(samples)))
+    # check the extremes first, so a cut-short check still covers early and late bars
+    picks = [picks[0], picks[-1]] + picks[1:-1] if len(picks) > 2 else picks
     bad = []
+    t0 = time.time()
+    done = 0
     for k in picks:
+        if budget is not None and done >= 2 and time.time() - t0 > budget:
+            break
+        done += 1
         sub = list(strategy.signals(DataView(ds, k + 1)))
         a, b = sub[k] if len(sub) > k else None, full_signals[k]
         same = (isnan(a) and isnan(b)) or (not isnan(a) and not isnan(b) and abs(float(a) - float(b)) < 1e-9)
         if not same:
             bad.append({"date": ds.dates[k], "with_future": b, "without_future": a})
-    return {"checked": len(picks), "violations": bad}
+    bad.sort(key=lambda v: v["date"])
+    return {"checked": done, "planned": len(picks), "violations": bad}
 
 
 def instrument_stats(datasets, start=None, end=None, rf=0.0):
@@ -2116,9 +2183,8 @@ def api_run(p):
                    zip(period_returns(res.dates, res.equity, "year"), period_returns(res.dates, res.bench_equity, "year"))],
         "logs": res.logs, "notes": res.notes, "config": cfg.as_dict(),
     }
-    if strat.signals is not None:
-        full = list(strat.signals(DataView(ds)))
-        out["lookahead"] = lookahead_check(strat, ds, full)
+    if res.signals is not None:
+        out["lookahead"] = lookahead_check(strat, ds, res.signals, budget=float(p.get("lookahead_budget", 4.0)))
     return out
 
 

@@ -96,6 +96,7 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#ctx">The ctx Object</a></li>
       <li><a href="#indicators">Indicators</a></li>
       <li><a href="#signals">Vectorized Signals</a></li>
+      <li><a href="#ml">Machine Learning</a></li>
       <li><a href="#execution">Execution & Costs</a></li>
       <li><a href="#statistics">Statistics</a></li>
       <li><a href="#strategies">Built-In Strategies</a></li>
@@ -238,6 +239,43 @@ def on_bar(ctx):
     slow = qt.sma(data.close, 200)
     return [1.0 if f &gt; s else 0.0 for f, s in zip(fast, slow)]</code></pre>
     <p>The engine still applies weight <code>i</code> on bar <code>i + 1</code>. However, nothing stops <code>signals</code> from reading <code>data.close[i + 1]</code> by mistake. To catch that, QuantLab re-runs your function on histories cut off at several dates and compares the results. If any weight changes, the run is flagged <b>Look-ahead detected</b>, and its numbers are not achievable.</p>
+
+    <h2 id="ml">Machine Learning</h2>
+    <p>Strategies can <code>import numpy</code>, <code>pandas</code>, <code>scipy</code> and <code>sklearn</code> (scikit-learn). QuantLab loads what your code imports the first time you run it. NumPy (12&nbsp;MB) ships with the site. pandas, SciPy and scikit-learn download from the Pyodide CDN on first use: scikit-learn needs SciPy, about 75&nbsp;MB in all. The browser caches them afterwards.</p>
+    <p><b>PyTorch and TensorFlow don’t run in browsers</b>: they have no WebAssembly build. There are three ways around that:</p>
+    <ul>
+      <li>Write the network in NumPy. The <i>Neural Network (NumPy)</i> template is a two-layer network trained with Adam: the same forward pass, backward pass and optimizer step PyTorch runs for you.</li>
+      <li>Use scikit-learn’s models, including <code>MLPClassifier</code> / <code>MLPRegressor</code> neural networks, random forests and gradient boosting.</li>
+      <li>Run the engine in regular Python (see <a href="#running">Running It Yourself</a>). Strategy code is plain Python there, so <code>import torch</code> works like any other package.</li>
+    </ul>
+    <h3>Training Without Look-Ahead</h3>
+    <p>The easy mistake in ML backtests is training on labels from the future. A label such as “the next day’s return” for bar <i>i</i> is only known at bar <i>i</i> + 1. <code>walk_forward</code> (available in every strategy) handles this. It retrains on a fixed schedule, gives each model only the rows whose labels were already known, and returns one out-of-sample prediction per bar:</p>
+<pre><code>import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+def fit_predict(X_train, y_train, X_new):
+    model = LogisticRegression().fit(X_train, y_train &gt; 0)
+    return model.predict_proba(X_new)[:, 1]          # probability the next day is up
+
+def signals(data):
+    c = data.close
+    X = np.column_stack([qt.roc(c, 5), qt.roc(c, 20), qt.rsi(c, 14)])
+    y = np.array([c[i + 1] / c[i] - 1 if i + 1 &lt; len(c) else NAN for i in range(len(c))])
+    prob = walk_forward(X, y, fit_predict, min_train=504, retrain_every=63, horizon=1)
+    return [1.0 if p &gt; 0.55 else 0.0 for p in prob]</code></pre>
+    <div class="scroll"><table>
+      <thead><tr><th>Argument</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>X</code></td><td>One row of features per bar: a list of lists or a 2-D NumPy array. Rows containing NaN (indicator warm-up) are skipped.</td></tr>
+        <tr><td><code>y</code></td><td>One label per bar describing what happens <i>after</i> it. Use NaN where the future isn’t available yet.</td></tr>
+        <tr><td><code>fit_predict</code></td><td>Your function <code>(X_train, y_train, X_new) → predictions</code>. It gets NumPy arrays when <code>X</code> is one.</td></tr>
+        <tr><td><code>min_train</code></td><td>Labelled rows needed before the first model (default 252).</td></tr>
+        <tr><td><code>retrain_every</code></td><td>Bars between retrainings (default 21). Each model predicts the bars until the next one.</td></tr>
+        <tr><td><code>horizon</code></td><td>Bars until a label is known (default 1). Use 5 for a label built from the next 5 days.</td></tr>
+        <tr><td><code>window</code></td><td>Train on only the most recent <i>n</i> rows (a rolling window) instead of all past rows.</td></tr>
+      </tbody>
+    </table></div>
+    <p>Fit any scaling (means, standard deviations) inside <code>fit_predict</code> from the training rows, as the templates do. Scaling with statistics from the whole history leaks the future. Seed anything random (<code>random_state=0</code>, <code>np.random.default_rng(0)</code>) so results repeat; the look-ahead check also needs this. For slow models the look-ahead check samples fewer dates, marked <b>(partial)</b>. Training happens on every run, so retrain monthly or quarterly rather than daily to keep runs fast.</p>
 
     <h2 id="execution">Execution & Costs</h2>
     <div class="timeline">
@@ -402,6 +440,10 @@ def on_bar(ctx):
 <tr><td>Buy Mon–Thu, Sell Friday</td><td>Your original idea with share orders: buy 1 share each Monday–Thursday &amp; sell everything on Friday.</td><td><code>{&quot;shares_per_day&quot;: 1}</code></td></tr>
 <tr class="group"><td colspan="3">Vectorized</td></tr>
 <tr><td>SMA Crossover (Vectorized)</td><td>The same golden cross written as signals(data), which builds every bar&#x27;s weight at once.</td><td><code>{&quot;fast&quot;: 50, &quot;slow&quot;: 200}</code></td></tr>
+<tr class="group"><td colspan="3">Machine Learning</td></tr>
+<tr><td>Logistic Regression (NumPy)</td><td>Predicts whether tomorrow is up from momentum, RSI, trend &amp; volatility; retrained every quarter on past data only. Uses NumPy.</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 63, &quot;threshold&quot;: 0.53, &quot;l2&quot;: 0.01}</code></td></tr>
+<tr><td>Neural Network (NumPy)</td><td>A small two-layer neural network trained with Adam in plain NumPy, retrained twice a year: the same training loop you would write in PyTorch.</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 126, &quot;hidden&quot;: 16, &quot;epochs&quot;: 100, &quot;lr&quot;: 0.02, &quot;threshold&quot;: 0.53}</code></td></tr>
+<tr><td>Random Forest (scikit-learn)</td><td>A random forest predicts whether the next week is up, retrained twice a year. The first run downloads scikit-learn (about 75 MB, cached afterwards).</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 126, &quot;horizon&quot;: 5, &quot;trees&quot;: 40, &quot;depth&quot;: 4, &quot;threshold&quot;: 0.55}</code></td></tr>
 </tbody></table></div>
 
     <h2 id="tools">Research Tools</h2>
@@ -437,7 +479,7 @@ def on_bar(ctx):
 python -m http.server 8000
 # then open http://localhost:8000</code></pre>
     <p>Opening <code>index.html</code> directly from disk doesn’t work, because browsers block pages loaded that way from reading <code>engine.py</code>. To publish the site, push the folder to a GitHub repository and turn on GitHub Pages.</p>
-    <p>The engine also works as a normal Python module, with no dependencies:</p>
+    <p>The engine also works as a normal Python module, with no dependencies of its own. Strategies may import anything installed, including PyTorch:</p>
 <pre><code>import engine
 ds = engine.load_csv("SPY.csv", "SPY")
 strat = engine.Strategy.from_code(open("my_strategy.py").read())
@@ -453,7 +495,8 @@ print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['ma
         <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, about 1900 lines.</td></tr>
         <tr><td><code>templates.py</code></td><td>The built-in strategies, separated by <code>#%% id:</code> markers. Add your own by following the same format.</td></tr>
         <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
-        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped.</td></tr>
+        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports.</td></tr>
+        <tr><td><code>pyodide/</code></td><td>The Python runtime and the NumPy wheel. Other package wheels from the Pyodide 0.26.4 release placed here are used instead of the CDN.</td></tr>
         <tr><td><code>data/</code></td><td>Bundled CSV files and <code>manifest.json</code>.</td></tr>
         <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics and the look-ahead detector.</td></tr>
         <tr><td><code>tools/build_docs.py</code></td><td>Regenerates this page's statistics and strategy tables from the code.</td></tr>

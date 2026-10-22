@@ -221,8 +221,53 @@ def test_lookahead_check_flags_cheating():
     assert not engine.lookahead_check(honest, DEMO, full)["violations"]
 
 
+def missing_imports(code):
+    """Top-level packages a template imports that aren't installed (e.g. numpy)."""
+    import importlib.util
+    mods = re.findall(r"(?m)^(?:import|from) (\w+)", code)
+    return [m for m in mods if importlib.util.find_spec(m) is None]
+
+
+def test_walk_forward_never_trains_on_unknown_labels():
+    n, h = 300, 5
+    X = [[float(i)] for i in range(n)]          # feature = the bar's own index
+    y = [float(i % 3) if i + h < n else engine.NAN for i in range(n)]
+    seen = []
+
+    def fit_predict(X_train, y_train, X_new):
+        newest_label = max(r[0] for r in X_train)
+        first_new = min(r[0] for r in X_new)
+        assert newest_label + h <= first_new, "trained on a label from the future"
+        seen.append((len(X_train), first_new))
+        return [first_new] * len(X_new)
+
+    out = engine.walk_forward(X, y, fit_predict, min_train=50, retrain_every=20, horizon=h, window=100)
+    # labels 0..49 are all known at bar 54 (49 + horizon), so the first model starts there
+    assert all(math.isnan(v) for v in out[:54]) and out[54] == 54
+    assert out[73] == 54 and out[74] == 74, "predictions come from the latest model"
+    assert all(size <= 100 for size, _ in seen), "window caps the training set"
+    X[60] = [engine.NAN]
+    assert math.isnan(engine.walk_forward(X, y, fit_predict, min_train=50, retrain_every=20, horizon=h)[60])
+
+
+def test_ml_templates_are_causal():
+    t = load_templates()
+    for tid in ("ml_logistic", "ml_mlp", "ml_forest"):
+        if missing_imports(t[tid]):
+            print("skip  %s (needs %s)" % (tid, ", ".join(missing_imports(t[tid]))))
+            continue
+        strat = engine.Strategy.from_code(t[tid])
+        res = engine.backtest(strat, DEMO, engine.Config())
+        assert 0 < engine.summarize(res)[0]["exposure"] < 1, tid
+        chk = engine.lookahead_check(strat, DEMO, res.signals, samples=3)
+        assert chk["checked"] == 3 and not chk["violations"], tid
+
+
 def test_all_templates_run():
     for tid, code in load_templates().items():
+        if missing_imports(code):
+            print("skip  %s (needs %s)" % (tid, ", ".join(missing_imports(code))))
+            continue
         res = run(code, allow_short=(tid == "zscore_ls"))
         m, b = engine.summarize(res)
         assert m["final_equity"] > 0, tid
