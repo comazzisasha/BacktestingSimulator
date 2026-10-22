@@ -483,6 +483,14 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
                 <label class="check"><input type="checkbox" id="cfgShort" name="short"> Allow shorting</label>
                 <label class="check"><input type="checkbox" id="cfgTR" name="total-return" checked> Pay dividends (total return)</label>
               </div>
+              <h3 class="subhead">Market Impact &amp; Fills</h3>
+              <div class="grid3">
+                <div class="field"><label for="cfgSpread2">Bid-Ask Spread (bps)</label><input type="text" inputmode="decimal" id="cfgSpread2" name="spread" value="0" autocomplete="off" aria-describedby="cfgSpread2-err"><p class="ferr" id="cfgSpread2-err" hidden></p></div>
+                <div class="field"><label for="cfgImpact">Impact Coefficient</label><input type="text" inputmode="decimal" id="cfgImpact" name="impact" value="1" autocomplete="off" aria-describedby="cfgImpact-err"><p class="ferr" id="cfgImpact-err" hidden></p></div>
+                <div class="field"><label for="cfgPart">Max % of Volume</label><input type="text" inputmode="decimal" id="cfgPart" name="participation" value="10" autocomplete="off" aria-describedby="cfgPart-err"><p class="ferr" id="cfgPart-err" hidden></p></div>
+                <div class="field"><label for="cfgFill">Limit &amp; Stop Fills</label><select id="cfgFill" name="fill-model"><option value="standard">Standard</option><option value="pessimistic">Pessimistic</option></select></div>
+              </div>
+              <p class="help">Market fills pay half the spread plus impact of <i>coefficient × daily volatility × √(shares ÷ 20-day average volume)</i>. An order bigger than the volume limit fills over several days (0 = no limit). Limit orders pay commission only. <i>Pessimistic</i> needs a limit to trade through its price & assumes a bar hits a stop before a target.</p>
               <h3 class="subhead">Carry &amp; Margin</h3>
               <div class="grid3">
                 <div class="field"><label for="cfgCashRate">Cash Interest (%/yr)</label><input type="text" inputmode="decimal" id="cfgCashRate" name="cash-rate" value="" placeholder="= risk-free" autocomplete="off" aria-describedby="cfgCashRate-err"><p class="ferr" id="cfgCashRate-err" hidden></p></div>
@@ -830,6 +838,7 @@ const fmt = {
   money: v => (v == null ? '—' : NF('usd2', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
   moneyAxis: v => NF('usd0', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(v),
   days: v => (v == null ? '—' : NF('int', { maximumFractionDigits: 0 }).format(Math.round(v)) + ' days'),
+  bps: v => (v == null ? '—' : NF('bps1', { minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: 'exceptZero' }).format(v) + '\u00a0bps'),
   years: v => (v == null ? '—' : NF('n1', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v) + ' years'),
   pval: v => (v == null ? '—' : v < 0.001 ? '< ' + NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(0.001) : NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(v)),
   price: v => (v == null ? '—' : NF('px', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
@@ -1374,6 +1383,7 @@ const CFG_RULES = [
   ['cfgRf', between(0, 20, 'percent')], ['cfgSeed', between(0, 1e9, '', true, 42)],
   ['cfgCashRate', raw => (String(raw).trim() === '' ? null : between(-5, 30, 'percent')(raw))], ['cfgSpread', between(0, 20, 'percent')],
   ['cfgBorrow', between(0, 200, 'percent')], ['cfgMaint', between(0, 90, 'percent')],
+  ['cfgSpread2', between(0, 1000, 'basis points')], ['cfgImpact', between(0, 10)], ['cfgPart', between(0, 100, 'percent')],
   ['cfgHtb', raw => (parseHtb(raw) ? null : 'Use TICKER:fee pairs in %/yr, e.g. GME:25, AMC:12.')],
 ];
 // "GME:25, AMC:12" -> {GME: 0.25, AMC: 0.12}; null if malformed
@@ -1396,10 +1406,11 @@ function readConfig() {
     seed: Math.round(n('cfgSeed', 42)), allow_short: $('#cfgShort').checked, fractional: $('#cfgFrac').checked,
     total_return: $('#cfgTR').checked, cash_rate: $('#cfgCashRate').value.trim() === '' ? null : n('cfgCashRate', 0) / 100,
     rate_ticker: $('#cfgRateSeries').value, margin_spread: n('cfgSpread', 1) / 100, borrow_fee: n('cfgBorrow', 0.25) / 100,
-    maintenance_margin: n('cfgMaint', 25) / 100, borrow_fees: parseHtb($('#cfgHtb').value) || {} };
+    maintenance_margin: n('cfgMaint', 25) / 100, borrow_fees: parseHtb($('#cfgHtb').value) || {},
+    spread_bps: n('cfgSpread2', 0), impact_coef: n('cfgImpact', 1), max_participation: n('cfgPart', 10) / 100, fill_model: $('#cfgFill').value };
 }
 function saveSettings() {
-  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb'].forEach(id => { s[id] = $('#' + id).value.trim(); });
+  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill'].forEach(id => { s[id] = $('#' + id).value.trim(); });
   s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked; s.cfgTR = $('#cfgTR').checked;
   s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.start = $('#start').value; s.end = $('#end').value;
   store.set('settings', s); summarizeSettings(); url.write();
@@ -1414,6 +1425,8 @@ function summarizeSettings() {
   if (c.commission_bps || c.commission_fixed) bits.push('commission');
   if (c.allow_short) bits.push('shorting');
   if (c.max_leverage !== 1) bits.push(`${fmt.num(c.max_leverage, 1)}× leverage`);
+  if (c.spread_bps) bits.push(`${fmt.num(c.spread_bps, c.spread_bps % 1 ? 1 : 0)} bps spread`);
+  if (c.fill_model === 'pessimistic') bits.push('pessimistic fills');
   if (!c.total_return) bits.push('price return only');
   if (c.rate_ticker) bits.push(`cash at ${c.rate_ticker}`); else if (c.cash_rate != null) bits.push(`cash at ${fmt.num(c.cash_rate * 100, 2)}%`);
   $('#settingsSummary').textContent = bits.join(' · ');
@@ -1693,7 +1706,9 @@ function renderAttribution(r) {
 }
 function renderTrades(r) {
   const t = r.trades; const max = 500;
-  $('#tradeInfo').textContent = `${fmt.int(t.filter(x => !x.open).length)} closed${t.some(x => x.open) ? ' + 1 open' : ''} · ${fmt.int(r.fills.length)} fills${t.length > max ? ` · showing the last ${max}` : ''}`;
+  const m = r.metrics, bk = r.book || {};
+  const exec = [m.is_bps != null ? `shortfall ${fmt.bps(m.is_bps)}` : '', bk.filled ? `${fmt.int(bk.filled)} limit/stop fills` : '', m.partial_fills ? `${fmt.int(m.partial_fills)} partial` : ''].filter(Boolean);
+  $('#tradeInfo').textContent = `${fmt.int(t.filter(x => !x.open).length)} closed${t.some(x => x.open) ? ` + ${fmt.int(t.filter(x => x.open).length)} open` : ''} · ${fmt.int(r.fills.length)} fills${exec.length ? ' · ' + exec.join(' · ') : ''}${t.length > max ? ` · showing the last ${max}` : ''}`;
   if (!t.length) { $('#tradesTable').innerHTML = '<tbody><tr><td class="muted" style="white-space:normal">No trades. Your entry rule never fired; check indicator warm-up or loosen the condition.</td></tr></tbody>'; return; }
   const ret = x => (r.portfolio ? x.ret_notional : x.ret);
   let h = '<thead><tr><th scope="col" class="n">#</th><th scope="col">Ticker</th><th scope="col">Side</th><th scope="col">Entry</th><th scope="col">Exit</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Entry Price</th><th scope="col" class="n">Exit Price</th><th scope="col" class="n">Return</th><th scope="col" class="n">P&amp;L</th></tr></thead><tbody>';

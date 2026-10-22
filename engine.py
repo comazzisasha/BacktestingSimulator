@@ -1403,12 +1403,26 @@ class AssetContext:
 
     # ---- orders -----------------------------------------------------------
     def order(self, qty, **kw):
-        """Buy (qty > 0) or sell (qty < 0) shares at the next bar."""
-        self._run.add_order(self._a, "delta", float(qty), kw)
+        """Buy (qty > 0) or sell (qty < 0) shares at the next bar.
+
+        Options: limit=price, stop=price (both = stop-limit), tif='day' | 'gtc',
+        at='open' | 'close' (market on open / on close), oco='name' (filling one
+        order cancels the others with the same name). Returns the id of a resting order."""
+        return self._run.add_order(self._a, "delta", float(qty), kw)
 
     def order_target_shares(self, n, **kw):
-        """Trade whatever is needed to hold exactly n shares after the next fill."""
-        self._run.add_order(self._a, "target", float(n), kw)
+        """Trade whatever is needed to hold exactly n shares after the fill. Same options
+        as order(); a target is sized when it fills, so exit orders never overshoot."""
+        return self._run.add_order(self._a, "target", float(n), kw)
+
+    @property
+    def open_orders(self):
+        """Resting limit/stop orders for this instrument, as dicts."""
+        return self._run.open_orders(self._a)
+
+    def cancel_all(self):
+        """Cancel this instrument's resting orders. Returns how many were cancelled."""
+        return self._run.cancel(a=self._a)
 
     # ---- indicators -------------------------------------------------------
     def _val(self, key, build, ago):
@@ -1543,6 +1557,10 @@ class _StrategyClock:
     def equity(self):
         return self._run.acct.equity_marked(self._run.t)
 
+    def cancel(self, order_id):
+        """Cancel one resting order by the id order() returned."""
+        return self._run.cancel(oid=order_id)
+
     def log(self, *args):
         print(self.date, *args)
 
@@ -1628,10 +1646,17 @@ class PortfolioContext(_StrategyClock):
         return sum(a.value for a in self.assets.values()) / eq if eq > 0 else 0.0
 
     def order(self, ticker, qty, **kw):
-        self[ticker].order(qty, **kw)
+        return self[ticker].order(qty, **kw)
 
     def order_target_shares(self, ticker, n, **kw):
-        self[ticker].order_target_shares(n, **kw)
+        return self[ticker].order_target_shares(n, **kw)
+
+    @property
+    def open_orders(self):
+        return self._run.open_orders()
+
+    def cancel_all(self, ticker=None):
+        return self._run.cancel(a=None if ticker is None else self.tickers.index(ticker))
 
 
 # =============================================================================
@@ -1766,6 +1791,11 @@ class Config:
         "borrow_fee": 0.0,        # annual fee on the value of short positions
         "borrow_fees": {},        # per-ticker borrow fees overriding borrow_fee
         "maintenance_margin": 0.25,  # margin call when equity < this x gross exposure (0 = off)
+        # execution realism
+        "spread_bps": 0.0,        # quoted bid-ask spread; market fills pay half of it
+        "impact_coef": 0.0,       # square-root impact: price moves impact_coef x daily vol x sqrt(qty / ADV)
+        "max_participation": 0.0,  # most of a bar's volume one instrument may trade (0.1 = 10%; 0 = no limit)
+        "fill_model": "standard",  # 'pessimistic': limits must trade through; stops hit before targets
     }
 
     def __init__(self, **kw):
@@ -1797,6 +1827,10 @@ class Config:
             raise ValueError("max leverage must be positive")
         if not 0 <= self.maintenance_margin < 1:
             raise ValueError("maintenance margin must be from 0 to 1 (0.25 = 25%)")
+        if self.fill_model not in ("standard", "pessimistic"):
+            raise ValueError("fill_model must be 'standard' or 'pessimistic'")
+        if self.spread_bps < 0 or self.impact_coef < 0 or not 0 <= self.max_participation <= 1:
+            raise ValueError("spread, impact and participation must be non-negative (participation at most 1)")
 
     def as_dict(self):
         return {k: (dict(getattr(self, k)) if isinstance(getattr(self, k), dict) else getattr(self, k))
@@ -1834,6 +1868,41 @@ class Account:
                       "interest_paid": 0.0, "borrow_paid": 0.0}
         self.margin_calls = []
         self._val = [NAN] * k                # valuation prices during an execution
+        self.spread_paid = 0.0
+        self.impact_paid = 0.0
+        self.partial_fills = 0               # market orders cut by the participation limit
+        self._t = 0
+        self._vol_left = None                # shares each instrument may still trade this bar
+        self.arrival_t = None                # bar whose close is the arrival price of current fills
+
+    def begin_bar(self, t):
+        """Reset the per-bar participation allowance."""
+        self._t = t
+        cap = self.cfg.max_participation
+        if cap > 0:
+            p = self.panel
+            self._vol_left = [cap * p.sets[a].volume[p.nat[a][t]] if p.live[a][t] and p.sets[a].volume[p.nat[a][t]] > 0
+                              else math.inf for a in range(self.k)]
+        else:
+            self._vol_left = None
+
+    def impact(self, a, qty):
+        """Square-root market impact as a fraction of price for trading qty shares now."""
+        cfg = self.cfg
+        if not cfg.impact_coef or qty <= 0:
+            return 0.0
+        p = self.panel
+        ds, j = p.sets[a], p.nat[a][self._t]
+        adv = ds.cached(("adv", 20), lambda: _trailing_mean(ds.volume, 20))[j]
+        sig = ds.cached(("sigma", 20), lambda: _trailing_vol(ds.close, 20))[j]
+        if isnan(adv) or isnan(sig) or adv <= 0:
+            return 0.0
+        return cfg.impact_coef * sig * math.sqrt(qty / adv)
+
+    def _unit(self, a, p, qty):
+        """Estimated all-in price per share to buy qty shares (for sizing and the cash check)."""
+        cfg = self.cfg
+        return p * (1 + cfg.slippage_bps / 1e4 + cfg.spread_bps / 2e4 + self.impact(a, qty)) * (1 + cfg.commission_bps / 1e4)
 
     # ---- valuation ----------------------------------------------------------
     def equity_marked(self, t):
@@ -1932,7 +2001,7 @@ class Account:
             if wa == 0:
                 dq = -sh
             elif diff > 0:
-                dq = max(0.0, (diff - fixed) / (p * (1 + slip) * (1 + cb)))
+                dq = max(0.0, (diff - fixed) / self._unit(a, p, diff / p))
             else:
                 dq = diff / p
             target = sh + dq
@@ -1945,25 +2014,26 @@ class Account:
             if not cfg.allow_short and sh + dq < 0:
                 dq = -sh
             plan.append([a, dq, p, False])
-        self._execute_plan(plan, eq, t, report=False)
-        return later
+        rest = self._execute_plan(plan, eq, t, report=False)
+        return later, rest
 
-    def share_orders(self, orders, px, t):
-        """Execute share orders {asset: ('delta' | 'target', value)}. Returns those
-        for instruments without a bar today, to retry at the next bar."""
+    def share_orders(self, orders, px, t, maker=False, kind="market"):
+        """Execute share orders {asset: ('delta' | 'target', value)}. Returns those that
+        couldn't fill today (no bar, or over the participation limit) to retry at the next bar.
+        maker=True for limit fills: they provide liquidity and pay commission only."""
         cfg = self.cfg
         self._set_val(px, t)
         eq = self._equity_val()
         if eq <= 0:
             return {}
         plan, later = [], {}
-        for a, (kind, v) in orders.items():
+        for a, (how, v) in orders.items():
             p = px[a]
             if p is None:
-                later[a] = (kind, v)
+                later[a] = (how, v)
                 continue
             sh = self.shares[a]
-            target = v if kind == "target" else sh + v
+            target = v if how == "target" else sh + v
             if not cfg.fractional:
                 target = float(int(target))
             dq = target - sh
@@ -1972,14 +2042,29 @@ class Account:
                 dq = -sh
                 clipped = True
             plan.append([a, dq, p, clipped])
-        self._execute_plan(plan, eq, t, report=True)
+        later.update(self._execute_plan(plan, eq, t, report=True, maker=maker, kind=kind))
         return later
 
-    def _execute_plan(self, plan, eq, t, report):
-        """Sells first (they raise cash), then buys, which share the cash and leverage room."""
+    def _volume_cap(self, a, dq, rest):
+        """Trim dq to what is left of this bar's participation allowance; the rest is
+        recorded as a target for the next bar (a multi-day fill)."""
+        if self._vol_left is None or abs(dq) <= self._vol_left[a] + 1e-9:
+            if self._vol_left is not None:
+                self._vol_left[a] = max(0.0, self._vol_left[a] - abs(dq))
+            return dq
+        allowed = math.copysign(self._vol_left[a], dq)
+        rest[a] = ("target", self.shares[a] + dq)
+        self.partial_fills += 1
+        self._vol_left[a] = 0.0
+        return allowed
+
+    def _execute_plan(self, plan, eq, t, report, maker=False, kind="market"):
+        """Sells first (they raise cash), then buys, which share the cash and leverage room.
+        Returns targets left over by the participation limit."""
         cfg = self.cfg
         L = cfg.max_leverage
-        slip, cb, fixed = cfg.slippage_bps / 1e4, cfg.commission_bps / 1e4, cfg.commission_fixed
+        fixed = cfg.commission_fixed
+        rest = {}
         for item in plan:
             a, dq, p, clipped = item
             if dq < 0 and cfg.allow_short and self.shares[a] + dq < 0:
@@ -1996,14 +2081,17 @@ class Account:
                 dq = float(int(dq))
             if clipped and report:
                 self.clipped += 1
+            dq = self._volume_cap(a, dq, rest)
+            if not cfg.fractional:
+                dq = float(int(dq))
             if abs(dq) >= 1e-9:
-                self._fill(a, dq, p, t)
+                self._fill(a, dq, p, t, maker=maker, kind=kind)
         buys = [item for item in plan if item[1] > 0]
         if not buys:
             for a, dq, p, clipped in plan:
                 if dq == 0 and clipped and report:
                     self.clipped += 1
-            return
+            return rest
         for item in buys:
             a, dq, p, _ = item
             sh = self.shares[a]
@@ -2012,7 +2100,8 @@ class Account:
                 if dq > cap + 1e-9:
                     item[1] = max(0.0, cap)
                     item[3] = True
-        need = sum(dq * p * (1 + slip) * (1 + cb) for _, dq, p, _ in buys)
+        unit = {a: p * (1 + cfg.commission_bps / 1e4) if maker else self._unit(a, p, dq) for a, dq, p, _ in buys}
+        need = sum(dq * unit[a] for a, dq, _, _ in buys)
         room = self.cash + (L - 1.0) * eq - fixed * len(buys)
         if need > room + 1e-9 * max(1.0, need):
             f = max(0.0, room) / need if need > 0 else 0.0
@@ -2024,15 +2113,23 @@ class Account:
                 dq = float(int(dq))
             if clipped and report:
                 self.clipped += 1
+            dq = self._volume_cap(a, dq, rest)
+            if not cfg.fractional:
+                dq = float(int(dq))
             if abs(dq) >= 1e-9:
-                self._fill(a, dq, p, t)
+                self._fill(a, dq, p, t, maker=maker, kind=kind)
+        return rest
 
     # ---- fills and trade bookkeeping ---------------------------------------
-    def _fill(self, a, q, price, t, reason=None):
+    def _fill(self, a, q, price, t, reason=None, maker=False, kind="market"):
         cfg = self.cfg
         prev = self.shares[a]
-        slip = cfg.slippage_bps / 1e4
-        px = price * (1 + slip) if q > 0 else price * (1 - slip)
+        if maker:                      # a resting limit order: no spread, slippage or impact
+            slip = half = imp = 0.0
+        else:
+            slip, half, imp = cfg.slippage_bps / 1e4, cfg.spread_bps / 2e4, self.impact(a, abs(q))
+        adj = slip + half + imp
+        px = price * (1 + adj) if q > 0 else price * (1 - adj)
         comm = abs(q) * px * cfg.commission_bps / 1e4 + cfg.commission_fixed
         self._val[a] = price
         eq_before = self._equity_val()
@@ -2043,14 +2140,21 @@ class Account:
         if abs(new) < 1e-9:
             new = 0.0
         self.shares[a] = new
-        cost = comm + abs(q) * price * slip
+        cost = comm + abs(q) * price * adj
         self.commission += comm
         self.slippage += abs(q) * price * slip
+        self.spread_paid += abs(q) * price * half
+        self.impact_paid += abs(q) * price * imp
         self.asset_costs[a] += cost
         self.traded_notional += abs(q) * price
         self.asset_notional[a] += abs(q) * price
         fill = {"i": t, "date": self.panel.dates[t], "ticker": self.panel.tickers[a],
-                "side": "buy" if q > 0 else "sell", "qty": q, "price": px, "commission": comm, "position": new}
+                "side": "buy" if q > 0 else "sell", "qty": q, "price": px, "commission": comm, "position": new,
+                "kind": kind}
+        if self.arrival_t is not None:
+            arr = self.panel.mark(a, self.arrival_t)
+            if arr == arr and arr > 0:
+                fill["arrival"] = arr      # close when the order was decided: shortfall = (price - arrival) x side
         if reason:
             fill["reason"] = reason
         self.fills.append(fill)
@@ -2089,11 +2193,104 @@ class Account:
     def liquidate(self, t, fraction=1.0, reason=None):
         """Sell `fraction` of every position at today's close (instruments with a bar today)."""
         p = self.panel
+        self.arrival_t = t
         for a in range(self.k):
             sh = self.shares[a]
             if sh and (p.live[a][t] or fraction >= 1.0):
                 self._set_val([None] * self.k, t)
                 self._fill(a, -sh * fraction, p.mark(a, t), t, reason)
+
+
+def _trailing_mean(x, n):
+    """Mean of the n values BEFORE each bar (so a fill never uses its own bar's volume)."""
+    out, s = [NAN] * len(x), 0.0
+    for i, v in enumerate(x):
+        if i >= n:
+            out[i] = s / n
+            s -= x[i - n]
+        s += v
+    return out
+
+
+def _trailing_vol(close, n):
+    """Daily standard deviation of the n returns before each bar."""
+    r = [NAN] + [close[i] / close[i - 1] - 1 for i in range(1, len(close))]
+    sd = rolling_std(r[1:], n, ddof=1)       # sd[k] covers returns k-n+1..k (r index +1)
+    out = [NAN] * len(close)
+    for i in range(n + 1, len(close)):
+        out[i] = sd[i - 2]
+    return out
+
+
+ORDER_FIELDS = ("limit", "stop", "tif", "at", "oco")
+
+
+class Order:
+    """A resting limit, stop or stop-limit order (market orders don't rest)."""
+
+    __slots__ = ("id", "a", "kind", "value", "limit", "stop", "tif", "oco", "created", "triggered", "status")
+
+    def __init__(self, oid, a, kind, value, limit, stop, tif, oco, created):
+        self.id, self.a, self.kind, self.value = oid, a, kind, value
+        self.limit, self.stop, self.tif, self.oco = limit, stop, tif, oco
+        self.created, self.triggered, self.status = created, False, "open"
+
+    @property
+    def type(self):
+        return "stop_limit" if self.limit is not None and self.stop is not None else "limit" if self.limit is not None else "stop"
+
+    def as_dict(self, panel):
+        return {"id": self.id, "ticker": panel.tickers[self.a], "type": self.type, self.kind: self.value,
+                "limit": self.limit, "stop": self.stop, "tif": self.tif, "oco": self.oco, "triggered": self.triggered,
+                "created": panel.dates[self.created]}
+
+
+def _path(o, h, l, c, first_low):
+    return (o, l, h, c) if first_low else (o, h, l, c)
+
+
+def _cross(path, level, up, strict=False, after=0.0):
+    """First moment in [after, 3] when a price path (open -> ... -> close, linear in between)
+    reaches level going up (>=) or down (<=); strict needs it to go beyond. None if never."""
+    def beyond(v):
+        return (v > level if strict else v >= level) if up else (v < level if strict else v <= level)
+    start = int(after)
+    pos = path[start] + (path[start + 1] - path[start]) * (after - start) if start < 3 else path[3]
+    if beyond(pos):
+        return after
+    for i in range(start, 3):
+        a, b = (pos if i == start else path[i]), path[i + 1]
+        if beyond(b) and not beyond(a):
+            base = after if i == start else float(i)
+            frac = (level - a) / (b - a) if b != a else 0.0
+            return base + (i + 1 - base) * frac
+    return None
+
+
+def _book_fill(order, side, path, pessimistic):
+    """(time, price, maker) if a resting order fills on this bar's path, else None."""
+    buy = side > 0
+    if order.stop is not None and not order.triggered:
+        ts = _cross(path, order.stop, up=buy)
+        if ts is None:
+            return None
+        trig_px = path[0] if ts == 0 else order.stop
+        if order.limit is None:
+            return ts, trig_px, False              # a stop becomes a market order
+        order.triggered = True
+        ok = trig_px <= order.limit if buy else trig_px >= order.limit
+        if ok:
+            return ts, trig_px, False
+        if pessimistic:
+            return None                            # gapped past the limit: wait for the next bar
+        tl = _cross(path, order.limit, up=not buy, after=ts)
+        return (tl, order.limit, True) if tl is not None else None
+    # a limit (or a stop-limit that triggered on an earlier bar)
+    tl = _cross(path, order.limit, up=not buy, strict=pessimistic)
+    if tl is None:
+        return None
+    px = path[0] if tl == 0 and ((path[0] <= order.limit) if buy else (path[0] >= order.limit)) else order.limit
+    return tl, px, True
 
 
 class Result:
@@ -2235,19 +2432,120 @@ class _Run:
     def __init__(self, acct):
         self.acct = acct
         self.t = 0
-        self.orders = {}
+        self.orders = {}          # market orders for the next bar: {(asset, 'open'|'close'): (kind, value)}
+        self.book = []            # resting limit / stop orders
+        self.next_id = 1
+        self.book_stats = {"filled": 0, "expired": 0, "cancelled": 0, "placed": 0}
 
     def add_order(self, a, kind, value, kw):
-        if kw:
-            raise TypeError("order options %s are not supported" % ", ".join(sorted(kw)))
-        cur = self.orders.get(a)
+        bad = set(kw) - set(ORDER_FIELDS)
+        if bad:
+            raise TypeError("unknown order option %s (use limit=, stop=, tif=, at=, oco=)" % ", ".join(sorted(bad)))
+        limit, stop = kw.get("limit"), kw.get("stop")
+        tif, at, oco = kw.get("tif", "day"), kw.get("at"), kw.get("oco")
+        if tif not in ("day", "gtc"):
+            raise ValueError("tif must be 'day' (next bar only) or 'gtc' (until filled or cancelled)")
+        if at not in (None, "open", "close"):
+            raise ValueError("at must be 'open' or 'close'")
+        for name, v in (("limit", limit), ("stop", stop)):
+            if v is not None and not (float(v) > 0):
+                raise ValueError("%s price must be positive, got %r" % (name, v))
+        if limit is not None or stop is not None:
+            o = Order(self.next_id, a, kind, value, None if limit is None else float(limit),
+                      None if stop is None else float(stop), tif, oco, self.t)
+            self.next_id += 1
+            self.book.append(o)
+            self.book_stats["placed"] += 1
+            return o.id
+        key = (a, at or self.acct.cfg.execution)
+        cur = self.orders.get(key)
         if kind == "target":
-            self.orders[a] = ("target", value)
+            self.orders[key] = ("target", value)
         elif cur is None:
-            self.orders[a] = ("delta", value)
+            self.orders[key] = ("delta", value)
         elif cur[0] == "delta":
-            self.orders[a] = ("delta", cur[1] + value)
+            self.orders[key] = ("delta", cur[1] + value)
         # a delta after a target is ignored, as before: the target already fixes the size
+        return None
+
+    def cancel(self, oid=None, a=None):
+        n = 0
+        for o in self.book:
+            if o.status == "open" and (oid is None or o.id == oid) and (a is None or o.a == a):
+                o.status = "cancelled"
+                n += 1
+        self.book_stats["cancelled"] += n
+        self.book = [o for o in self.book if o.status == "open"]
+        return n
+
+    def open_orders(self, a=None):
+        return [o.as_dict(self.acct.panel) for o in self.book if o.status == "open" and (a is None or o.a == a)]
+
+    def process_book(self, t):
+        """Check resting orders against bar t (orders placed at t-1's close or earlier)."""
+        acct, p = self.acct, self.acct.panel
+        pessimistic = acct.cfg.fill_model == "pessimistic"
+        live = [o for o in self.book if o.status == "open" and o.created < t]
+        hits = []
+        for o in live:
+            if not p.live[o.a][t]:
+                continue
+            ds, j = p.sets[o.a], p.nat[o.a][t]
+            sh = acct.shares[o.a]
+            qty = o.value - sh if o.kind == "target" else o.value
+            if abs(qty) < 1e-9:
+                o.status = "done"          # e.g. a stop-loss on a position that is already closed
+                continue
+            if pessimistic and sh:
+                first_low = sh > 0         # the adverse extreme comes first
+            else:
+                first_low = abs(ds.open[j] - ds.low[j]) <= abs(ds.high[j] - ds.open[j])
+            hit = _book_fill(o, 1 if qty > 0 else -1, _path(ds.open[j], ds.high[j], ds.low[j], ds.close[j], first_low), pessimistic)
+            if hit:
+                hits.append((hit[0], o.id, o, hit[1], hit[2], 1 if qty > 0 else -1))
+        hits.sort(key=lambda h: (h[0], h[1]))
+        for _, _, o, price, maker, side in hits:
+            if o.status != "open":
+                continue
+            sh = acct.shares[o.a]
+            qty = o.value - sh if o.kind == "target" else o.value
+            if abs(qty) < 1e-9 or (1 if qty > 0 else -1) != side:
+                continue                   # an earlier fill this bar already changed the position
+            px = [None] * acct.k
+            px[o.a] = price
+            acct.arrival_t = o.created
+            acct.share_orders({o.a: ("delta", qty)}, px, t, maker=maker, kind=o.type)
+            done = acct.shares[o.a] - sh
+            if abs(done) < 1e-9:
+                continue
+            if o.kind == "delta":
+                o.value -= done
+            if abs((o.value - acct.shares[o.a]) if o.kind == "target" else o.value) < 1e-9:
+                o.status = "filled"
+                self.book_stats["filled"] += 1
+            if o.oco is not None:
+                for other in self.book:
+                    if other is not o and other.status == "open" and other.oco == o.oco:
+                        other.status = "cancelled"
+                        self.book_stats["cancelled"] += 1
+        for o in live:
+            if o.status == "open" and o.tif == "day":
+                o.status = "expired"
+                self.book_stats["expired"] += 1
+        self.book = [o for o in self.book if o.status == "open"]
+
+
+def _carry(carry, t_dec, weights, w_at, orders):
+    """Merge what couldn't fill today into the pending orders for the next bar."""
+    if not weights and not orders:
+        return carry
+    if carry is None:
+        carry = {"t": t_dec, "weights": None, "w_at": w_at, "orders": {}}
+    if weights:
+        carry["weights"] = {**(carry["weights"] or {}), **weights}
+        carry["w_at"] = w_at
+    carry["orders"].update(orders)
+    return carry
 
 
 def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_output=True, rates=None):
@@ -2328,7 +2626,6 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
 
         pending = None
         wiped = False
-        exe_open = cfg.execution == "open"
         mm = cfg.maintenance_margin
         for t in range(s, e + 1):
             run.t = t
@@ -2336,17 +2633,28 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
                 acct.accrue(t - 1, t)
                 if cfg.total_return:
                     acct.pay_dividends(t)
-            if pending is not None and not wiped:
-                px = [None] * k
-                for a in range(k):
-                    if panel.live[a][t]:
-                        j = panel.nat[a][t]
-                        px[a] = panel.sets[a].open[j] if exe_open else panel.sets[a].close[j]
-                if pending[0] == "weights":
-                    later = acct.rebalance(pending[1], px, t)
-                else:
-                    later = acct.share_orders(pending[1], px, t)
-                pending = (pending[0], later) if later else None
+            if not wiped:
+                acct.begin_bar(t)
+                carry = None
+                for phase in ("open", "close"):
+                    if phase == "close" and run.book:
+                        run.process_book(t)          # intrabar: between the open and the close
+                    if pending is None:
+                        continue
+                    acct.arrival_t = pending["t"]
+                    px = [None] * k
+                    for a in range(k):
+                        if panel.live[a][t]:
+                            j = panel.nat[a][t]
+                            px[a] = panel.sets[a].open[j] if phase == "open" else panel.sets[a].close[j]
+                    if pending["weights"] is not None and pending["w_at"] == phase:
+                        lw, ls = acct.rebalance(pending["weights"], px, t)
+                        carry = _carry(carry, pending["t"], lw, phase, {(a, phase): v for a, v in ls.items()})
+                    group = {a: v for (a, at), v in pending["orders"].items() if at == phase}
+                    if group:
+                        later = acct.share_orders(group, px, t)
+                        carry = _carry(carry, pending["t"], None, phase, {(a, phase): v for a, v in later.items()})
+                pending = carry
             eq = acct.equity_marked(t)
             if eq <= 0 and not wiped:
                 wiped = True
@@ -2387,7 +2695,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
             if row is not None:
                 w = row(t)
                 if w is not None:
-                    pending = ("weights", w)
+                    pending = {"t": t, "weights": w, "w_at": cfg.execution, "orders": {}}
                 continue
             run.orders = {}
             r = strategy.on_bar(ctx)
@@ -2401,9 +2709,9 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
                         raise TypeError("on_bar must return a number (target weight) or None, got %r" % (r,))
                     w = None if isnan(w) else {0: w}
                 if w is not None:
-                    pending = ("weights", w)
+                    pending = {"t": t, "weights": w, "w_at": cfg.execution, "orders": {}}
             elif run.orders:
-                pending = ("shares", dict(run.orders))
+                pending = {"t": t, "weights": None, "w_at": cfg.execution, "orders": dict(run.orders)}
     except StrategyError:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -2444,6 +2752,8 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         commission=acct.commission, slippage=acct.slippage,
         traded_notional=acct.traded_notional, clipped=acct.clipped,
         carry=dict(acct.carry), margin_calls=acct.margin_calls,
+        spread_paid=acct.spread_paid, impact_paid=acct.impact_paid, partial_fills=acct.partial_fills,
+        book_stats=dict(run.book_stats, open=len(run.book)),
         logs=logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
         signals=sig,
     )
@@ -2557,6 +2867,14 @@ METRICS = [
     ("borrow_paid", "Borrow fees", "Carry & exposure", "money", "extra", "Fees paid to borrow shares for short positions."),
     ("carry_total", "Net carry", "Carry & exposure", "money", "extra", "Dividends + interest - borrow fees."),
     ("margin_calls", "Margin calls", "Carry & exposure", "int", "std", "Times equity fell below the maintenance margin and positions were cut."),
+
+    ("is_bps", "Implementation shortfall", "Execution", "bps", "std", "Average fill price vs the close when the order was decided, in bps of traded value (side-adjusted; costs, delay and price moves until the fill)."),
+    ("is_cost", "Shortfall ($)", "Execution", "money", "extra", "Implementation shortfall in dollars: what trading at the decision price would have saved, before commissions."),
+    ("spread_paid", "Spread paid", "Execution", "money", "extra", "Half the bid-ask spread on every market fill."),
+    ("impact_paid", "Market impact", "Execution", "money", "extra", "Square-root price impact of the fills, from their size vs average daily volume."),
+    ("partial_fills", "Partial fills", "Execution", "int", "std", "Orders spread over several bars by the participation limit."),
+    ("limit_filled", "Resting orders filled", "Execution", "int", "extra", "Limit, stop and stop-limit orders that filled."),
+    ("limit_unfilled", "Resting orders unfilled", "Execution", "int", "extra", "Limit and stop orders that expired or were cancelled without filling completely."),
 
     ("t_stat", "t-statistic (mean return)", "Statistical tests", "num", "extra", "Mean daily excess return / its standard error. Above 2 suggests the mean is not zero."),
     ("p_value", "p-value (mean return > 0)", "Statistical tests", "pval", "extra", "Chance of a t-statistic this high if the true mean return were zero (one-sided, normal approximation). Below 0.05 is the usual bar."),
@@ -2828,7 +3146,7 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
         bm = period_returns(dates, bench_equity, "month")
         m["beat_months"] = sum(1 for (_, a), (_, b) in zip(sm, bm) if a > b) / len(sm)
         # Regression r - rf = a + beta (rb - rf) + e; the t-statistic of the intercept a.
-        if not isnan(beta):
+        if not isnan(beta) and len(r) > 2:
             x = [v - rfd for v in rb]
             y = [v - rfd for v in r]
             mx = mean(x)
@@ -2915,8 +3233,9 @@ def summarize(res, rf=None):
     """Strategy and benchmark metrics for a Result."""
     rf = res.config.risk_free if rf is None else rf
     m = performance(res.dates, res.equity, rf, res.bench_equity, res.trades, res.exposure,
-                    res.traded_notional, res.commission + res.slippage, len(res.fills), res.clipped,
-                    "ret_notional" if res.portfolio else "ret")
+                    res.traded_notional, res.commission + res.slippage + res.spread_paid + res.impact_paid,
+                    len(res.fills), res.clipped, "ret_notional" if res.portfolio else "ret")
+    m.update(execution_stats(res))
     m.update(exposure_stats(res))
     c = res.carry
     m["dividends_net"] = c["dividends_received"] - c["dividends_paid"]
@@ -2926,6 +3245,21 @@ def summarize(res, rf=None):
     m["margin_calls"] = len(res.margin_calls)
     b = performance(res.dates, res.bench_equity, rf)
     return m, b
+
+
+def execution_stats(res):
+    """Transaction-cost analysis of the fills."""
+    short_cost = notional = 0.0
+    for f in res.fills:
+        arr = f.get("arrival")
+        if arr:
+            side = 1 if f["qty"] > 0 else -1
+            short_cost += side * (f["price"] - arr) * abs(f["qty"])
+            notional += arr * abs(f["qty"])
+    b = res.book_stats
+    return {"is_bps": short_cost / notional * 1e4 if notional else NAN, "is_cost": short_cost,
+            "spread_paid": res.spread_paid, "impact_paid": res.impact_paid, "partial_fills": res.partial_fills,
+            "limit_filled": b["filled"], "limit_unfilled": b["expired"] + b["cancelled"]}
 
 
 def attribution(res):
@@ -3379,10 +3713,11 @@ def api_run(p):
         "gross": res.gross, "net": res.net, "long": res.long, "short": res.short,
         "fills": [{"i": f["i"] - res.start, "date": f["date"], "ticker": f["ticker"], "side": f["side"],
                    "qty": f["qty"], "price": f["price"], "commission": f["commission"],
-                   "position": f["position"], "reason": f.get("reason")}
+                   "position": f["position"], "reason": f.get("reason"), "kind": f.get("kind"),
+                   "arrival": f.get("arrival")}
                   for f in res.fills],
         "trades": res.trades, "metrics": m, "bench_metrics": b,
-        "carry": res.carry, "margin_calls": res.margin_calls[:50],
+        "carry": res.carry, "margin_calls": res.margin_calls[:50], "book": res.book_stats,
         "monthly": monthly_table(res.dates, res.equity),
         "bench_monthly": monthly_table(res.dates, res.bench_equity),
         "hist": histogram([daily_returns(res.equity), daily_returns(res.bench_equity)]),

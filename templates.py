@@ -157,6 +157,33 @@ def on_bar(ctx):
     stop = ctx.state["peak"] - PARAMS["atr_mult"] * a
     return 0.0 if ctx.price < stop else None
 
+#%% id: bracket
+#%% name: Breakout with Stop-Loss & Target
+#%% group: Breakout
+#%% about: Enter on a stop order just above the 20-day high, then exit with a bracket: a stop-loss 2 ATRs below the entry & a take-profit 3 ATRs above, whichever comes first.
+# Resting orders fill inside the next bar when its range reaches them:
+#   ctx.order(qty, stop=price)                buy when the price rises to `price`
+#   ctx.order_target_shares(0, limit=price)   sell everything at `price` or better
+# tif="gtc" keeps an order until it fills or is cancelled (the default lasts one bar),
+# and orders with the same oco name cancel each other when one of them fills.
+
+PARAMS = {"n": 20, "atr_n": 14, "stop_atr": 2.0, "target_atr": 3.0, "buffer": 0.005}
+
+def on_bar(ctx):
+    high = ctx.highest(PARAMS["n"])
+    a = ctx.atr(PARAMS["atr_n"])
+    if isnan(high) or isnan(a):
+        return None
+    if ctx.is_flat:
+        ctx.cancel_all()                                   # clear any leftover exit order
+        trigger = high * (1 + PARAMS["buffer"])
+        ctx.order(ctx.equity * 0.98 / trigger, stop=trigger)  # a day order, placed again each bar
+    elif not ctx.open_orders:                              # just filled: place the bracket once
+        entry = ctx.entry_price
+        ctx.order_target_shares(0, stop=entry - PARAMS["stop_atr"] * a, tif="gtc", oco="exit")
+        ctx.order_target_shares(0, limit=entry + PARAMS["target_atr"] * a, tif="gtc", oco="exit")
+    return None
+
 #%% id: rsi_reversion
 #%% name: RSI Oversold
 #%% group: Mean Reversion

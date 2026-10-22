@@ -520,6 +520,127 @@ def test_attribution_adds_up_with_carry():
     assert approx(m["avg_net"], 0.4, 0.05) and approx(m["avg_gross"], 1.2, 0.05) and m["avg_short"] > 0.35
 
 
+# ----------------------------------------------------- execution -----
+
+def bars(rows, volume=1e9, start="2021-03-01"):
+    """DataSet from (open, high, low, close) rows on consecutive NYSE days."""
+    days = engine.session_days(start, "2030-12-31")[:len(rows)]
+    o, h, l, c = zip(*rows)
+    return engine.DataSet("BAR", days, list(c), list(o), list(h), list(l), [volume] * len(rows))
+
+
+def run_bars(code, rows, **cfg):
+    cfg.setdefault("slippage_bps", 0.0)
+    cfg.setdefault("maintenance_margin", 0.0)
+    return engine.backtest(engine.Strategy.from_code(code), bars(rows, cfg.pop("volume", 1e9)), engine.Config(**cfg))
+
+
+FLAT = (100, 100, 100, 100)
+
+
+def test_limit_orders_fill_against_the_bar_range():
+    entry = "def on_bar(ctx):\n    if ctx.bar == 0:\n        ctx.order(10, limit=%s)\n"
+    res = run_bars(entry % 99.5, [FLAT, (101, 102, 99, 100), FLAT])
+    assert [(f["price"], f["kind"]) for f in res.fills] == [(99.5, "limit")]
+    gap = run_bars(entry % 99.5, [FLAT, (98, 99, 97, 98), FLAT])
+    assert gap.fills[0]["price"] == 98, "a gap through the limit fills at the open"
+    touch = run_bars(entry % 99, [FLAT, (101, 102, 99, 100), FLAT])
+    assert touch.fills and touch.fills[0]["price"] == 99
+    strict = run_bars(entry % 99, [FLAT, (101, 102, 99, 100), FLAT], fill_model="pessimistic")
+    assert not strict.fills, "pessimistic: touching the limit isn't enough"
+    missed = run_bars(entry % 95, [FLAT, (101, 102, 99, 100), (100, 100, 90, 92)])
+    assert not missed.fills and missed.book_stats["expired"] == 1, "a day order lives for one bar"
+    gtc = run_bars((entry % 95).replace(")\n", ", tif='gtc')\n"), [FLAT, (101, 102, 99, 100), (96, 97, 94, 95)])
+    assert gtc.fills[0]["price"] == 95 and gtc.fills[0]["i"] == 2
+    costs = run_bars(entry % 99.5, [FLAT, (101, 102, 99, 100), FLAT], slippage_bps=10, spread_bps=20, commission_bps=5)
+    f = costs.fills[0]
+    assert f["price"] == 99.5 and approx(f["commission"], 10 * 99.5 * 5e-4), "limits pay commission only"
+
+
+def test_stop_and_stop_limit_orders():
+    exit_ = ("def on_bar(ctx):\n    if ctx.bar == 0:\n        return 1.0\n"
+             "    if ctx.bar == 1:\n        ctx.order_target_shares(0, stop=95, tif='gtc')\n")
+    res = run_bars(exit_, [FLAT, FLAT, FLAT, (90, 91, 88, 89), FLAT], slippage_bps=10)
+    sell = res.fills[-1]
+    assert sell["kind"] == "stop" and approx(sell["price"], 90 * (1 - 0.001)), "a stop gapped through fills at the open, as a market order"
+    sl = "def on_bar(ctx):\n    if ctx.bar == 0:\n        ctx.order(10, stop=105, limit=106)\n"
+    hit = run_bars(sl, [FLAT, (104, 108, 103, 107), FLAT])
+    assert hit.fills[0]["price"] == 105 and hit.fills[0]["kind"] == "stop_limit"
+    gapped = run_bars(sl, [FLAT, (107, 108, 103, 104), FLAT])
+    assert gapped.fills[0]["price"] == 106, "triggered above the limit, filled when the price came back to it"
+    waits = run_bars(sl.replace(")\n", ", tif='gtc')\n"), [FLAT, (107, 108, 103, 104), (105, 106, 104, 105)], fill_model="pessimistic")
+    assert waits.fills[0]["i"] == 2 and waits.fills[0]["price"] == 105, "pessimistic: the triggered order waits as a limit"
+
+
+def test_bracket_orders_and_pessimistic_ordering():
+    code = ("def on_bar(ctx):\n    if ctx.bar == 0:\n        return 1.0\n"
+            "    if ctx.bar == 1:\n"
+            "        ctx.order_target_shares(0, limit=110, tif='gtc', oco='exit')\n"
+            "        ctx.order_target_shares(0, stop=95, tif='gtc', oco='exit')\n")
+    rows = [FLAT, FLAT, FLAT, (105, 111, 94, 100), FLAT]          # both levels inside one bar
+    std = run_bars(code, rows)
+    assert std.fills[-1]["price"] == 110, "open nearer the high: the target is reached first"
+    pes = run_bars(code, rows, fill_model="pessimistic")
+    assert pes.fills[-1]["price"] == 95, "pessimistic: a long hits its stop first"
+    for r in (std, pes):
+        assert r.position[-1] == 0 and r.book_stats["cancelled"] == 1, "oco cancels the other exit"
+    already_flat = run_bars("def on_bar(ctx):\n    if ctx.bar == 0:\n        ctx.order_target_shares(0, stop=95)\n",
+                            [FLAT, (90, 91, 88, 89), FLAT])
+    assert not already_flat.fills, "a target exit with nothing to exit does nothing"
+
+
+def test_participation_limit_spreads_fills_over_days():
+    code = "def on_bar(ctx):\n    if ctx.bar == 0:\n        ctx.order(450)\n"
+    res = run_bars(code, [FLAT] * 8, volume=1000.0, max_participation=0.1, cash=100000.0)
+    assert [f["qty"] for f in res.fills] == [100.0, 100.0, 100.0, 100.0, 50.0]
+    assert res.position[-1] == 450 and res.partial_fills == 4
+    m, _ = engine.summarize(res)
+    assert m["partial_fills"] == 4
+    w = run_bars("def on_bar(ctx):\n    return 1.0\n", [FLAT] * 8, volume=10.0, max_participation=0.5)
+    assert w.position[1] == 5.0 and w.position[2] == 10.0 and all(abs(f["qty"]) <= 5.0 + 1e-9 for f in w.fills)
+
+
+def test_square_root_impact_and_spread():
+    import random as rnd
+    rng = rnd.Random(5)
+    px, rows = 100.0, []
+    for _ in range(60):
+        nxt = px * (1 + rng.gauss(0, 0.01))
+        rows.append((px, max(px, nxt), min(px, nxt), nxt))
+        px = nxt
+
+    def cost(q, coef=1.0):
+        r = run_bars("def on_bar(ctx):\n    if ctx.bar == 30:\n        ctx.order(%d)\n" % q, rows,
+                     volume=1e5, impact_coef=coef, cash=1e7)
+        return r, r.impact_paid
+    r1, c1 = cost(1000)
+    _, c4 = cost(4000)
+    _, c1x2 = cost(1000, 2.0)
+    assert c1 > 0 and approx(c4 / c1, 8.0, 1e-6), "impact cost grows as size^1.5 (price impact as sqrt)"
+    assert approx(c1x2 / c1, 2.0, 1e-9)
+    f = r1.fills[0]
+    sig = engine._trailing_vol(r1.panel.sets[0].close, 20)[31]
+    assert approx(f["price"], rows[31][0] * (1 + sig * math.sqrt(1000 / 1e5)), 1e-12)
+    sp = run_bars("def on_bar(ctx):\n    if ctx.bar == 0:\n        ctx.order(10)\n", [FLAT, FLAT, FLAT], spread_bps=10)
+    assert approx(sp.spread_paid, 10 * 100 * 0.0005) and approx(sp.fills[0]["price"], 100.05)
+
+
+def test_implementation_shortfall_and_market_on_close():
+    rows = [FLAT, (102, 103, 101, 104), FLAT]
+    res = run_bars("def on_bar(ctx):\n    if ctx.bar == 0:\n        ctx.order(10)\n", rows, slippage_bps=10)
+    m, _ = engine.summarize(res)
+    assert res.fills[0]["arrival"] == 100
+    assert approx(m["is_bps"], (102 * 1.001 / 100 - 1) * 1e4, 1e-9), "delay to the open plus slippage"
+    assert approx(m["is_cost"], 10 * (102 * 1.001 - 100), 1e-9)
+    moc = run_bars("def on_bar(ctx):\n    if ctx.bar == 0:\n        ctx.order(10, at='close')\n", rows)
+    assert moc.fills[0]["price"] == 104 and moc.fills[0]["i"] == 1, "at='close' fills at the next close"
+    try:
+        run_bars("def on_bar(ctx):\n    ctx.order(1, limt=5)\n", rows)
+        raise AssertionError("misspelled order option must raise")
+    except engine.StrategyError as e:
+        assert "unknown order option limt" in e.info["message"]
+
+
 # ---------------------------------------------- dividends & carry -----
 
 def test_dividends_are_paid_and_total_return_benchmark():

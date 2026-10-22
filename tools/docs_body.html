@@ -171,7 +171,23 @@ def on_bar(ctx):
     <p>To think in shares instead, call these and return nothing:</p>
 <pre><code>ctx.order(10)               # buy 10 shares (negative sells)
 ctx.order_target_shares(0)  # end up with exactly 0 shares</code></pre>
-    <p>Orders that need more cash than you have are reduced to what you can afford. Sells beyond your position are reduced too, unless shorting is on. Each reduction is counted in the <b>Orders reduced</b> statistic. If on_bar returns a weight, that weight wins over any share orders from the same bar.</p>
+    <p>Orders that need more cash than you have are reduced to what you can afford. Sells beyond your position are reduced too, unless shorting is on. Each reduction is counted in the <b>Orders reduced</b> statistic. If on_bar returns a weight, that weight wins over any market orders from the same bar.</p>
+
+    <h3 id="order-types">Limit, Stop &amp; Bracket Orders</h3>
+    <p>Both order functions take options. Market orders fill at the next bar's open (or close); orders with a price rest and fill <i>inside</i> a later bar when its range reaches them.</p>
+<pre><code>ctx.order(10, limit=99.5)                    # buy at 99.5 or better
+ctx.order(10, stop=105)                      # buy once the price rises to 105
+ctx.order(10, stop=105, limit=106)           # stop-limit: triggered at 105, no higher than 106
+ctx.order(10, at="close")                    # market on the next close (at="open": on the open)
+oid = ctx.order(-5, limit=110, tif="gtc")    # good till cancelled; ctx.cancel(oid), ctx.cancel_all()
+ctx.order_target_shares(0, stop=95, tif="gtc", oco="exit")    # a bracket: whichever fills first
+ctx.order_target_shares(0, limit=110, tif="gtc", oco="exit")  # cancels the other</code></pre>
+    <ul>
+      <li><b>Fill price.</b> A buy limit fills when the bar's low reaches the limit, at the limit, or at the open if the bar opens below it. A stop triggers when the high (low, for sells) reaches it and fills at the stop, or at the open after a gap. A stop-limit that triggers above its limit fills only if the price comes back to the limit.</li>
+      <li><b>Which order first.</b> The bar is treated as a path from the open to the nearer extreme, the other extreme, then the close; orders fill in the order the path reaches them. With <b>Pessimistic</b> fills, a long position's path visits the low first and a short's the high first, so a bar that touches both a stop and a target hits the stop; a limit must trade through its price, not just touch it, and a stop-limit that gaps past its limit waits for a later bar.</li>
+      <li><b>Lifetime.</b> <code>tif="day"</code> (the default) lives for the next bar only; <code>"gtc"</code> until it fills or is cancelled. <code>ctx.open_orders</code> lists resting orders. Target orders are sized when they fill, so an exit never turns into a new position, and one with nothing left to exit is dropped.</li>
+      <li><b>Costs.</b> Market orders and triggered stops pay slippage, half the spread and impact. Limit fills provide liquidity and pay commission only.</li>
+    </ul>
 
     <h3>Parameters, Memory & Setup</h3>
 <pre><code>PARAMS = {"fast": 20, "slow": 100}   # numbers here can be swept in Research tools
@@ -306,6 +322,7 @@ def signals(data):
       <div><b>Day t+1, at the open</b>The order fills at the open price (or at the close with <i>Orders fill at: Next close</i>), plus slippage and commission.</div>
       <div><b>Day t+1, at the close</b>Equity is marked at the closing price. on_bar runs again.</div>
     </div>
+    <p>Every fill records its <b>arrival price</b>, the close when the order was decided. The <b>Implementation shortfall</b> statistic averages how far fills landed from it, which captures the overnight delay as well as costs, the way trading desks measure execution.</p>
     <p>This one-day delay is the most important rule in backtesting. Deciding and filling at the same price is a common backtest mistake, and it makes results look better than they could be in practice.</p>
     <div class="scroll"><table>
       <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
@@ -313,7 +330,11 @@ def signals(data):
         <tr><td>Starting cash</td><td>$10,000</td><td>Initial equity. Small accounts with fractional shares off can only buy whole shares.</td></tr>
         <tr><td>Commission bps</td><td>0</td><td>Charged on traded value. 1 bp = 0.01%, so 10 bps on a $10,000 trade is $10.</td></tr>
         <tr><td>Per fill $</td><td>0</td><td>Flat fee on every fill.</td></tr>
-        <tr><td>Slippage bps</td><td>2</td><td>Buys fill this much above the price and sells this much below. It models the bid/ask spread and market impact.</td></tr>
+        <tr><td>Slippage bps</td><td>2</td><td>Buys fill this much above the price and sells this much below, on every market fill.</td></tr>
+        <tr><td>Bid-ask spread bps</td><td>0</td><td>The quoted spread; each market fill pays half of it.</td></tr>
+        <tr><td>Impact coefficient</td><td>1</td><td>Square-root market impact: a fill moves the price by <i>coefficient × σ × √(shares ÷ ADV)</i>, where σ is the daily volatility and ADV the average volume of the 20 bars before the fill. Around 1 matches published estimates for liquid stocks; 0 turns it off. It is negligible for small accounts and dominates for large ones.</td></tr>
+        <tr><td>Max % of volume</td><td>10%</td><td>The most of a bar's volume an order may take. Larger orders fill over several days (counted as <b>Partial fills</b>). 0 removes the limit.</td></tr>
+        <tr><td>Limit &amp; stop fills</td><td>Standard</td><td>Pessimistic changes the fill rules described under <a href="#order-types">order types</a>.</td></tr>
         <tr><td>Orders fill at</td><td>Next open</td><td>Next open or next close.</td></tr>
         <tr><td>Max leverage</td><td>1×</td><td>Largest allowed position value / equity, long or short.</td></tr>
         <tr><td>Rebalance band</td><td>2%</td><td>Weight changes smaller than this share of equity are skipped. Entries and full exits always trade.</td></tr>
