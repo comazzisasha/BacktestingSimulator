@@ -3265,8 +3265,13 @@ def _prepare(p):
     A single-instrument run sends 'ticker'; a portfolio run sends 'tickers' (or
     'portfolio': true with one ticker). 'benchmark' empty or equal to the single
     ticker means buy and hold of that ticker (single) or equal weight (portfolio)."""
-    portfolio = bool(p.get("tickers")) or bool(p.get("portfolio"))
-    tickers = list(p.get("tickers") or [p["ticker"]])
+    strat = Strategy.from_code(p["code"], p.get("params"))
+    portfolio = bool(p.get("tickers")) or bool(p.get("portfolio")) or bool(strat.universe)
+    tickers = list(p.get("tickers") or (strat.universe if strat.universe and not p.get("portfolio") else [p["ticker"]]))
+    missing = [t for t in tickers if t not in DATA]
+    if missing and strat.universe and not p.get("tickers"):
+        raise ValueError("This strategy's UNIVERSE lists %s, which %s not loaded. Add %s on the Data tab."
+                         % (", ".join(missing), "is" if len(missing) == 1 else "are", "it" if len(missing) == 1 else "them"))
     sets = [_get(t) for t in tickers]
     b = p.get("benchmark") or ""
     bench = _get(b) if b and not (not portfolio and b == tickers[0]) else None
@@ -3276,7 +3281,6 @@ def _prepare(p):
         if cfg.rate_ticker not in RATES:
             raise ValueError("No rate series named %s is loaded. Add it on the Data tab." % cfg.rate_ticker)
         rates = RATES[cfg.rate_ticker]
-    strat = Strategy.from_code(p["code"], p.get("params"))
     return sets, bench, cfg, strat, portfolio, rates
 
 

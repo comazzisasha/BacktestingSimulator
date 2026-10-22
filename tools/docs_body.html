@@ -96,6 +96,7 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#ctx">The ctx Object</a></li>
       <li><a href="#indicators">Indicators</a></li>
       <li><a href="#signals">Vectorized Signals</a></li>
+      <li><a href="#portfolios">Portfolios</a></li>
       <li><a href="#ml">Machine Learning</a></li>
       <li><a href="#execution">Execution & Costs</a></li>
       <li><a href="#statistics">Statistics</a></li>
@@ -130,7 +131,7 @@ def on_bar(ctx):
     <p>Editor shortcuts: <kbd>Tab</kbd> and <kbd>Shift</kbd>+<kbd>Tab</kbd> indent, <kbd>Ctrl</kbd>+<kbd>/</kbd> toggles comments, <kbd>Ctrl</kbd>+<kbd>S</kbd> saves the strategy in this browser. Press <kbd>Esc</kbd> then <kbd>Tab</kbd> to move focus out of the editor. Your current draft is kept automatically.</p>
 
     <h2 id="data">Getting Data</h2>
-    <p>QuantLab reads the CSV export from Nasdaq.com’s historical quotes page. Columns are <code>Date, Close/Last, Volume, Open, High, Low</code>, newest row first, and prices may start with <code>$</code>. Yahoo Finance exports (<code>Date, Open, High, Low, Close, Adj Close, Volume</code>) also work. When <code>Adj Close</code> is present, all prices are scaled by it so dividends and splits are included.</p>
+    <p>QuantLab reads the CSV export from Nasdaq.com’s historical quotes page. Columns are <code>Date, Close/Last, Volume, Open, High, Low</code>, newest row first, and prices may start with <code>$</code>. Yahoo Finance exports (<code>Date, Open, High, Low, Close, Adj Close, Volume</code>) also work. The raw close is always the trading price; an <code>Adj Close</code> column is used only to work out the dividends (see below). The browser and the Python engine read files with exactly the same rules.</p>
     <ol>
       <li>Open <code>https://www.nasdaq.com/market-activity/etf/spy/historical</code>. Stocks use <code>/stocks/aapl/historical</code> instead.</li>
       <li>Choose <b>10Y</b>, the longest range offered, and download.</li>
@@ -138,7 +139,15 @@ def on_bar(ctx):
     </ol>
     <p>Uploaded files are stored in your browser (IndexedDB) and reappear the next time you open QuantLab in the same browser. To bundle files with the site for everyone, put them in <code>data/</code> and list them in <code>data/manifest.json</code>.</p>
     <p>The suggested starting set covers the main asset classes: <code>SPY QQQ IWM DIA</code> (US stocks), <code>TLT IEF SHY</code> (Treasuries), <code>GLD SLV USO</code> (commodities), <code>EFA EEM</code> (international), <code>XLK XLF XLE XLV</code> (sectors), and <code>AAPL MSFT NVDA AMZN JPM XOM KO</code> (single stocks).</p>
-    <div class="note"><p><b>Dividends.</b> Nasdaq's Close/Last is adjusted for splits but not for dividends. Buy-and-hold results for dividend payers such as SPY (about 1.3% a year) or TLT (about 3–4%) are therefore understated. Strategies and benchmarks are measured on the same prices, so comparisons between them stay fair.</p></div>
+    <h3 id="total-return">Dividends &amp; Total Return</h3>
+    <p>Nasdaq's Close/Last is adjusted for splits but <b>not for dividends</b>, so on its own it understates the return of SPY by about 1.3% a year and of bond ETFs by 3–4%. QuantLab trades on the real price and pays dividends into the account on each ex-date, so P&amp;L is total return while your signals see the prices a trader would have seen. Short positions pay the dividend. The benchmark reinvests dividends. Dividends come from:</p>
+    <ul>
+      <li>an <b>Adj Close</b> column (Yahoo Finance): the dividend on each ex-date is recovered from the step in the adjustment factor, <code>D = close[t-1] × (1 − F[t-1] / F[t])</code> with <code>F = adj / close</code>;</li>
+      <li>a <b>dividend history file</b> dropped on the Data tab, e.g. Nasdaq's Dividend History export or Yahoo's <code>Date,Dividends</code>. Name it <code>SPY_dividends.csv</code> to attach it automatically.</li>
+    </ul>
+    <p>A <b>split history</b> (<code>Date,Stock Splits</code> with values like <code>4:1</code>) is applied only if the prices jump by about the ratio at the split, i.e. they are unadjusted; already-adjusted prices are left alone. Runs on instruments without dividend data say so in the results (<b>Dividends missing</b>). The bundled files are Nasdaq downloads and carry no dividends. <b>Pay dividends</b> under Account &amp; Execution turns all of this off for price-only results.</p>
+    <h3 id="quality">Data Quality</h3>
+    <p>Every instrument is checked when it loads, and the Data tab lists what was found. Nothing is dropped silently: rows without a valid date and positive close are skipped and counted, impossible highs/lows are widened and counted, and duplicates keep the later row. The checks against the exchange calendar (NYSE holidays and special closures; every day for crypto that trades on weekends) report missing sessions and bars on closed days. Runs of identical closes are flagged as stale, and one-day moves above 12% that are also 8 standard deviations from the last 60 days are flagged as possible unadjusted splits or bad prints.</p>
 
     <h2 id="strategy-api">Writing a Strategy</h2>
     <p>Your code is ordinary Python 3.12. It must define <code>on_bar(ctx)</code>, or <code>signals(data)</code> for the <a href="#signals">vectorized style</a>. A few names are available without importing them: <code>math</code>, <code>statistics</code>, <code>random</code>, <code>datetime</code>, <code>qt</code> (indicator functions), <code>walk_forward</code> (see <a href="#ml">Machine Learning</a>), <code>isnan</code> and <code>NAN</code>. The rest of the standard library can be imported normally, and so can NumPy, pandas, SciPy and scikit-learn.</p>
@@ -241,6 +250,19 @@ def on_bar(ctx):
     return [1.0 if f &gt; s else 0.0 for f, s in zip(fast, slow)]</code></pre>
     <p>The engine still applies weight <code>i</code> on bar <code>i + 1</code>. However, nothing stops <code>signals</code> from reading <code>data.close[i + 1]</code> by mistake. To catch that, QuantLab re-runs your function on histories cut off at several dates and compares the results. If any weight changes, the run is flagged <b>Look-ahead detected</b>, and its numbers are not achievable.</p>
 
+    <h2 id="portfolios">Portfolios</h2>
+    <p>A strategy that defines <code>UNIVERSE</code> is a portfolio strategy. The Market panel then picks several instruments, starting from that list, and the backtest runs them together on one calendar: the union of their trading days. An instrument can't trade before its first bar or on a day it has no bar; it is valued at its last price in between. Indicators use each instrument's own bars.</p>
+<pre><code>UNIVERSE = ["SPY", "TLT", "GLD"]
+
+def on_bar(ctx):
+    if ctx.state.get("month") == ctx.day.month:
+        return None                               # keep everything
+    ctx.state["month"] = ctx.day.month
+    up = [t for t in ctx.tickers if ctx[t].price &gt; ctx[t].sma(200)]
+    return {t: 1 / len(up) for t in up}             # tickers left out go to 0</code></pre>
+    <p><code>ctx['SPY']</code> has everything a single-instrument ctx has: prices, every indicator, <code>position</code>, <code>weight</code>, <code>is_long</code>, <code>entry_price</code>, <code>order()</code>. The portfolio ctx adds <code>ctx.tickers</code>, <code>ctx.weights</code>, <code>ctx.positions</code>, <code>ctx.gross</code> and <code>ctx.net</code>. Return a dict of weights, a list in ticker order, or <code>None</code>. <code>signals(data)</code> works too: <code>data['SPY'].close</code> is a list on the shared calendar (NaN before the first bar), <code>data.array('close')</code> a NumPy matrix, and it returns <code>{ticker: [weight per bar]}</code> or one dict per bar.</p>
+    <p>Weights whose absolute values add up to more than the leverage limit are scaled down together. Sells execute before buys, and buys share the cash. The results show a <b>Weights</b> chart and an <b>Attribution</b> table: each instrument's P&amp;L (trades, costs, dividends and borrow fees), which with interest on cash adds up exactly to the account's P&amp;L. Without a benchmark the comparison is an equal-weight portfolio of the same instruments, rebalanced daily. In Python use <code>engine.backtest_portfolio(strategy, [ds1, ds2, ...])</code>.</p>
+
     <h2 id="ml">Machine Learning</h2>
     <p>Strategies can <code>import numpy</code>, <code>pandas</code>, <code>scipy</code> and <code>sklearn</code> (scikit-learn). QuantLab loads what your code imports the first time you run it. NumPy (12&nbsp;MB) ships with the site. pandas, SciPy and scikit-learn download from the Pyodide CDN on first use: scikit-learn needs SciPy, about 75&nbsp;MB in all. The browser caches them afterwards.</p>
     <p><b>PyTorch and TensorFlow don’t run in browsers</b>: they have no WebAssembly build. There are three ways around that:</p>
@@ -295,8 +317,13 @@ def signals(data):
         <tr><td>Orders fill at</td><td>Next open</td><td>Next open or next close.</td></tr>
         <tr><td>Max leverage</td><td>1×</td><td>Largest allowed position value / equity, long or short.</td></tr>
         <tr><td>Rebalance band</td><td>2%</td><td>Weight changes smaller than this share of equity are skipped. Entries and full exits always trade.</td></tr>
-        <tr><td>Risk-free %/yr</td><td>0</td><td>Subtracted in Sharpe, Sortino and alpha. Idle cash does not earn it.</td></tr>
+        <tr><td>Risk-free %/yr</td><td>0</td><td>Subtracted in Sharpe, Sortino and alpha. Idle cash earns it unless you set a cash interest rate.</td></tr>
         <tr><td>Random seed</td><td>42</td><td>Seeds <code>random</code>, so random strategies are reproducible.</td></tr>
+        <tr><td>Pay dividends</td><td>On</td><td>Dividends are paid into the account on ex-dates (total return). Off gives price-only results.</td></tr>
+        <tr><td>Cash interest %/yr</td><td>= risk-free</td><td>Interest on positive cash, accrued every calendar day (ACT/360). A rate series loaded on the Data tab (e.g. FRED DTB3) can be used instead of a fixed rate.</td></tr>
+        <tr><td>Margin spread %/yr</td><td>1</td><td>Borrowed cash (a negative balance from leverage) pays the cash rate plus this.</td></tr>
+        <tr><td>Borrow fee %/yr</td><td>0.25</td><td>Charged daily on the value of short positions; hard-to-borrow names can get their own rate (<code>GME:25</code>). Short sale proceeds sit in cash and earn the cash rate, which is how a short rebate works.</td></tr>
+        <tr><td>Maintenance margin</td><td>25%</td><td>When equity falls below this share of gross exposure, every position is cut at that day's close back to the leverage limit (or 80% of 1 / margin, if lower). Margin calls are listed in the results. If equity reaches zero, everything is closed and trading stops.</td></tr>
         <tr><td>Fractional shares</td><td>On</td><td>When off, positions are rounded toward zero to whole shares.</td></tr>
         <tr><td>Allow shorting</td><td>Off</td><td>When off, negative weights become 0 and sells stop at zero shares.</td></tr>
       </tbody>

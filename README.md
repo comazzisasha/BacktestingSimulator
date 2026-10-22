@@ -41,6 +41,14 @@ def on_bar(ctx):
 0 = cash, -1 = short, None = no change). The trade fills at the next day's open.
 Full reference: `docs.html` (also linked from the app).
 
+## Portfolios, dividends and carry
+
+A strategy that sets `UNIVERSE = ["SPY", "TLT", "GLD"]` runs as a portfolio: `on_bar(ctx)` returns
+`{ticker: weight}` and `ctx["SPY"]` has every indicator. Dividends are paid on ex-dates (from an
+Adj Close column or a dividend file dropped on the Data tab), idle cash earns interest, leverage and
+shorts pay financing and borrow fees, and margin calls cut positions. Every instrument gets a
+data-quality check against the NYSE calendar when it loads.
+
 ## Machine learning
 
 Strategies can `import numpy`, `pandas`, `scipy` and `sklearn`; they load on first use
@@ -55,6 +63,11 @@ import engine
 ds = engine.load_csv("SPY.csv", "SPY")
 res = engine.backtest(engine.Strategy.from_code(open("strategy.py").read()), ds)
 stats, bench = engine.summarize(res)
+
+# portfolios
+sets = [engine.load_csv(f"{t}.csv", t) for t in ("SPY", "TLT", "GLD")]
+res = engine.backtest_portfolio(engine.Strategy.from_code(code), sets, engine.Config(cash_rate=0.04))
+print(engine.attribution(res)["rows"])
 ```
 
 ## Files
@@ -62,7 +75,7 @@ stats, bench = engine.summarize(res)
 | Path | What it is |
 |---|---|
 | `engine.py` | Indicators, backtest loop, statistics, research tools, JSON API (pure Python, no dependencies) |
-| `templates.py` | 24 built-in strategies, including 3 machine-learning ones |
+| `templates.py` | 29 built-in strategies, including 5 portfolio and 3 machine-learning ones |
 | `index.html` | The web app |
 | `runtime.js`, `worker.js` | Start Pyodide in a background Web Worker |
 | `docs.html` | Documentation (rebuild with `python tools/build_docs.py`) |

@@ -182,6 +182,8 @@ details.settings > summary { cursor: pointer; list-style: none; display: flex; a
 details.settings > summary::-webkit-details-marker { display: none; }
 details.settings > summary:hover { background: var(--hover); }
 details.settings > summary .chev { margin-left: auto; transition: transform 0.15s; color: var(--fg-3); }
+/* One line only: the summary updates when a field changes, and a wrap would shift the form under the pointer. */
+#settingsSummary { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 details.settings[open] > summary .chev { transform: rotate(180deg); }
 details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 
@@ -209,6 +211,16 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .tok-com { color: var(--syn-com); font-style: italic; }
 .tok-ctx { color: var(--syn-ctx); }
 .save-form { display: grid; gap: 6px; }
+.univ-btn { justify-content: space-between; width: 100%; font-weight: 400; text-align: left; overflow: hidden; }
+.univ-btn span { overflow: hidden; text-overflow: ellipsis; }
+.subhead { font-size: 13px; font-weight: 600; color: var(--fg-2); margin-top: 4px; }
+.badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--border); background: var(--sunk); color: var(--fg-2); white-space: nowrap; }
+.badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.badge.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
+.badge.ok { color: var(--gain); }
+button.badge { cursor: pointer; font: inherit; font-size: 12px; }
+tr.detail td { white-space: normal; background: var(--sunk); font-size: 12.5px; color: var(--fg-2); }
+tr.detail ul { margin: 4px 0; padding-left: 18px; }
 .editor[data-size="m"] { font-size: 14px; --lh: 22px; }
 .editor[data-size="l"] { font-size: 16px; --lh: 24px; }
 
@@ -219,7 +231,7 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 main:has(> #view-edit:not([hidden])) { padding-bottom: 16px; }
 #view-edit .edit-main > .panel-b { display: flex; flex-direction: column; height: calc(100vh - 146px); height: calc(100dvh - 146px); min-height: 480px; }
 #view-edit .editor { flex: 1 1 auto; height: auto !important; resize: none; }
-.edit-side { display: grid; gap: var(--gap); position: sticky; top: 76px; max-height: calc(100vh - 92px); max-height: calc(100dvh - 92px);
+.edit-side { display: grid; gap: var(--gap); position: sticky; top: 76px; max-height: calc(100vh - 146px); max-height: calc(100dvh - 146px);
   overflow-y: auto; scrollbar-width: thin; padding: 2px; margin: -2px; }
 .edit-side .panel-b { grid-template-columns: minmax(0, 1fr); }  /* let moved charts shrink to the sidebar */
 .edit-side .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -397,10 +409,18 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <div class="panel-h"><h2 id="h-market">Market</h2></div>
           <div class="panel-b">
             <div class="grid2">
-              <div class="field"><label for="instrument">Instrument</label><select id="instrument" name="instrument" translate="no"></select></div>
+              <div class="field" id="instField"><label for="instrument">Instrument</label><select id="instrument" name="instrument" translate="no"></select></div>
+              <div class="field" id="univField" hidden><span class="label" id="univLabel">Universe</span>
+                <button class="btn univ-btn" id="univBtn" type="button" aria-expanded="false" aria-controls="univPick" aria-describedby="univLabel"><span id="univSummary" translate="no">—</span><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4 4-4"/></svg></button></div>
               <div class="field"><label for="benchmark">Benchmark</label><select id="benchmark" name="benchmark" translate="no"></select></div>
               <div class="field"><label for="start">From</label><input type="date" id="start" name="from" aria-describedby="start-err"><p class="ferr" id="start-err" hidden></p></div>
               <div class="field"><label for="end">To</label><input type="date" id="end" name="to" aria-describedby="end-err"><p class="ferr" id="end-err" hidden></p></div>
+            </div>
+            <div class="picker" id="univPick" hidden>
+              <div class="row"><input type="text" id="univSearch" name="universe-search" placeholder="Filter tickers…" autocomplete="off" spellcheck="false" aria-label="Filter instruments" style="flex:1 1 140px">
+                <button class="btn small" id="univCode" type="button">Use Strategy’s List</button><button class="btn small" id="univAll" type="button">All</button><button class="btn small" id="univNone" type="button">None</button></div>
+              <fieldset><legend class="sr">Instruments in the portfolio</legend><div class="checks" id="univList" translate="no"></div></fieldset>
+              <p class="help" id="univHelp"></p>
             </div>
             <div class="row"><span class="label" id="rangeLabel">Range</span>
               <div class="seg" id="ranges" role="group" aria-labelledby="rangeLabel">
@@ -461,7 +481,18 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
               <div class="row" style="gap:4px 18px">
                 <label class="check"><input type="checkbox" id="cfgFrac" name="fractional" checked> Fractional shares</label>
                 <label class="check"><input type="checkbox" id="cfgShort" name="short"> Allow shorting</label>
+                <label class="check"><input type="checkbox" id="cfgTR" name="total-return" checked> Pay dividends (total return)</label>
               </div>
+              <h3 class="subhead">Carry &amp; Margin</h3>
+              <div class="grid3">
+                <div class="field"><label for="cfgCashRate">Cash Interest (%/yr)</label><input type="text" inputmode="decimal" id="cfgCashRate" name="cash-rate" value="" placeholder="= risk-free" autocomplete="off" aria-describedby="cfgCashRate-err"><p class="ferr" id="cfgCashRate-err" hidden></p></div>
+                <div class="field"><label for="cfgRateSeries">Or Rate Series</label><select id="cfgRateSeries" name="rate-series" translate="no"><option value="">None</option></select></div>
+                <div class="field"><label for="cfgSpread">Margin Spread (%/yr)</label><input type="text" inputmode="decimal" id="cfgSpread" name="margin-spread" value="1" autocomplete="off" aria-describedby="cfgSpread-err"><p class="ferr" id="cfgSpread-err" hidden></p></div>
+                <div class="field"><label for="cfgBorrow">Borrow Fee (%/yr)</label><input type="text" inputmode="decimal" id="cfgBorrow" name="borrow-fee" value="0.25" autocomplete="off" aria-describedby="cfgBorrow-err"><p class="ferr" id="cfgBorrow-err" hidden></p></div>
+                <div class="field"><label for="cfgMaint">Maintenance Margin (%)</label><input type="text" inputmode="decimal" id="cfgMaint" name="maintenance-margin" value="25" autocomplete="off" aria-describedby="cfgMaint-err"><p class="ferr" id="cfgMaint-err" hidden></p></div>
+                <div class="field"><label for="cfgHtb">Hard-to-Borrow Fees</label><input type="text" id="cfgHtb" name="htb-fees" value="" placeholder="GME:25, AMC:12" autocomplete="off" spellcheck="false" translate="no" aria-describedby="cfgHtb-err"><p class="ferr" id="cfgHtb-err" hidden></p></div>
+              </div>
+              <p class="help">Interest accrues on cash every calendar day (ACT/360); borrowed cash pays the cash rate plus the spread, shorts pay the borrow fee on their value. Below the maintenance margin, positions are cut at the close. A rate series (e.g. FRED’s DTB3 T-bill yield) can be added on the Data tab.</p>
               <p class="help">1&nbsp;bps = 0.01%. Orders placed at a bar’s close fill on the next bar, so your strategy never trades on data it couldn’t have seen.</p>
               <div class="row"><button class="btn small primary" type="submit">Apply &amp; Run</button></div>
             </form>
@@ -508,9 +539,14 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
             <div class="panel-b"><div class="chart short"><canvas id="chDD" role="img" aria-label="Drawdown chart"></canvas><div class="chart-empty">Drawdowns appear after the first run.</div></div></div>
           </section>
 
-          <section class="panel" aria-labelledby="h-px">
-            <div class="panel-h"><h3 id="h-px">Price &amp; Trades</h3><ul class="legend" id="pxLegend"></ul></div>
+          <section class="panel" id="pxPanel" aria-labelledby="h-px">
+            <div class="panel-h"><h3 id="h-px">Price &amp; Trades</h3><ul class="legend" id="pxLegend"></ul><span class="spacer"></span><span class="muted" id="pxInfo"></span></div>
             <div class="panel-b"><div class="chart"><canvas id="chPrice" role="img" aria-label="Price with buy and sell markers"></canvas><div class="chart-empty">Prices & fills appear after the first run.</div></div></div>
+          </section>
+
+          <section class="panel" id="attrPanel" aria-labelledby="h-attr" hidden>
+            <div class="panel-h"><h3 id="h-attr">Attribution</h3><span class="muted" id="attrInfo"></span></div>
+            <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="P&amp;L by instrument"><table class="metrics" id="attrTable"></table></div></div>
           </section>
 
           <div class="two">
@@ -705,11 +741,11 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
   <section class="view stack" id="view-data" aria-labelledby="h-data" hidden>
     <div class="viewhead"><h1 id="h-data">Data</h1><p>Manage the price histories your backtests run on.</p></div>
     <section class="panel" aria-labelledby="h-add">
-      <div class="panel-h"><div class="toolhead"><h2 id="h-add">Add Price Data</h2><p>Drop CSV files from Nasdaq.com or Yahoo Finance. They’re parsed in your browser & stored there; nothing is uploaded.</p></div></div>
+      <div class="panel-h"><div class="toolhead"><h2 id="h-add">Add Data</h2><p>Drop CSV files: prices from Nasdaq.com or Yahoo Finance, dividend & split histories (e.g. <code translate="no">SPY_dividends.csv</code>), or an interest-rate series such as FRED’s <code translate="no">DTB3.csv</code>. They’re parsed in your browser & stored there; nothing is uploaded.</p></div></div>
       <div class="panel-b">
         <label class="drop" id="drop" for="fileInput">
           <strong>Drop CSV Files Here</strong>
-          <span>or click to choose files · <code translate="no">SPY.csv</code> is recognized automatically</span>
+          <span>or click to choose files · <code translate="no">SPY.csv</code> & <code translate="no">SPY_dividends.csv</code> are recognized automatically</span>
           <input type="file" id="fileInput" name="files" accept=".csv,text/csv" multiple class="sr">
         </label>
         <div class="pending" id="pending" aria-live="polite"></div>
@@ -721,6 +757,11 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       <div class="panel-b scroll"><table id="instTable"></table></div>
     </section>
 
+    <section class="panel" aria-labelledby="h-rates">
+      <div class="panel-h"><h2 id="h-rates">Interest-Rate Series</h2><span class="muted">Pick one under Account &amp; Execution to pay cash interest at that rate</span></div>
+      <div class="panel-b scroll"><table id="rateTable"></table></div>
+    </section>
+
     <section class="panel" aria-labelledby="h-nasdaq">
       <div class="panel-h"><div class="toolhead"><h2 id="h-nasdaq">Getting Files from Nasdaq.com</h2></div></div>
       <div class="panel-b">
@@ -728,6 +769,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <li>Open the ticker’s page, e.g. <a href="https://www.nasdaq.com/market-activity/etf/spy/historical" target="_blank" rel="noopener">nasdaq.com/market-activity/etf/spy/historical</a>. Stocks use <code translate="no">/stocks/aapl/historical</code>.</li>
           <li>Choose <b>10Y</b>, then <b>Download Historical Data</b>.</li>
           <li>Rename the file to the ticker, e.g. <code translate="no">SPY.csv</code>, & drop it above. Unrenamed files ask for the ticker.</li>
+          <li>Nasdaq’s prices don’t include dividends. On the ticker’s <b>Dividend History</b> page, export the table & drop it as <code translate="no">SPY_dividends.csv</code>, or use a Yahoo Finance download with an <b>Adj Close</b> column, which carries the dividends.</li>
         </ol>
         <ul class="dl-list" id="dlList" translate="no"></ul>
       </div>
@@ -973,10 +1015,13 @@ function tickerFromFilename(name) {
 
 /* ---------------------------------------------------------- instruments -- */
 const instruments = new Map();
+const rates = new Map();       // interest-rate series (e.g. FRED DTB3): name -> {ticker, dates, values}
+const dataInfo = new Map();    // what Python reported on load: dividends, data-quality findings ...
 function addInstrument(rec) {
+  if (rec.kind === 'rate') { rates.set(rec.ticker, rec); py.loadedRates.delete(rec.ticker); return; }
   const d = rec.data;
   instruments.set(rec.ticker, { ...rec, start: d.dates[0], end: d.dates[d.dates.length - 1], n: d.dates.length, last: d.close[d.close.length - 1] });
-  py.forget(rec.ticker);
+  py.forget(rec.ticker); dataInfo.delete(rec.ticker);
 }
 async function loadBundled() {
   let manifest;
@@ -1041,14 +1086,21 @@ const py = {
       if (this.loaded.has(t)) continue;
       const rec = instruments.get(t);
       if (!rec) throw new Error(`No data is loaded for ${t}. Add it on the Data tab.`);
-      await this.call('load_data', { ticker: t, data: rec.data });
-      this.loaded.add(t);
+      const ev = rec.events || {};
+      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null });
+      dataInfo.set(t, info); this.loaded.add(t);
     }
+  },
+  loadedRates: new Set(),
+  async ensureRate(name) {
+    if (!name || this.loadedRates.has(name)) return;
+    const r = rates.get(name); if (!r) throw new Error(`The rate series ${name} isn’t loaded. Add it on the Data tab or pick another in Account & Execution.`);
+    await this.call('load_rates', { ticker: name, dates: r.dates, values: r.values }); this.loadedRates.add(name);
   },
   canStop() { return this.mode === 'worker'; },
   async restart() {
     for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
-    this.waiting.clear(); this._kill(); this.loaded.clear();
+    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear();
     this.ready = (async () => { this._spawn(); await this._post(this.initMsg(), 180000); })();
     return this.ready;
   },
@@ -1320,20 +1372,35 @@ const CFG_RULES = [
   ['cfgCash', between(100, 1e9, 'dollars', false, '10,000')], ['cfgCommBps', between(0, 500, 'basis points')], ['cfgCommFixed', between(0, 1000, 'dollars')],
   ['cfgSlip', between(0, 500, 'basis points')], ['cfgLev', between(0.1, 10)], ['cfgBand', between(0, 50, 'percent')],
   ['cfgRf', between(0, 20, 'percent')], ['cfgSeed', between(0, 1e9, '', true, 42)],
+  ['cfgCashRate', raw => (String(raw).trim() === '' ? null : between(-5, 30, 'percent')(raw))], ['cfgSpread', between(0, 20, 'percent')],
+  ['cfgBorrow', between(0, 200, 'percent')], ['cfgMaint', between(0, 90, 'percent')],
+  ['cfgHtb', raw => (parseHtb(raw) ? null : 'Use TICKER:fee pairs in %/yr, e.g. GME:25, AMC:12.')],
 ];
+// "GME:25, AMC:12" -> {GME: 0.25, AMC: 0.12}; null if malformed
+function parseHtb(raw) {
+  const out = {}; const s = String(raw || '').trim(); if (!s) return out;
+  for (const part of s.split(/[,;\s]+/).filter(Boolean)) {
+    const m = part.match(/^([A-Za-z0-9.^=\-]{1,15}):(-?[\d.]+)%?$/); if (!m || !(+m[2] >= 0)) return null;
+    out[m[1].toUpperCase()] = +m[2] / 100;
+  }
+  return out;
+}
 const DATE_RULES = [
-  ['start', raw => { const r = instruments.get($('#instrument').value); if (!raw || !r) return null; if (raw > r.end) return `Pick a date before ${fmt.date(r.end)}.`; return null; }],
-  ['end', raw => { const s = $('#start').value; const r = instruments.get($('#instrument').value); if (!raw || !r) return null; if (raw < r.start) return `Pick a date after ${fmt.date(r.start)}.`; if (s && raw <= s) return 'Pick a date after “From”.'; return null; }],
+  ['start', raw => { const r = marketRange(); if (!raw || !r) return null; if (raw > r.end) return `Pick a date before ${fmt.date(r.end)}.`; return null; }],
+  ['end', raw => { const s = $('#start').value; const r = marketRange(); if (!raw || !r) return null; if (raw < r.start) return `Pick a date after ${fmt.date(r.start)}.`; if (s && raw <= s) return 'Pick a date after “From”.'; return null; }],
 ];
 function readConfig() {
   const n = (id, d) => { const v = parseNumber($('#' + id).value); return isFinite(v) ? v : d; };
   return { cash: n('cfgCash', 10000), commission_bps: n('cfgCommBps', 0), commission_fixed: n('cfgCommFixed', 0), slippage_bps: n('cfgSlip', 2),
     execution: $('#cfgExec').value, max_leverage: n('cfgLev', 1), rebalance_band: n('cfgBand', 2) / 100, risk_free: n('cfgRf', 0) / 100,
-    seed: Math.round(n('cfgSeed', 42)), allow_short: $('#cfgShort').checked, fractional: $('#cfgFrac').checked };
+    seed: Math.round(n('cfgSeed', 42)), allow_short: $('#cfgShort').checked, fractional: $('#cfgFrac').checked,
+    total_return: $('#cfgTR').checked, cash_rate: $('#cfgCashRate').value.trim() === '' ? null : n('cfgCashRate', 0) / 100,
+    rate_ticker: $('#cfgRateSeries').value, margin_spread: n('cfgSpread', 1) / 100, borrow_fee: n('cfgBorrow', 0.25) / 100,
+    maintenance_margin: n('cfgMaint', 25) / 100, borrow_fees: parseHtb($('#cfgHtb').value) || {} };
 }
 function saveSettings() {
-  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed'].forEach(id => { s[id] = $('#' + id).value.trim(); });
-  s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked;
+  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb'].forEach(id => { s[id] = $('#' + id).value.trim(); });
+  s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked; s.cfgTR = $('#cfgTR').checked;
   s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.start = $('#start').value; s.end = $('#end').value;
   store.set('settings', s); summarizeSettings(); url.write();
 }
@@ -1347,10 +1414,57 @@ function summarizeSettings() {
   if (c.commission_bps || c.commission_fixed) bits.push('commission');
   if (c.allow_short) bits.push('shorting');
   if (c.max_leverage !== 1) bits.push(`${fmt.num(c.max_leverage, 1)}× leverage`);
+  if (!c.total_return) bits.push('price return only');
+  if (c.rate_ticker) bits.push(`cash at ${c.rate_ticker}`); else if (c.cash_rate != null) bits.push(`cash at ${fmt.num(c.cash_rate * 100, 2)}%`);
   $('#settingsSummary').textContent = bits.join(' · ');
 }
 function payloadBase() {
-  return { ticker: $('#instrument').value, benchmark: $('#benchmark').value, code: editor.value, config: readConfig(), start: $('#start').value || null, end: $('#end').value || null };
+  const p = { benchmark: $('#benchmark').value, code: editor.value, config: readConfig(), start: $('#start').value || null, end: $('#end').value || null };
+  if (isPortfolio()) p.tickers = pickedUniverse(); else p.ticker = $('#instrument').value;
+  return p;
+}
+// The payload for the code in the editor right now (inspects it first, so a UNIVERSE is never missed).
+async function freshPayload() { if (codeInfo.for !== editor.value) await refreshParams(); return payloadBase(); }
+const payloadTickers = p => (p.tickers ? [...p.tickers] : [p.ticker]).filter(Boolean);
+// Load what a payload needs into Python: its instruments, benchmark & rate series.
+async function ensurePayload(p) { await py.ensure([...payloadTickers(p), p.benchmark]); await py.ensureRate(p.config.rate_ticker); }
+
+/* ---------------------------------------------------------- universe ---- */
+// A strategy that defines UNIVERSE = [...] is a portfolio strategy. The Market panel then
+// picks several instruments, starting from that list; your changes are kept until the list changes.
+let codeInfo = { universe: null, for: null };
+function isPortfolio() { return !!codeInfo.universe; }
+function universeState() { return store.get('universe', { code: [], picked: [] }); }
+function pickedUniverse() { return universeState().picked.filter(t => instruments.has(t)); }
+function setPicked(list) { const u = universeState(); u.picked = [...new Set(list)]; store.set('universe', u); renderUniverse(); markRange(); }
+function applyCodeInfo(info, code) {
+  const before = isPortfolio();
+  codeInfo = { universe: info && info.universe ? info.universe : null, for: code };
+  if (isPortfolio()) {
+    const u = universeState();
+    if (JSON.stringify(u.code) !== JSON.stringify(codeInfo.universe)) store.set('universe', { code: codeInfo.universe, picked: codeInfo.universe });
+  }
+  if (before !== isPortfolio()) { const b = $('#benchmark'); if (b.options.length) b.options[0].textContent = isPortfolio() ? 'Equal weight (universe)' : 'Same instrument (buy & hold)'; }
+  $('#instField').hidden = isPortfolio(); $('#univField').hidden = !isPortfolio();
+  if (!isPortfolio()) { $('#univPick').hidden = true; $('#univBtn').setAttribute('aria-expanded', 'false'); }
+  renderUniverse(); updateDateBounds(); toolContext();
+}
+function renderUniverse() {
+  if (!isPortfolio()) return;
+  const u = universeState(); const picked = new Set(u.picked); const q = ($('#univSearch').value || '').trim().toUpperCase();
+  const list = sortedTickers().filter(t => !q || t.includes(q) || (instruments.get(t).name || '').toUpperCase().includes(q));
+  $('#univList').innerHTML = list.map(t => `<label class="check" title="${esc(instruments.get(t).name || '')}"><input type="checkbox" name="universe" value="${esc(t)}"${picked.has(t) ? ' checked' : ''}> ${esc(t)}</label>`).join('') || '<p class="help">No instruments match.</p>';
+  const have = pickedUniverse(); const missing = u.picked.filter(t => !instruments.has(t));
+  $('#univSummary').textContent = have.length ? `${fmt.int(have.length)} instrument${have.length === 1 ? '' : 's'}: ${have.join(', ')}` : 'None picked';
+  $('#univHelp').innerHTML = (missing.length ? `<b>Not loaded:</b> ${esc(missing.join(', '))}. Add ${missing.length === 1 ? 'it' : 'them'} on the <a href="#data">Data tab</a>. ` : '') +
+    `The strategy’s <code translate="no">UNIVERSE</code> lists ${esc(codeInfo.universe.join(', '))}.`;
+}
+// Date bounds for the current market: one instrument, or the union of a portfolio's instruments.
+function marketRange() {
+  const ts = isPortfolio() ? pickedUniverse() : [$('#instrument').value];
+  const recs = ts.map(t => instruments.get(t)).filter(Boolean);
+  if (!recs.length) return null;
+  return { start: recs.map(r => r.start).sort()[0], end: recs.map(r => r.end).sort().slice(-1)[0] };
 }
 function validInputs() {
   if (!validate(DATE_RULES)) return false;
@@ -1361,15 +1475,16 @@ function validInputs() {
 async function runBacktest() {
   if (!py.ready) return;
   const btn = $('#runBtn'); if (btn.disabled) return;
+  if (codeInfo.for !== editor.value) await refreshParams();
   const p = payloadBase();
-  if (!p.ticker) { showEmptyData(); return; }
+  if (!payloadTickers(p).length) { if (isPortfolio()) { toast('Pick at least one instrument for the portfolio in the Market panel.'); $('#univBtn').focus(); } else showEmptyData(); return; }
   if (!validInputs()) return;
   closeSave(false);
   loadingOn(btn); busy(true, 'Running backtest…'); $('#results').setAttribute('aria-busy', 'true');
   const t0 = performance.now(); let done = null;
   setStatus('busy', 'Running backtest…');
   try {
-    await py.ensure([p.ticker, p.benchmark]);
+    await ensurePayload(p);
     const r = await py.call('run', p);
     r.elapsed = performance.now() - t0; r.strategyName = currentSource().name;
     lastRun = { payload: p, result: r }; hideError(); renderResults(r);
@@ -1406,11 +1521,15 @@ function renderKpiSkeleton() {
 function renderResults(r) {
   $('#results').classList.remove('is-empty'); $$('.chart-empty').forEach(el => el.remove());
   const m = r.metrics, b = r.bench_metrics;
-  const benchName = r.benchmark === r.ticker ? `buy & hold ${r.ticker}` : r.benchmark;
-  $('#resTitle').textContent = `${r.strategyName} on ${r.ticker}`;
-  if (currentTab === 'backtest' || currentTab === 'edit') document.title = `${r.strategyName} on ${r.ticker} · QuantLab`;
+  const benchName = r.portfolio ? (r.benchmark === 'Equal weight' ? 'an equal-weight portfolio' : r.benchmark) : r.benchmark === r.ticker ? `buy & hold ${r.ticker}` : r.benchmark;
+  const onWhat = r.portfolio ? `a ${fmt.int(r.tickers.length)}-instrument portfolio` : r.ticker;
+  $('#resTitle').textContent = `${r.strategyName} on ${onWhat}`;
+  if (currentTab === 'backtest' || currentTab === 'edit') document.title = `${r.strategyName} on ${r.portfolio ? 'portfolio' : r.ticker} · QuantLab`;
   $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${fmt.num(r.elapsed / 1000, 2)} s`;
   const chips = [`<span class="chip">${r.mode === 'signals' ? 'signals(data)' : 'on_bar(ctx)'}</span>`];
+  if (r.portfolio) chips.push(`<span class="chip" translate="no" title="${esc(r.tickers.join(', '))}">${esc(r.tickers.length <= 6 ? r.tickers.join(' · ') : r.tickers.slice(0, 5).join(' · ') + ` +${r.tickers.length - 5}`)}</span>`);
+  const priceOnly = Object.values(r.data || {}).filter(d => !d.dividends && d.price_basis === 'price').length;
+  chips.push(r.config.total_return === false ? '<span class="chip">Price return</span>' : priceOnly ? `<span class="chip bad" title="No dividend data for ${priceOnly} instrument${priceOnly === 1 ? '' : 's'}">Dividends missing</span>` : '<span class="chip ok">Total return</span>');
   if (r.lookahead) {
     const lk = r.lookahead; const part = lk.planned && lk.checked < lk.planned ? ` (${fmt.int(lk.checked)} of ${fmt.int(lk.planned)} spot checks; the rest were skipped to save time)` : '';
     chips.push(lk.violations.length ? '<span class="chip bad">Look-ahead detected</span>' : `<span class="chip ok" title="Recomputed signals with the future removed${esc(part)}">Look-ahead check passed${lk.checked < lk.planned ? ' (partial)' : ''}</span>`);
@@ -1428,13 +1547,16 @@ function renderResults(r) {
   $('#notes').innerHTML = notes.map(n => `<li>${n}</li>`).join(''); $('#notes').hidden = !notes.length;
 
   $('#kpis').innerHTML = KPI_TILES.map(([lab, k, f]) => {
+    if (k === 'exposure' && r.portfolio) {
+      return `<div class="kpi"><dt>Gross Exposure</dt><dd><span class="v">${fmt.pct(m.avg_gross, 0)}</span><span class="b">Net ${fmt.pct(m.avg_net, 0, true)} · ${fmt.int(m.n_trades)} trades</span></dd></div>`;
+    }
     const v = m[k], bv = k === 'exposure' ? 1 : b[k];
     const cls = (k === 'volatility' || k === 'exposure') ? '' : sign(v);
     const sub = k === 'exposure' && m.n_trades != null ? `${fmt.int(m.n_trades)} closed trades` : `Benchmark ${fmtMetric(f, bv, k)}`;
     return `<div class="kpi"><dt>${lab}</dt><dd><span class="v ${cls}">${fmtMetric(f, v, k)}</span><span class="b">${sub}</span></dd></div>`;
   }).join('');
 
-  drawResultCharts(r); renderHeat(r); renderMetrics(r); renderTrades(r); toolContext();
+  drawResultCharts(r); renderHeat(r); renderMetrics(r); renderTrades(r); renderAttribution(r); toolContext();
   $('#ddInfo').textContent = m.dd_trough ? `Worst ${fmt.pct(m.max_drawdown, 1)}, ${fmt.date(m.dd_peak)} to ${fmt.date(m.dd_trough)}, ${m.dd_recovery ? 'recovered ' + fmt.date(m.dd_recovery) : 'not yet recovered'}` : 'No drawdown';
   $('#rollInfo').textContent = `${r.rolling.window}-day window, annualized`;
   $('#volInfo').textContent = `${r.rolling.vol_window}-day window, annualized`;
@@ -1459,6 +1581,9 @@ function drawResultCharts(r) {
   ] }, options: ddOpts });
 
   kill('px');
+  $('#h-px').textContent = r.portfolio ? 'Weights' : 'Price & Trades';
+  $('#pxInfo').textContent = r.portfolio ? `Average gross ${fmt.pct(r.metrics.avg_gross, 0)}, net ${fmt.pct(r.metrics.avg_net, 0, true)}` : '';
+  if (r.portfolio) { drawWeights(r, P); return drawRest(r, P, d); }
   const buys = r.fills.filter(f => f.side === 'buy').map(f => ({ x: f.i, y: r.close[f.i] }));
   const sells = r.fills.filter(f => f.side === 'sell').map(f => ({ x: f.i, y: r.close[f.i] }));
   const many = r.fills.length > 400;
@@ -1473,7 +1598,30 @@ function drawResultCharts(r) {
     { type: 'scatter', label: 'Sell', data: sells, pointStyle: 'triangle', rotation: 180, pointRadius: many ? 2.5 : 5, backgroundColor: P.loss, borderColor: P.loss },
   ] }, options: pxOpts });
   $('#pxLegend').innerHTML = legendHTML([[P.fg2, 'Close'], [P.gain, '▲ Buy fill'], [P.loss, '▼ Sell fill'], [alpha(P.strat, 0.35), 'Exposure', 8]]);
-
+  drawRest(r, P, d);
+}
+const SERIES_COLORS = ['#0062D1', '#C46F00', '#0A7A50', '#C93A1E', '#7A3DC2', '#2B9EB3', '#B5487A', '#6B7A00', '#4D4D4D', '#E07B39', '#3A6FB0', '#8C5A2B'];
+// Portfolio weights over time as stacked bars (longs above zero, shorts below); the
+// 10 biggest positions get their own colour, the rest are summed as "Other".
+function drawWeights(r, P) {
+  const idx = r.weights.index, ser = r.weights.series;
+  const size = t => ser[t].reduce((a, v) => a + Math.abs(v), 0);
+  const order = r.tickers.slice().sort((a, b) => size(b) - size(a)).filter(t => size(t) > 0);
+  const top = order.slice(0, 10), rest = order.slice(10);
+  const sets = top.map((t, i) => ({ label: t, data: ser[t], color: SERIES_COLORS[i % SERIES_COLORS.length] }));
+  if (rest.length) sets.push({ label: `Other (${rest.length})`, data: idx.map((_, j) => rest.reduce((a, t) => a + ser[t][j], 0)), color: P.fg3 });
+  const o = baseOptions(r.dates, P, v => fmt.pct(v, 0));
+  o.scales.x.stacked = true; o.scales.y.stacked = true;
+  const longs = idx.map((_, j) => sets.reduce((a, x) => a + Math.max(0, x.data[j]), 0)), shorts = idx.map((_, j) => sets.reduce((a, x) => a + Math.min(0, x.data[j]), 0));
+  o.scales.y.max = Math.max(0.05, ...longs) * 1.05; o.scales.y.min = Math.min(0, ...shorts) * 1.05;
+  o.plugins.tooltip.filter = c => Math.abs(c.parsed.y) > 1e-4;
+  o.plugins.tooltip.callbacks.label = c => ` ${c.dataset.label}: ${fmt.pct(c.parsed.y, 1)}`;
+  charts.px = new Chart($('#chPrice'), { type: 'bar', data: { datasets: sets.map(x => ({ type: 'bar', label: x.label, data: idx.map((i, j) => ({ x: i, y: x.data[j] })),
+    backgroundColor: alpha(x.color, 0.8), borderWidth: 0, barPercentage: 1, categoryPercentage: 1, grouped: false })) }, options: o });
+  $('#pxLegend').innerHTML = legendHTML(sets.map(x => [alpha(x.color, 0.8), x.label, 8]));
+  $('#chPrice').setAttribute('aria-label', `Portfolio weights over time for ${order.length} instruments`);
+}
+function drawRest(r, P, d) {
   kill('hist');
   if (panelOn('hist')) {
     const e = r.hist.edges; const labels = e.slice(0, -1).map((v, i) => fmt.pct((v + e[i + 1]) / 2, 1));
@@ -1531,15 +1679,28 @@ function renderMetrics(r) {
   $('#metricHidden').hidden = !hidden;
   $('#metricHidden').textContent = `${fmt.int(hidden)} more statistic${hidden === 1 ? ' is' : 's are'} hidden. Use Choose Statistics to show ${hidden === 1 ? 'it' : 'them'}.`;
 }
+function renderAttribution(r) {
+  $('#attrPanel').hidden = !r.portfolio;
+  if (!r.portfolio) return;
+  const a = r.attribution;
+  $('#attrInfo').textContent = `P&L by instrument; rows add up to the total`;
+  let h = '<caption class="sr">P&amp;L by instrument</caption><thead><tr><th scope="col">Instrument</th><th scope="col" class="n">P&amp;L</th><th scope="col" class="n">Contribution</th><th scope="col" class="n">Avg. Weight</th><th scope="col" class="n">Time Held</th><th scope="col" class="n">Trades</th><th scope="col" class="n">Win Rate</th><th scope="col" class="n">Dividends</th><th scope="col" class="n">Costs</th><th scope="col" class="n">Turnover</th></tr></thead><tbody>';
+  for (const x of a.rows) h += `<tr><th scope="row" translate="no">${esc(x.ticker)}</th><td class="n ${sign(x.pnl)}">${fmt.money(x.pnl)}</td><td class="n ${sign(x.contribution)}">${fmt.pct(x.contribution, 2, true)}</td><td class="n">${fmt.pct(x.avg_weight, 1, true)}</td><td class="n">${fmt.pct(x.time_held, 0)}</td><td class="n">${fmt.int(x.trades)}</td><td class="n">${fmt.pct(x.win_rate, 0)}</td><td class="n">${fmt.money(x.dividends)}</td><td class="n">${fmt.money(x.costs)}</td><td class="n">${fmt.num(x.turnover, 1)}×</td></tr>`;
+  const cash0 = r.config.cash;
+  h += `<tr><th scope="row">Interest on cash</th><td class="n ${sign(a.interest)}">${fmt.money(a.interest)}</td><td class="n">${fmt.pct(a.interest / cash0, 2, true)}</td><td colspan="7"></td></tr>`;
+  h += `<tr class="best"><th scope="row">Total</th><td class="n ${sign(a.total)}">${fmt.money(a.total)}</td><td class="n">${fmt.pct(a.total / cash0, 2, true)}</td><td colspan="7"></td></tr>`;
+  $('#attrTable').innerHTML = h + '</tbody>';
+}
 function renderTrades(r) {
   const t = r.trades; const max = 500;
   $('#tradeInfo').textContent = `${fmt.int(t.filter(x => !x.open).length)} closed${t.some(x => x.open) ? ' + 1 open' : ''} · ${fmt.int(r.fills.length)} fills${t.length > max ? ` · showing the last ${max}` : ''}`;
   if (!t.length) { $('#tradesTable').innerHTML = '<tbody><tr><td class="muted" style="white-space:normal">No trades. Your entry rule never fired; check indicator warm-up or loosen the condition.</td></tr></tbody>'; return; }
-  let h = '<thead><tr><th scope="col" class="n">#</th><th scope="col">Side</th><th scope="col">Entry</th><th scope="col">Exit</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Entry Price</th><th scope="col" class="n">Exit Price</th><th scope="col" class="n">Return</th><th scope="col" class="n">P&amp;L</th></tr></thead><tbody>';
+  const ret = x => (r.portfolio ? x.ret_notional : x.ret);
+  let h = '<thead><tr><th scope="col" class="n">#</th><th scope="col">Ticker</th><th scope="col">Side</th><th scope="col">Entry</th><th scope="col">Exit</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Entry Price</th><th scope="col" class="n">Exit Price</th><th scope="col" class="n">Return</th><th scope="col" class="n">P&amp;L</th></tr></thead><tbody>';
   for (let i = t.length - 1; i >= Math.max(0, t.length - max); i--) {
     const x = t[i];
-    h += `<tr><td class="n">${i + 1}</td><td>${x.side}${x.open ? ' <span class="chip">open</span>' : ''}</td><td class="tnum">${fmt.date(x.entry_date)}</td><td class="tnum">${x.open ? '—' : fmt.date(x.exit_date)}</td><td class="n">${fmt.int(x.bars)}</td>` +
-      `<td class="n">${fmt.price(x.entry_price)}</td><td class="n">${x.open ? '—' : fmt.price(x.exit_price)}</td><td class="n ${sign(x.ret)}">${fmt.pct(x.ret, 2, true)}</td><td class="n ${sign(x.pnl)}">${fmt.money(x.pnl)}</td></tr>`;
+    h += `<tr><td class="n">${i + 1}</td><td translate="no">${esc(x.ticker)}</td><td>${x.side}${x.open ? ' <span class="chip">open</span>' : ''}</td><td class="tnum">${fmt.date(x.entry_date)}</td><td class="tnum">${x.open ? '—' : fmt.date(x.exit_date)}</td><td class="n">${fmt.int(x.bars)}</td>` +
+      `<td class="n">${fmt.price(x.entry_price)}</td><td class="n">${x.open ? '—' : fmt.price(x.exit_price)}</td><td class="n ${sign(ret(x))}">${fmt.pct(ret(x), 2, true)}</td><td class="n ${sign(x.pnl)}">${fmt.money(x.pnl)}</td></tr>`;
   }
   $('#tradesTable').innerHTML = h + '</tbody>';
 }
@@ -1554,22 +1715,22 @@ function fillInstrumentSelects(prefer) {
   bench.innerHTML = '<option value="">Same instrument (buy & hold)</option>' + list.map(opt).join('');
   const fallback = ['SPY', 'QQQ'].find(t => list.includes(t)) || list.find(t => !instruments.get(t).synthetic) || list[0] || '';
   inst.value = list.includes(iv) ? iv : fallback; bench.value = list.includes(bv) ? bv : '';
-  updateDateBounds(); renderAnalyticsList();
+  updateDateBounds(); renderAnalyticsList(); renderUniverse();
 }
 function updateDateBounds() {
-  const r = instruments.get($('#instrument').value); if (!r) return;
+  const r = marketRange(); if (!r) return;
   for (const id of ['start', 'end', 'spDate']) { $('#' + id).min = r.start; $('#' + id).max = r.end; }
   markRange();
 }
 function setRange(years) {
-  const r = instruments.get($('#instrument').value); if (!r) return;
+  const r = marketRange(); if (!r) return;
   $('#end').value = '';
   if (!years) $('#start').value = '';
   else { const d = toDate(r.end); d.setUTCFullYear(d.getUTCFullYear() - years); const s = d.toISOString().slice(0, 10); $('#start').value = s < r.start ? '' : s; }
   setFieldError('start', null); setFieldError('end', null); markRange(); saveSettings();
 }
 function markRange() {
-  const r = instruments.get($('#instrument').value);
+  const r = marketRange();
   $$('#ranges button').forEach(b => b.setAttribute('aria-pressed', 'false'));
   if (!r) return;
   if (!$('#start').value && !$('#end').value) { $('#ranges [data-years="0"]').setAttribute('aria-pressed', 'true'); return; }
@@ -1579,13 +1740,15 @@ function markRange() {
 
 /* -------------------------------------------------------------- tools --- */
 function toolContext() {
-  const p = payloadBase(); const r = instruments.get(p.ticker);
+  const p = payloadBase(); const r = marketRange(); const ts = payloadTickers(p);
   const range = `${fmt.date(p.start || (r && r.start))} – ${fmt.date(p.end || (r && r.end))}`;
-  $('#toolCtx').innerHTML = `Using <b>${esc(currentSource().name)}</b> on <b translate="no">${esc(p.ticker || '—')}</b> (${esc(range)}) vs <b translate="no">${esc(p.benchmark || 'buy & hold')}</b>. Change these on the <a href="#backtest">Backtest tab</a>.`;
+  const what = p.tickers ? `a portfolio of ${fmt.int(ts.length)} (${ts.slice(0, 6).join(', ')}${ts.length > 6 ? '…' : ''})` : (p.ticker || '—');
+  $('#toolCtx').innerHTML = `Using <b>${esc(currentSource().name)}</b> on <b translate="no">${esc(what)}</b> (${esc(range)}) vs <b translate="no">${esc(p.benchmark || (p.tickers ? 'equal weight' : 'buy & hold'))}</b>. Change these on the <a href="#backtest">Backtest tab</a>.`;
 }
 async function refreshParams() {
   if (!py.ready) return;
-  try { await py.ready; const r = await py.call('inspect', { code: editor.value }); paramsCache = r.params; } catch (e) { paramsCache = {}; }
+  const code = editor.value;
+  try { await py.ready; const r = await py.call('inspect', { code }); paramsCache = r.params; applyCodeInfo(r, code); } catch (e) { paramsCache = {}; applyCodeInfo(null, code); }
   fillParamSelects();
 }
 function fillParamSelects() {
@@ -1638,11 +1801,11 @@ async function runSweep(ev) {
   if (v1.length > 400) { setFieldError('swV1', `That’s ${fmt.int(v1.length)} runs. Use a larger step (max 400).`); $('#swV1').focus(); return; }
   const combos = []; for (const a of v1) for (const b of v2) combos.push([a, b]);
   const metric = $('#swMetric').value, split = $('#swSplit').value ? parseFloat($('#swSplit').value) : null;
-  const base = payloadBase(); const out = $('#swOut'); const btn = $('#swRun'); const bar = $('#swBar');
+  const base = await freshPayload(); const out = $('#swOut'); const btn = $('#swRun'); const bar = $('#swBar');
   sweepCancel = false; sweepRunning = true; loadingOn(btn); $('#swStop').hidden = false; bar.hidden = false; bar.firstElementChild.style.transform = 'scaleX(0)';
   busy(true, 'Sweeping parameters…'); const results = [];
   try {
-    await py.ensure([base.ticker, base.benchmark]);
+    await ensurePayload(base);
     for (let i = 0; i < combos.length && !sweepCancel; i++) {
       const [a, b] = combos[i]; const params = { [p1]: a }; if (p2) params[p2] = b;
       results.push({ a, b, r: await py.call('metrics', { ...base, params, split }) });
@@ -1702,10 +1865,10 @@ function applyParams(values) {
 async function runMC(ev) {
   ev.preventDefault();
   if (!validate([['mcPaths', between(50, 5000, '', true, 500)], ['mcBlock', between(1, 250, 'days', true, 20)], ['mcSeed', between(0, 1e9, '', true, 7)]])) return;
-  const base = payloadBase(); const out = $('#mcOut'); const btn = $('#mcRun');
+  const base = await freshPayload(); const out = $('#mcOut'); const btn = $('#mcRun');
   loadingOn(btn); busy(true, 'Simulating…');
   try {
-    await py.ensure([base.ticker, base.benchmark]);
+    await ensurePayload(base);
     const r = await py.call('montecarlo', { ...base, paths: parseNumber($('#mcPaths').value), block: parseNumber($('#mcBlock').value), seed: parseNumber($('#mcSeed').value) });
     out.innerHTML = '';
     const box = document.createElement('div'); box.className = 'chart'; box.innerHTML = '<canvas role="img" aria-label="Fan chart of resampled equity paths"></canvas>'; out.appendChild(box);
@@ -1735,12 +1898,12 @@ async function runMC(ev) {
 
 async function runSplit(ev) {
   ev.preventDefault();
-  const r0 = instruments.get($('#instrument').value);
+  const r0 = marketRange();
   if (!validate([['spPct', between(10, 90, 'percent')], ['spDate', raw => (raw && r0 && (raw <= r0.start || raw >= r0.end) ? `Pick a date between ${fmt.date(r0.start)} & ${fmt.date(r0.end)}.` : null)]])) return;
-  const base = payloadBase(); const out = $('#spOut'); const btn = $('#spRun');
+  const base = await freshPayload(); const out = $('#spOut'); const btn = $('#spRun');
   loadingOn(btn); busy(true, 'Splitting…');
   try {
-    await py.ensure([base.ticker, base.benchmark]);
+    await ensurePayload(base);
     const r = await py.call('split', { ...base, split: parseNumber($('#spPct').value) / 100, split_date: $('#spDate').value || null });
     out.innerHTML = '';
     const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = `<canvas role="img" aria-label="Equity with the split on ${esc(fmt.date(r.split_date))}"></canvas>`; out.appendChild(box);
@@ -1768,10 +1931,10 @@ const tipStyle = P => ({ backgroundColor: P.primary, titleColor: P.panel, bodyCo
 async function runSub(ev) {
   ev.preventDefault();
   if (!validate([['subN', between(2, 20, '', true, 5)]])) return;
-  const base = payloadBase(); const out = $('#subOut'); const btn = $('#subRun');
+  const base = await freshPayload(); const out = $('#subOut'); const btn = $('#subRun');
   loadingOn(btn); busy(true, 'Scoring periods…');
   try {
-    await py.ensure([base.ticker, base.benchmark]);
+    await ensurePayload(base);
     const r = await py.call('subperiods', { ...base, n: parseNumber($('#subN').value) });
     out.innerHTML = '';
     const p = document.createElement('p'); p.style.margin = '0';
@@ -1802,10 +1965,10 @@ async function runCosts(ev) {
   ev.preventDefault();
   const lv = parseValues($('#costLv').value);
   if (!validate([['costLv', () => (!lv || !lv.length ? 'Enter levels like 0, 5, 10, 20 or 0:50:5.' : lv.length > 30 ? `That’s ${fmt.int(lv.length)} levels. Use 30 or fewer.` : lv.some(v => v < 0 || v > 1000) ? 'Use levels from 0 to 1,000 bps.' : null)]])) return;
-  const base = payloadBase(); const out = $('#costOut'); const btn = $('#costRun');
+  const base = await freshPayload(); const out = $('#costOut'); const btn = $('#costRun');
   loadingOn(btn); busy(true, 'Testing costs…');
   try {
-    await py.ensure([base.ticker, base.benchmark]);
+    await ensurePayload(base);
     const r = await py.call('costs', { ...base, levels: lv });
     out.innerHTML = '';
     const bps = v => `${fmt.num(v, v % 1 ? 1 : 0)}&nbsp;bps`; const rows = r.rows;
@@ -1835,10 +1998,10 @@ async function runCosts(ev) {
 async function runPerm(ev) {
   ev.preventDefault();
   if (!validate([['permN', between(50, 5000, '', true, 500)], ['permSeed', between(0, 1e9, '', true, 7)]])) return;
-  const base = payloadBase(); const out = $('#permOut'); const btn = $('#permRun');
+  const base = await freshPayload(); const out = $('#permOut'); const btn = $('#permRun');
   loadingOn(btn); busy(true, 'Shuffling timing…');
   try {
-    await py.ensure([base.ticker, base.benchmark]);
+    await ensurePayload(base);
     const r = await py.call('permutation', { ...base, n_perm: parseNumber($('#permN').value), seed: parseNumber($('#permSeed').value) });
     out.innerHTML = '';
     const p = document.createElement('p'); p.style.margin = '0';
@@ -1897,49 +2060,145 @@ async function runAnalytics(ev) {
 
 /* --------------------------------------------------------------- data --- */
 const pendingFiles = [];
+const newId = () => Math.random().toString(36).slice(2);
+// "SPY_dividends.csv", "spy-splits.csv", "SPY dividend history.csv" -> "SPY"
+function tickerFromEventsFilename(name) {
+  const stem = name.replace(/\.[^.]+$/, '').replace(/[\s_\-]*(dividends?|divs?|splits?|history|events)[\s_\-]*/gi, ' ').trim().split(/\s+/)[0] || '';
+  return tickerFromFilename(stem + '.csv');
+}
 async function handleFiles(files) {
   let added = 0;
   for (const f of files) {
-    if (!/\.csv$/i.test(f.name) && f.type !== 'text/csv') { toast(`${f.name} isn’t a CSV file. Export the Nasdaq download as .csv & try again.`); continue; }
+    if (!/\.csv$/i.test(f.name) && f.type !== 'text/csv') { toast(`${f.name} isn’t a CSV file. Export the download as .csv & try again.`); continue; }
     try {
-      const data = parseCSV(await f.text()); const t = tickerFromFilename(f.name);
-      if (t) { await saveUpload(t, guessName(t), data, f.name, true); added++; }
-      else pendingFiles.push({ file: f.name, data, id: Math.random().toString(36).slice(2) });
+      const text = await f.text(); const kind = csvKind(csvHeader(text));
+      if (kind === 'prices') {
+        const data = parseCSV(text); const t = tickerFromFilename(f.name);
+        if (t) { await saveUpload(t, guessName(t), data, f.name, true); added++; }
+        else pendingFiles.push({ kind, file: f.name, data, id: newId() });
+      } else if (kind === 'rates') {
+        await saveRate((tickerFromFilename(f.name) || 'RATE'), text, f.name);
+      } else {
+        const t = tickerFromEventsFilename(f.name);
+        if (t && instruments.has(t)) await attachEvents(t, kind, text, f.name);
+        else pendingFiles.push({ kind, file: f.name, text, id: newId(), guess: t });
+      }
     } catch (e) { toast(`${f.name}: ${e.message}`); }
   }
   if (added) toast(`Added ${fmt.int(added)} instrument${added === 1 ? '' : 's'}.`);
   renderPending();
 }
+// Dividend or split history -> the instrument's record (kept in this browser), then reload it in Python.
+async function attachEvents(ticker, kind, text, filename) {
+  await py.ready;
+  const parsed = await py.call('parse_csv', { text });
+  if (parsed.kind !== kind) throw new Error(`expected a ${kind} file`);
+  const rec = { ...instruments.get(ticker) };
+  rec.events = { ...(rec.events || {}), [kind]: parsed.events };
+  if (rec.source === 'bundled') { rec.source = 'upload'; rec.base = 'bundled'; }
+  addInstrument(rec); const ok = await idb.put(rec);
+  await py.ensure([ticker]);
+  const info = dataInfo.get(ticker);
+  const what = kind === 'dividends' ? `${fmt.int(info.dividend_count)} dividends (${fmt.money(info.dividend_total)} a share)` : `${fmt.int(parsed.events.length)} split${parsed.events.length === 1 ? '' : 's'} (${info.splits.filter(x => x.adjusted).length} applied to the prices)`;
+  fillInstrumentSelects(); renderInstTable();
+  toast(`${ticker}: added ${what} from ${filename}.${ok ? '' : ' This browser can’t store it; it will be gone after a reload.'}`);
+}
+async function saveRate(name, text, filename) {
+  await py.ready;
+  const parsed = await py.call('parse_csv', { text, ticker: name });
+  if (parsed.kind !== 'rates') throw new Error('expected a date column & one rate column');
+  const rec = { ticker: name, kind: 'rate', name, source: 'upload', dates: parsed.dates, values: parsed.values, filename };
+  addInstrument(rec); await idb.put(rec); renderRateTable(); fillRateSelect();
+  toast(`Added the rate series ${name}: ${fmt.int(rec.dates.length)} observations, latest ${fmt.num(rec.values[rec.values.length - 1], 2)}%. Pick it under Account & Execution.`);
+}
 function guessName(t) { const r = RECOMMENDED.find(x => x[0] === t); return r ? r[1] : t; }
 function renderPending() {
   $('#pending').innerHTML = pendingFiles.map(p => {
+    if (p.kind !== 'prices') {
+      const opts = sortedTickers().map(t => `<option${t === p.guess ? ' selected' : ''}>${esc(t)}</option>`).join('');
+      return `<form data-id="${p.id}" novalidate aria-label="Attach ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">${p.kind === 'dividends' ? 'Dividend' : 'Split'} history</span></div>` +
+        `<div class="field"><label for="tk-${p.id}">Instrument</label><select id="tk-${p.id}" name="ticker" translate="no">${opts}</select></div><div></div>` +
+        `<button class="btn primary small" type="submit">Attach to Instrument</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
+    }
     const d = p.data;
     return `<form data-id="${p.id}" novalidate aria-label="Name ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">${fmt.int(d.dates.length)} days · ${fmt.date(d.dates[0])} – ${fmt.date(d.dates[d.dates.length - 1])} · last close ${fmt.price(d.close[d.close.length - 1])}</span></div>` +
       `<div class="field"><label for="tk-${p.id}">Ticker</label><input type="text" id="tk-${p.id}" name="ticker" placeholder="SPY…" maxlength="15" autocomplete="off" spellcheck="false" autocapitalize="characters" translate="no" aria-describedby="tk-${p.id}-err"><p class="ferr" id="tk-${p.id}-err" hidden></p></div>` +
       `<div class="field"><label for="nm-${p.id}">Name (Optional)</label><input type="text" id="nm-${p.id}" name="instrument-name" placeholder="S&amp;P 500 ETF…" maxlength="60" autocomplete="off"></div>` +
       `<button class="btn primary small" type="submit">Add Instrument</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
   }).join('');
-  const first = $('#pending input'); if (first && matchMedia('(pointer: fine)').matches) first.focus();
+  const first = $('#pending input, #pending select'); if (first && matchMedia('(pointer: fine)').matches) first.focus();
 }
-async function saveUpload(ticker, name, data, filename, quiet) {
-  const rec = { ticker, name: name || ticker, source: 'upload', synthetic: false, data, filename };
+async function saveUpload(ticker, name, data, filename, quiet, events) {
+  const rec = { ticker, name: name || ticker, source: 'upload', synthetic: false, data, filename, events: events || undefined };
   addInstrument(rec); const ok = await idb.put(rec);
   fillInstrumentSelects(); renderInstTable(); renderDownloadList();
   if (!ok) toast(`Added ${ticker}, but this browser can’t store it. It will be gone after a reload.`);
   else if (!quiet) toast(`Added ${ticker}.`);
 }
+// Dividends & data-quality findings come from Python, so the table fills in as each instrument is checked.
+let qualityChecking = false;
+async function checkAllData() {
+  if (qualityChecking || !py.ready) return;
+  qualityChecking = true;
+  try {
+    await py.ready;
+    const todo = sortedTickers().filter(t => !dataInfo.has(t));
+    for (let i = 0; i < todo.length; i++) {
+      $('#instCount').textContent = `Checking data ${fmt.int(i + 1)} of ${fmt.int(todo.length)}…`;
+      try { await py.ensure([todo[i]]); } catch (e) { /* shown as unchecked */ }
+      if (currentTab === 'data') renderInstTable();
+    }
+  } finally { qualityChecking = false; renderInstTable(); }
+}
+function dividendBadge(t) {
+  const r = instruments.get(t), info = dataInfo.get(t);
+  if (!info) return '<span class="muted">…</span>';
+  if (info.price_basis === 'total_return') return '<span class="badge ok" title="Adjusted close used as the price">In price</span>';
+  if (!info.dividends) return `<span class="badge warn" title="No dividend data: returns are price-only">None</span>`;
+  const src = info.dividends === 'adj_close' ? 'from Adj Close' : (r.events && r.events.dividends ? 'from your file' : 'from file');
+  return `<span class="badge ok" title="${fmt.int(info.dividend_count)} dividends ${src}">${fmt.int(info.dividend_count)} ${esc(src)}</span>`;
+}
+function qualityBadge(t) {
+  const info = dataInfo.get(t);
+  if (!info) return '<span class="muted">…</span>';
+  const issues = Object.values(info.quality.issues);
+  const warn = issues.filter(x => x.severity !== 'info').reduce((a, x) => a + x.count, 0);
+  const bad = issues.some(x => x.severity === 'error');
+  if (!issues.length) return '<span class="badge ok">Clean</span>';
+  return `<button class="badge ${bad ? 'bad' : warn ? 'warn' : ''}" type="button" data-quality="${esc(t)}" aria-expanded="${openQuality.has(t)}">${warn ? `${fmt.int(warn)} to check` : 'Notes'}</button>`;
+}
+const openQuality = new Set();
+function qualityDetail(t) {
+  const q = dataInfo.get(t).quality;
+  const items = Object.values(q.issues).map(x => `<li><b>${esc(x.title)}</b> (${fmt.int(x.count)}): ${x.examples.slice(0, 4).map(e => `${fmt.date(e.date)}: ${esc(e.detail)}`).join('; ')}${x.count > 4 ? '…' : ''}</li>`).join('');
+  return `<tr class="detail"><td colspan="10">Checked against the ${esc(q.calendar)} calendar. Nothing was changed or removed unless it says so.<ul>${items}</ul></td></tr>`;
+}
 function renderInstTable() {
   const list = sortedTickers();
-  $('#instCount').textContent = `${fmt.int(list.length)} instrument${list.length === 1 ? '' : 's'}`;
+  if (!qualityChecking) $('#instCount').textContent = `${fmt.int(list.length)} instrument${list.length === 1 ? '' : 's'}`;
   if (!list.length) { $('#instTable').innerHTML = '<tbody><tr><td class="muted">No instruments yet. Drop a CSV file above to add one.</td></tr></tbody>'; return; }
-  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Days</th><th scope="col" class="n">Last Close</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
+  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Days</th><th scope="col" class="n">Last Close</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
   for (const t of list) {
     const r = instruments.get(t);
-    const src = r.synthetic ? '<span class="chip">Synthetic demo</span>' : r.source === 'upload' ? '<span class="chip">Your file</span>' : '<span class="chip">Bundled</span>';
+    const src = r.synthetic ? '<span class="chip">Synthetic demo</span>' : r.base === 'bundled' ? '<span class="chip">Bundled + your files</span>' : r.source === 'upload' ? '<span class="chip">Your file</span>' : '<span class="chip">Bundled</span>';
     h += `<tr><th scope="row" translate="no">${esc(t)}</th><td>${esc(r.name || '')}</td><td>${src}</td><td class="tnum">${fmt.date(r.start)}</td><td class="tnum">${fmt.date(r.end)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.price(r.last)}</td>` +
-      `<td>${r.source === 'upload' ? `<button class="btn small danger" type="button" data-remove="${esc(t)}" aria-label="Remove ${esc(t)}">Remove</button>` : ''}</td></tr>`;
+      `<td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
+      `<td>${r.source === 'upload' ? `<button class="btn small danger" type="button" data-remove="${esc(t)}" aria-label="Remove ${esc(t)}">${r.base === 'bundled' ? 'Reset' : 'Remove'}</button>` : ''}</td></tr>`;
+    if (openQuality.has(t) && dataInfo.has(t)) h += qualityDetail(t);
   }
   $('#instTable').innerHTML = h + '</tbody>';
+}
+function renderRateTable() {
+  const list = [...rates.values()].sort((a, b) => a.ticker.localeCompare(b.ticker));
+  if (!list.length) { $('#rateTable').innerHTML = '<tbody><tr><td class="muted" style="white-space:normal">None yet. Download a rate series as CSV, e.g. the 3-month T-bill yield from <a href="https://fred.stlouisfed.org/series/DTB3" target="_blank" rel="noopener">fred.stlouisfed.org/series/DTB3</a>, & drop it above.</td></tr></tbody>'; return; }
+  let h = '<thead><tr><th scope="col">Series</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Observations</th><th scope="col" class="n">Latest</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
+  for (const r of list) h += `<tr><th scope="row" translate="no">${esc(r.ticker)}</th><td class="tnum">${fmt.date(r.dates[0])}</td><td class="tnum">${fmt.date(r.dates[r.dates.length - 1])}</td><td class="n">${fmt.int(r.dates.length)}</td><td class="n">${fmt.num(r.values[r.values.length - 1], 2)}%</td><td><button class="btn small danger" type="button" data-remove-rate="${esc(r.ticker)}">Remove</button></td></tr>`;
+  $('#rateTable').innerHTML = h + '</tbody>';
+}
+function fillRateSelect() {
+  const sel = $('#cfgRateSeries'); const want = sel.value || (store.get('settings', {}) || {}).cfgRateSeries || '';
+  sel.innerHTML = '<option value="">None</option>' + [...rates.keys()].sort().map(t => `<option>${esc(t)}</option>`).join('');
+  sel.value = rates.has(want) ? want : '';
 }
 function renderDownloadList() {
   $('#dlList').innerHTML = RECOMMENDED.map(([t, n, kind]) => `<li><a href="https://www.nasdaq.com/market-activity/${kind}/${t.toLowerCase()}/historical" target="_blank" rel="noopener"><b>${t}</b></a> <span class="muted" translate="yes">${esc(n)}</span>${instruments.has(t) ? ' <span class="chip ok">Loaded</span>' : ''}</li>`).join('');
@@ -1982,7 +2241,7 @@ function showTab(name) {
   if (name === 'edit' && changed) requestAnimationFrame(() => editor.ta.focus({ preventScroll: true }));
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); }
-  if (name === 'data') { renderInstTable(); renderDownloadList(); }
+  if (name === 'data') { renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
   document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
   store.set('tab', name);
   if (changed && name !== 'edit') { const h1 = $(`#view-${name} h1`); if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } }
@@ -2063,6 +2322,11 @@ function wire() {
   $('#fileInput').onchange = e => { handleFiles([...e.target.files]); e.target.value = ''; };
   $('#pending').addEventListener('submit', async e => {
     e.preventDefault(); const form = e.target; const p = pendingFiles.find(x => x.id === form.dataset.id); if (!p) return;
+    if (p.kind !== 'prices') {
+      const t = $('#tk-' + p.id).value; if (!t) return;
+      try { await attachEvents(t, p.kind, p.text, p.file); pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); } catch (err) { toast(`${p.file}: ${err.message}`); }
+      return;
+    }
     const t = $('#tk-' + p.id).value.trim().toUpperCase();
     if (!/^[A-Z0-9.^=\-]{1,15}$/.test(t)) { setFieldError('tk-' + p.id, 'Enter a ticker such as SPY (letters, digits, “.” or “-”).'); $('#tk-' + p.id).focus(); return; }
     pendingFiles.splice(pendingFiles.indexOf(p), 1);
@@ -2074,13 +2338,26 @@ function wire() {
     const p = pendingFiles.find(x => x.id === btn.closest('form').dataset.id); if (p) { pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); toast(`Skipped ${p.file}.`); }
   });
   $('#instTable').addEventListener('click', e => {
+    const q = e.target.closest('button[data-quality]');
+    if (q) { const t = q.dataset.quality; if (openQuality.has(t)) openQuality.delete(t); else openQuality.add(t); renderInstTable(); $(`button[data-quality="${t}"]`).focus(); return; }
     const b = e.target.closest('button[data-remove]'); if (!b) return; const t = b.dataset.remove;
     armConfirm(b, 'Confirm Remove', async () => {
       const rec = instruments.get(t); instruments.delete(t); py.forget(t); await idb.del(t); await loadBundled();
       fillInstrumentSelects(); renderInstTable(); renderDownloadList();
-      toast(`Removed ${t}.`, { label: 'Undo', run: () => saveUpload(rec.ticker, rec.name, rec.data, rec.filename) });
+      dataInfo.delete(t);
+      toast(`Removed ${t}.`, { label: 'Undo', run: () => saveUpload(rec.ticker, rec.name, rec.data, rec.filename, false, rec.events) });
     });
   });
+  $('#rateTable').addEventListener('click', e => {
+    const b = e.target.closest('button[data-remove-rate]'); if (!b) return; const t = b.dataset.removeRate;
+    armConfirm(b, 'Confirm Remove', async () => { rates.delete(t); py.loadedRates.delete(t); await idb.del(t); renderRateTable(); fillRateSelect(); saveSettings(); toast(`Removed ${t}.`); });
+  });
+  $('#univBtn').onclick = () => { togglePicker($('#univBtn'), $('#univPick')); if (!$('#univPick').hidden) $('#univSearch').focus(); };
+  $('#univList').addEventListener('change', e => { const u = universeState(); const set = new Set(u.picked); if (e.target.checked) set.add(e.target.value); else set.delete(e.target.value); setPicked([...set]); });
+  $('#univSearch').addEventListener('input', renderUniverse);
+  $('#univCode').onclick = () => setPicked(codeInfo.universe || []);
+  $('#univAll').onclick = () => setPicked(sortedTickers().filter(t => !instruments.get(t).synthetic));
+  $('#univNone').onclick = () => setPicked([]);
   window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning) { e.preventDefault(); e.returnValue = ''; } });
 
   const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } };
@@ -2122,7 +2399,7 @@ async function boot() {
   const prefer = { ...(settings || {}) };
   if (q.get('ticker')) prefer.instrument = q.get('ticker').toUpperCase();
   if (q.has('bench')) prefer.benchmark = (q.get('bench') || '').toUpperCase();
-  fillInstrumentSelects(prefer);
+  fillInstrumentSelects(prefer); fillRateSelect(); summarizeSettings();
   const from = q.get('from') || (settings && settings.start), to = q.get('to') || (settings && settings.end);
   if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) $('#start').value = from;
   if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) $('#end').value = to;
@@ -2135,8 +2412,9 @@ async function boot() {
     METRICS = await py.call('metric_list', {}); renderMetricChecks();
     $('#swMetric').innerHTML = ['sharpe', 'cagr', 'total_return', 'sortino', 'calmar', 'max_drawdown', 'win_rate', 'profit_factor', 'information_ratio', 'alpha', 'psr', 'sqn']
       .map(k => METRICS.find(m => m.key === k)).filter(Boolean).map(m => `<option value="${m.key}">${esc(m.label)}</option>`).join('');
-    refreshParams();
+    await refreshParams();
     if (instruments.size) runBacktest();
+    if (currentTab === 'data') checkAllData();
   } catch (e) {
     console.error(e); setStatus('error', 'Python couldn’t start');
     $('#resTitle').textContent = 'Python Couldn’t Start';
