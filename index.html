@@ -209,6 +209,28 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .tok-com { color: var(--syn-com); font-style: italic; }
 .tok-ctx { color: var(--syn-ctx); }
 .save-form { display: grid; gap: 6px; }
+.editor[data-size="m"] { font-size: 14px; --lh: 22px; }
+.editor[data-size="l"] { font-size: 16px; --lh: 24px; }
+
+/* ---------- full-page editor: the strategy panel body & key results are moved in here ---------- */
+.edit-head { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.edit-head h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.edit-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 400px); gap: 20px; align-items: start; }
+main:has(> #view-edit:not([hidden])) { padding-bottom: 16px; }
+#view-edit .edit-main > .panel-b { display: flex; flex-direction: column; height: calc(100vh - 146px); height: calc(100dvh - 146px); min-height: 480px; }
+#view-edit .editor { flex: 1 1 auto; height: auto !important; resize: none; }
+.edit-side { display: grid; gap: var(--gap); position: sticky; top: 76px; max-height: calc(100vh - 92px); max-height: calc(100dvh - 92px);
+  overflow-y: auto; scrollbar-width: thin; padding: 2px; margin: -2px; }
+.edit-side .panel-b { grid-template-columns: minmax(0, 1fr); }  /* let moved charts shrink to the sidebar */
+.edit-side .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.edit-side .kpi .v { font-size: 22px; }
+.edit-side .chart { height: 220px; }
+@media (max-width: 1060px) {
+  .edit-grid { grid-template-columns: minmax(0, 1fr); }
+  #view-edit .edit-main > .panel-b { height: auto; min-height: 0; }
+  #view-edit .editor { height: 70vh !important; }
+  .edit-side { position: static; max-height: none; overflow: visible; }
+}
 
 /* ---------- readout ---------- */
 .runline { display: grid; gap: 6px; }
@@ -356,6 +378,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
     </a>
     <nav class="tabs" aria-label="Sections">
       <a href="#backtest" data-tab="backtest">Backtest</a>
+      <a href="#edit" data-tab="edit">Editor</a>
       <a href="#tools" data-tab="tools">Research Tools</a>
       <a href="#data" data-tab="data">Data</a>
       <a href="docs.html">Docs</a>
@@ -388,8 +411,9 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
         </form>
 
         <section class="panel" aria-labelledby="h-strategy">
-          <div class="panel-h"><h2 id="h-strategy">Strategy</h2><span class="spacer"></span><span class="muted" translate="no">Python 3.12</span></div>
-          <div class="panel-b">
+          <div class="panel-h"><h2 id="h-strategy">Strategy</h2><span class="spacer"></span><span class="muted" translate="no">Python 3.12</span>
+            <a class="btn small" href="#edit" title="Edit the code on a full page">Open Full Editor</a></div>
+          <div class="panel-b" id="strategyBody">
             <div class="field"><label for="template">Start From</label><select id="template" name="template"></select></div>
             <p class="about" id="about"></p>
             <div class="editor" id="editor" translate="no">
@@ -472,7 +496,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
 
           <dl class="kpis panel" id="kpis"></dl>
 
-          <section class="panel" aria-labelledby="h-eq">
+          <section class="panel" id="eqPanel" aria-labelledby="h-eq">
             <div class="panel-h"><h3 id="h-eq">Equity</h3><ul class="legend" id="eqLegend"></ul><span class="spacer"></span>
               <div class="seg" id="eqScale" role="group" aria-label="Equity scale"><button type="button" aria-pressed="true" data-scale="linear">Linear</button><button type="button" aria-pressed="false" data-scale="log">Log</button></div>
             </div>
@@ -542,6 +566,24 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           </section>
         </section>
       </div>
+    </div>
+  </section>
+
+  <!-- ================================================================ EDITOR -->
+  <section class="view" id="view-edit" aria-labelledby="h-edit" hidden>
+    <div class="edit-head">
+      <h1 id="h-edit">Strategy Editor</h1>
+      <span class="spacer"></span>
+      <span class="label" id="edSizeLabel">Text Size</span>
+      <div class="seg" id="edSize" role="group" aria-labelledby="edSizeLabel"><button type="button" data-size="s" aria-pressed="true">S</button><button type="button" data-size="m" aria-pressed="false">M</button><button type="button" data-size="l" aria-pressed="false">L</button></div>
+      <a class="btn small" href="#backtest">Back to Backtest</a>
+    </div>
+    <div class="edit-grid">
+      <section class="panel edit-main" id="editSlotCode" aria-label="Strategy code"></section>
+      <aside class="edit-side" aria-label="Latest run">
+        <div class="stack" id="editSlotSide"></div>
+        <p class="help">Charts, statistics & trades for this run are on the <a href="#backtest">Backtest tab</a>.</p>
+      </aside>
     </div>
   </section>
 
@@ -1333,7 +1375,7 @@ function renderResults(r) {
   const m = r.metrics, b = r.bench_metrics;
   const benchName = r.benchmark === r.ticker ? `buy & hold ${r.ticker}` : r.benchmark;
   $('#resTitle').textContent = `${r.strategyName} on ${r.ticker}`;
-  if (currentTab === 'backtest') document.title = `${r.strategyName} on ${r.ticker} · QuantLab`;
+  if (currentTab === 'backtest' || currentTab === 'edit') document.title = `${r.strategyName} on ${r.ticker} · QuantLab`;
   $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${fmt.num(r.elapsed / 1000, 2)} s`;
   const chips = [`<span class="chip">${r.mode === 'signals' ? 'signals(data)' : 'on_bar(ctx)'}</span>`];
   if (r.lookahead) {
@@ -1871,7 +1913,24 @@ function renderDownloadList() {
 }
 
 /* ---------------------------------------------------------------- tabs -- */
-const TAB_TITLES = { backtest: 'Backtest', tools: 'Research Tools', data: 'Data' };
+const TAB_TITLES = { backtest: 'Backtest', edit: 'Strategy Editor', tools: 'Research Tools', data: 'Data' };
+// The Editor tab borrows these elements from the Backtest tab instead of copying them,
+// so there is one editor (one undo history) & one set of results. A comment marks each home.
+const EDIT_DOCK = [['strategyBody', 'editSlotCode'], ['errBox', 'editSlotSide'], ['notes', 'editSlotSide'], ['kpis', 'editSlotSide'], ['eqPanel', 'editSlotSide'], ['logPanel', 'editSlotSide']];
+const dockHomes = new Map();
+function dockEditor(on) {
+  for (const [id, slot] of EDIT_DOCK) {
+    const el = document.getElementById(id);
+    if (!dockHomes.has(id)) { const mark = document.createComment(' home of #' + id + ' '); el.before(mark); dockHomes.set(id, mark); }
+    if (on) { if (el.parentElement.id !== slot) $('#' + slot).appendChild(el); } else dockHomes.get(id).after(el);
+  }
+  editor.sync(); if (charts.eq) charts.eq.resize();
+}
+function setEditorSize(size) {
+  $('#editor').dataset.size = size; store.set('editorSize', size);
+  $$('#edSize button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.size === size)));
+  editor.sync();
+}
 let currentTab = null;
 function route() {
   const h = location.hash.slice(1);
@@ -1886,12 +1945,14 @@ function showTab(name) {
   if (!TAB_TITLES[name]) name = 'backtest';
   const changed = currentTab && currentTab !== name; currentTab = name;
   for (const v of Object.keys(TAB_TITLES)) $('#view-' + v).hidden = v !== name;
+  dockEditor(name === 'edit');
+  if (name === 'edit' && changed) requestAnimationFrame(() => editor.ta.focus({ preventScroll: true }));
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); }
   if (name === 'data') { renderInstTable(); renderDownloadList(); }
-  document.title = name === 'backtest' && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
+  document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
   store.set('tab', name);
-  if (changed) { const h1 = $(`#view-${name} h1`); if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } }
+  if (changed && name !== 'edit') { const h1 = $(`#view-${name} h1`); if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } }
 }
 
 /* --------------------------------------------------------------- wiring -- */
@@ -1926,6 +1987,7 @@ function wire() {
   $$('#eqScale button').forEach(b => { b.onclick = () => { $$('#eqScale button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); if (lastRun) drawResultCharts(lastRun.result); }; });
   $$('#heatWhich button').forEach(b => { b.onclick = () => { $$('#heatWhich button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); if (lastRun) renderHeat(lastRun.result); }; });
   $('#showDesc').onchange = () => { if (lastRun) renderMetrics(lastRun.result); };
+  $$('#edSize button').forEach(b => { b.onclick = () => setEditorSize(b.dataset.size); });
   $('#panelPickBtn').onclick = () => togglePicker($('#panelPickBtn'), $('#panelPick'));
   $('#panelChecks').addEventListener('change', e => { shown.set('panels', { [e.target.value]: e.target.checked }); applyPanels(true); });
   $('#panelDefaults').onclick = () => { shown.reset('panels'); renderPanelChecks(); applyPanels(true); };
@@ -1998,7 +2060,8 @@ function ensureChartLib() {
 }
 
 async function boot() {
-  setThemeColor(); renderKpiSkeleton(); renderPanelChecks(); applyPanels(); renderToolChecks(); applyTools(); editor.init(); wire(); route();
+  setThemeColor(); renderKpiSkeleton(); renderPanelChecks(); applyPanels(); renderToolChecks(); applyTools(); editor.init(); wire();
+  setEditorSize(store.get('editorSize', 's')); route();
   const settings = restoreSettings(); const q = url.read();
   if (q.get('settings') === 'open') $('#settingsBox').open = true;
   summarizeSettings();

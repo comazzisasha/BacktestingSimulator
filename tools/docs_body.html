@@ -141,7 +141,8 @@ def on_bar(ctx):
     <div class="note"><p><b>Dividends.</b> Nasdaq's Close/Last is adjusted for splits but not for dividends. Buy-and-hold results for dividend payers such as SPY (about 1.3% a year) or TLT (about 3–4%) are therefore understated. Strategies and benchmarks are measured on the same prices, so comparisons between them stay fair.</p></div>
 
     <h2 id="strategy-api">Writing a Strategy</h2>
-    <p>Your code is ordinary Python 3.12. It must define <code>on_bar(ctx)</code>, or <code>signals(data)</code> for the <a href="#signals">vectorized style</a>. A few names are available without importing them: <code>math</code>, <code>statistics</code>, <code>random</code>, <code>datetime</code>, <code>qt</code> (indicator functions), <code>isnan</code> and <code>NAN</code>. The rest of the standard library can be imported normally. NumPy and pandas are not available.</p>
+    <p>Your code is ordinary Python 3.12. It must define <code>on_bar(ctx)</code>, or <code>signals(data)</code> for the <a href="#signals">vectorized style</a>. A few names are available without importing them: <code>math</code>, <code>statistics</code>, <code>random</code>, <code>datetime</code>, <code>qt</code> (indicator functions), <code>walk_forward</code> (see <a href="#ml">Machine Learning</a>), <code>isnan</code> and <code>NAN</code>. The rest of the standard library can be imported normally, and so can NumPy, pandas, SciPy and scikit-learn.</p>
+    <p>For longer code, open the <b>Editor</b> tab (or <b>Open Full Editor</b> on the Strategy panel). It gives the same editor the full height of the window, with a text-size switch, and keeps the Run button, errors, headline numbers and equity curve beside it. Your code is shared between both views.</p>
 
     <h3>What on_bar Returns</h3>
     <div class="scroll"><table>
