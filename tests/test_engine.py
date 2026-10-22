@@ -288,6 +288,82 @@ def test_split_metrics_cover_whole_range():
     assert approx(total, m["total_return"], 1e-9)
 
 
+def test_metric_tiers_and_coverage():
+    keys = [m[0] for m in engine.METRICS]
+    assert len(keys) == len(set(keys)), "metric keys must be unique"
+    assert all(m[4] in ("core", "std", "extra") for m in engine.METRICS)
+    res = engine.backtest(engine.Strategy.from_code(load_templates()["sma_cross"]), DEMO,
+                          engine.Config(slippage_bps=0.0), bench=BOND)
+    m, _ = engine.summarize(res)
+    missing = [k for k in keys if k not in m]
+    assert not missing, "every metric should be computed for a strategy with trades: %s" % missing
+
+
+def test_new_metrics_against_direct_formulas():
+    res = run(load_templates()["rsi_reversion"])
+    m, _ = engine.summarize(res)
+    r = engine.daily_returns(res.equity)
+    n, mu, sd = len(r), sum(r) / len(r), engine.stdev(r)
+    assert approx(m["t_stat"], mu / sd * math.sqrt(n))
+    assert 0 <= m["p_value"] <= 1 and 0 <= m["psr"] <= 1 and 0 <= m["jb_p"] <= 1
+    assert m["sharpe_lo"] < m["sharpe"] < m["sharpe_hi"]
+    assert approx(m["var_99"], -engine.percentile(r, 1))
+    assert m["cvar_99"] >= m["var_99"] >= m["var_95"] - 1e-12
+    assert approx(m["kelly"], mu / sd ** 2)
+    assert approx(m["recovery_factor"], m["total_return"] / abs(m["max_drawdown"]))
+    dd = engine.drawdown(res.equity)
+    assert approx(m["pain_index"], -sum(dd) / len(dd))
+    assert 0 <= m["stability"] <= 1
+    assert approx(m["payoff_ratio"], m["avg_win"] / abs(m["avg_loss"]))
+    closed = [t["ret"] for t in res.trades if not t["open"]]
+    assert approx(m["sqn"], math.sqrt(len(closed)) * (sum(closed) / len(closed)) / engine.stdev(closed))
+    assert approx(m["trades_per_year"], m["n_trades"] / m["years"])
+    # a strategy identical to its benchmark beats it on no day and has no alpha to test
+    bh, _ = engine.summarize(run("def on_bar(ctx):\n    return 1.0\n"))
+    assert bh["beat_days"] < 0.6
+
+
+def test_return_tests_detect_signal_and_noise():
+    rng = random.Random(3)
+    noise = [rng.gauss(0, 0.01) for _ in range(2000)]
+    drift = [x + 0.002 for x in noise]
+    tn, td = engine.return_tests(noise), engine.return_tests(drift)
+    assert td["p_value"] < 0.001 < tn["p_value"]
+    assert td["psr"] > 0.999
+    assert tn["jb_p"] > 0.01, "gaussian returns should pass the normality test"
+    assert tn["autocorr_p"] > 0.01
+    trending = [0.01 if i % 2 else -0.01 for i in range(500)]
+    assert engine.return_tests(trending)["autocorr"] < -0.9
+
+
+def test_subperiods_and_costs():
+    code = load_templates()["sma_cross"]
+    res = run(code)
+    sp = engine.subperiod_metrics(res, 4)
+    assert sp["n"] == 4 and len(sp["periods"]) == 4
+    growth = 1.0
+    for p in sp["periods"]:
+        growth *= 1 + p["metrics"]["total_return"]
+    assert approx(growth - 1, engine.summarize(res)[0]["total_return"], 1e-9)
+    cs = engine.cost_sensitivity(lambda: engine.Strategy.from_code(code), DEMO, engine.Config(), [20, 0, 5])
+    cagrs = [row["cagr"] for row in cs["rows"]]
+    assert [row["bps"] for row in cs["rows"]] == [0, 5, 20]
+    assert cagrs == sorted(cagrs, reverse=True), "higher costs can't raise returns"
+    assert cs["rows"][0]["costs"] == 0
+
+
+def test_permutation_test():
+    # The weight set at bar i fills at bar i + 1's close and earns bar i + 2's return.
+    cheat = ("def signals(data):\n"
+             "    c = data.close\n"
+             "    return [1.0 if i + 2 < len(c) and c[i + 2] > c[i + 1] else 0.0 for i in range(len(c))]\n")
+    res = run(cheat, execution="close")
+    pt = engine.permutation_test(res, 200, seed=1)
+    assert pt["p_value"] < 0.01, "perfect foresight must beat random timing"
+    bh = engine.permutation_test(run("def on_bar(ctx):\n    return 1.0\n"), 50)
+    assert bh["constant"]
+
+
 def test_bundled_data_parses():
     import json
     man = json.load(open(os.path.join(ROOT, "data", "manifest.json")))
@@ -315,6 +391,11 @@ def test_json_api_roundtrip():
     assert not bad["ok"] and "on_bar must return" in bad["error"]["message"]
     an = json.loads(engine.handle("analytics", json.dumps({"tickers": ["DEMO-STOCK", "DEMO-BOND"]})))
     assert an["ok"] and len(an["result"]["matrix"]) == 2
+    assert all(m["tier"] in ("core", "std", "extra") for m in json.loads(engine.handle("metric_list", "{}"))["result"])
+    base = {"ticker": "DEMO-STOCK", "benchmark": "DEMO-BOND", "code": load_templates()["sma_cross"]}
+    for method, extra in (("subperiods", {"n": 3}), ("costs", {"levels": [0, 10]}), ("permutation", {"n_perm": 50})):
+        out = json.loads(engine.handle(method, json.dumps(dict(base, **extra))))
+        assert out["ok"], (method, out)
 
 
 if __name__ == "__main__":

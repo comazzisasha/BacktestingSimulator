@@ -18,12 +18,14 @@ def esc(s):
 
 def metrics_table():
     out, group = [], None
-    out.append('<div class="scroll"><table><thead><tr><th>Statistic</th><th>Key</th><th>Meaning</th></tr></thead><tbody>')
-    for key, label, grp, _fmt, desc in engine.METRICS:
+    shown = {"core": "Always", "std": "By default", "extra": "Optional"}
+    out.append('<div class="scroll"><table><thead><tr><th>Statistic</th><th>Key</th><th>Shown</th><th>Meaning</th></tr></thead><tbody>')
+    for key, label, grp, _fmt, tier, desc in engine.METRICS:
         if grp != group:
             group = grp
-            out.append('<tr class="group"><td colspan="3">%s</td></tr>' % esc(grp))
-        out.append('<tr><td>%s</td><td><code>%s</code></td><td>%s</td></tr>' % (esc(label), esc(key), esc(desc)))
+            out.append('<tr class="group"><td colspan="4">%s</td></tr>' % esc(grp))
+        out.append('<tr><td>%s</td><td><code>%s</code></td><td>%s</td><td>%s</td></tr>'
+                   % (esc(label), esc(key), shown[tier], esc(desc)))
     out.append('</tbody></table></div>')
     return "\n".join(out)
 

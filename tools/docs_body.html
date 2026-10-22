@@ -267,6 +267,7 @@ def on_bar(ctx):
 
     <h2 id="statistics">Statistics</h2>
     <p>All statistics come from the daily equity curve, marked at each close, and from the list of trades. Annualization assumes 252 trading days. Years are measured in calendar days divided by 365.25.</p>
+    <p>The <b>Shown</b> column says what the Backtest tab displays. <i>Always</i> statistics can’t be hidden; <i>By default</i> ones are on until you hide them; <i>Optional</i> ones are off until you turn them on with <b>Choose Statistics</b>. Your choice is remembered in the browser. The same applies to the chart panels (<b>Customize Panels</b>) and to the Research Tools (<b>Optional Tools</b>). Every statistic is always computed and returned by <code>engine.summarize</code>, whatever the page shows.</p>
 <!--METRICS-->
     <h3>How to Read Them Together</h3>
     <ul>
@@ -275,6 +276,7 @@ def on_bar(ctx):
       <li><b>Beta below 1 with positive alpha</b> means the strategy earned more than its market exposure explains. A low beta alone just means it held less of the asset.</li>
       <li><b>Win rate</b> means little alone. Trend followers often win 35% of trades and still profit because their average win is much larger than their average loss; check <b>profit factor</b>.</li>
       <li>Fewer than about 30 trades or 3 years of data is too little to tell skill from luck. Run the Monte Carlo tool.</li>
+      <li>The <b>statistical tests</b> answer “could this be luck?”. A p-value is the chance of a result at least this good if there were no real edge; below 0.05 is the usual bar. A <b>minimum track record</b> longer than your backtest means the data can’t yet show the Sharpe ratio is above zero. Test many variations and some will pass by chance, so treat one passing test as a hint, not proof.</li>
     </ul>
 
     <h2 id="strategies">Built-In Strategies</h2>
@@ -289,6 +291,12 @@ def on_bar(ctx):
     <p>Takes the strategy’s daily returns and builds alternative histories by stitching together randomly chosen blocks of consecutive days (a circular block bootstrap). Blocks keep calm and volatile stretches together. The fan chart shows the range of paths, and the table shows percentiles of total return, CAGR and maximum drawdown. If the 5th percentile drawdown would be unbearable, size the strategy down.</p>
     <h3>In-Sample vs Out-of-Sample</h3>
     <p>Runs one continuous backtest and reports statistics separately before and after a split date. Indicator warm-up and open positions carry across the split. A strategy designed by looking at the whole chart will almost always look worse after the split, and that worse result is the realistic one.</p>
+    <h3>Sub-Period Consistency <span class="muted">(optional)</span></h3>
+    <p>Cuts one continuous backtest into 2–20 back-to-back periods with equal numbers of trading days and scores each against the benchmark. A strategy whose whole profit comes from one period depended on one market regime.</p>
+    <h3>Cost Sensitivity <span class="muted">(optional)</span></h3>
+    <p>Re-runs the backtest once per cost level. Each level is the cost of every fill in basis points of traded value and replaces both the commission percentage and the slippage; the flat fee per fill is kept. The summary reports, by linear interpolation between the levels you tested, the cost at which CAGR drops below the benchmark’s and below zero.</p>
+    <h3>Random-Timing Test <span class="muted">(optional)</span></h3>
+    <p>A permutation test of timing skill. It shuffles the strategy’s daily exposures, which keeps how often and how heavily it was invested but not when, and pairs them with the instrument’s actual close-to-close returns. Each ordering is scored by its Sharpe ratio before costs. The p-value is the share of shuffles that scored at least as well as the real ordering. Strategies that hold nearly the same position every day, like buy and hold, can’t be tested this way.</p>
     <h3>Instrument Analytics</h3>
     <p>Buy-and-hold statistics for each loaded instrument, a correlation matrix of daily returns on the dates all of them share, and a growth-of-100 chart. Assets with low correlation combine into portfolios with smaller drawdowns.</p>
 
