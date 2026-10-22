@@ -131,6 +131,32 @@ def norm_cdf(x):
     return 0.5 * math.erfc(-x / math.sqrt(2.0))
 
 
+def norm_ppf(p):
+    """Inverse of the standard normal CDF (Acklam's rational approximation + one Newton step)."""
+    if not 0 < p < 1:
+        raise ValueError("norm_ppf needs 0 < p < 1")
+    a = (-3.969683028665376e+01, 2.209460984245205e+02, -2.759285104469687e+02, 1.383577518672690e+02,
+         -3.066479806614716e+01, 2.506628277459239e+00)
+    b = (-5.447609879822406e+01, 1.615858368580409e+02, -1.556989798598866e+02, 6.680131188771972e+01,
+         -1.328068155288572e+01)
+    c = (-7.784894002430293e-03, -3.223964580411365e-01, -2.400758277161838e+00, -2.549732539343734e+00,
+         4.374664141464968e+00, 2.938163982698783e+00)
+    d = (7.784695709041462e-03, 3.224671290700398e-01, 2.445134137142996e+00, 3.754408661907416e+00)
+    if p < 0.02425:
+        q = math.sqrt(-2 * math.log(p))
+        x = (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    elif p > 1 - 0.02425:
+        q = math.sqrt(-2 * math.log(1 - p))
+        x = -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1)
+    else:
+        q = p - 0.5
+        r = q * q
+        x = (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q / (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1)
+    e = norm_cdf(x) - p                        # one Newton step polishes to ~1e-15
+    return x - e * math.sqrt(2 * math.pi) * math.exp(x * x / 2)
+
+
+EULER_GAMMA = 0.5772156649015329
 Z_95 = 1.6448536269514722   # one-sided 95% quantile of the standard normal
 Z_975 = 1.959963984540054   # two-sided 95%
 
@@ -507,7 +533,7 @@ def drawdown(x):
     return out
 
 
-def walk_forward(X, y, fit_predict, min_train=252, retrain_every=21, horizon=1, window=None, fill=NAN):
+def walk_forward(X, y, fit_predict, min_train=252, retrain_every=21, horizon=1, window=None, fill=NAN, embargo=0):
     """Out-of-sample model predictions for every bar, without look-ahead.
 
     X             one row of features per bar (list of lists or a 2-D NumPy array).
@@ -518,14 +544,15 @@ def walk_forward(X, y, fit_predict, min_train=252, retrain_every=21, horizon=1, 
                   Gets NumPy arrays when X is one, else lists.
 
     Retrains every `retrain_every` bars, starting once `min_train` labelled rows
-    exist. A model trained at bar t only sees rows j with j + horizon <= t (labels
-    already known at t's close), the most recent `window` of them if set, and
-    predicts bars t .. t + retrain_every - 1. Returns one value per bar.
+    exist. A model trained at bar t only sees rows j with j + horizon + embargo <= t
+    (labels already known at t's close, plus `embargo` bars of gap so training never
+    ends right next to what it predicts), the most recent `window` of them if set,
+    and predicts bars t .. t + retrain_every - 1. Returns one value per bar.
     """
     n = len(X)
     if len(y) != n:
         raise ValueError("walk_forward: X has %d rows but y has %d" % (n, len(y)))
-    retrain_every, horizon = max(1, int(retrain_every)), max(1, int(horizon))
+    retrain_every, horizon = max(1, int(retrain_every)), max(1, int(horizon)) + max(0, int(embargo))
     is_array = hasattr(X, "shape")
     take_x = (lambda idx: X[idx]) if is_array else (lambda idx: [X[j] for j in idx])
     y_array = hasattr(y, "shape")
@@ -1677,6 +1704,7 @@ def _namespace():
         "__builtins__": __builtins__,
         "math": math, "statistics": statistics, "random": random,
         "datetime": _dt, "qt": qt, "NAN": NAN, "isnan": isnan, "walk_forward": walk_forward,
+        "purged_kfold": purged_kfold, "cpcv_splits": cpcv_splits, "cv_score": cv_score,
     }
 
 
@@ -2887,6 +2915,9 @@ METRICS = [
     ("win_rate_p", "Win-rate p-value", "Statistical tests", "pval", "extra", "Chance of at least this many winning trades if each trade were a coin flip (one-sided binomial, normal approximation)."),
     ("autocorr", "Autocorrelation (1 day)", "Statistical tests", "num", "extra", "Correlation of each day's return with the previous day's. Far from 0 means returns are not independent."),
     ("autocorr_p", "Autocorrelation p-value", "Statistical tests", "pval", "extra", "Two-sided p-value that the 1-day autocorrelation is zero. Below 0.05 = significant serial correlation."),
+    ("dsr", "Deflated Sharpe", "Statistical tests", "pct", "std", "Probability that the true Sharpe ratio beats the best you'd expect from this many trials with no skill (Bailey & Lopez de Prado). Below 95%: the result may be the luck of trying many versions."),
+    ("sr_hurdle", "Sharpe hurdle (trials)", "Statistical tests", "num", "std", "The highest annualized Sharpe ratio expected by chance from the number of strategy variations tried so far."),
+    ("trials", "Trials counted", "Statistical tests", "int", "std", "Distinct versions of this strategy (code, parameters, settings, market) run in this browser. Each one raises the bar."),
     ("jb_p", "Normality p-value", "Statistical tests", "pval", "extra", "Jarque-Bera test that daily returns are normally distributed. Below 0.05 = fat tails or skew; treat Sharpe and VaR with care."),
 ]
 
@@ -3229,8 +3260,9 @@ def exposure_stats(res, a=0, b=None):
     return m
 
 
-def summarize(res, rf=None):
-    """Strategy and benchmark metrics for a Result."""
+def summarize(res, rf=None, trials=None):
+    """Strategy and benchmark metrics for a Result. trials = {'n': count, 'var': variance
+    of the annualized Sharpe ratios tried} feeds the Deflated Sharpe Ratio."""
     rf = res.config.risk_free if rf is None else rf
     m = performance(res.dates, res.equity, rf, res.bench_equity, res.trades, res.exposure,
                     res.traded_notional, res.commission + res.slippage + res.spread_paid + res.impact_paid,
@@ -3243,6 +3275,9 @@ def summarize(res, rf=None):
     m["borrow_paid"] = c["borrow_paid"]
     m["carry_total"] = m["dividends_net"] + m["interest_net"] - c["borrow_paid"]
     m["margin_calls"] = len(res.margin_calls)
+    t = trials or {}
+    rfd = (1 + rf) ** (1 / TRADING_DAYS) - 1
+    m.update(deflated_sharpe(daily_returns(res.equity), t.get("n", 1), t.get("var"), rfd))
     b = performance(res.dates, res.bench_equity, rf)
     return m, b
 
@@ -3485,6 +3520,234 @@ def permutation_test(res, n_perm=500, seed=7):
     }
 
 
+# ---- overfitting controls -----------------------------------------------------
+
+def expected_max_sharpe(trials, sr_var):
+    """Expected highest Sharpe ratio among `trials` strategies with no skill whose
+    Sharpe ratios vary with variance sr_var (same units as the result)."""
+    if trials <= 1 or sr_var <= 0:
+        return 0.0
+    g = EULER_GAMMA
+    return math.sqrt(sr_var) * ((1 - g) * norm_ppf(1 - 1.0 / trials) + g * norm_ppf(1 - 1.0 / (trials * math.e)))
+
+
+def deflated_sharpe(r, trials, sr_var_annual=None, rfd=0.0):
+    """Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014) of daily returns r.
+
+    The probability that the true Sharpe ratio beats the best one expected from
+    `trials` attempts with no skill. sr_var_annual is the variance of the annualized
+    Sharpe ratios across those trials; without it, the Sharpe estimate's own sampling
+    variance is used. Returns {'dsr', 'sr_hurdle' (annualized), 'trials'}.
+    """
+    n = len(r)
+    if n < 4:
+        return {}
+    mu, sd = mean(r), stdev(r)
+    g3, g4 = skewness(r), kurtosis(r)
+    if not sd > 0 or isnan(g3) or isnan(g4):
+        return {}
+    sr = (mu - rfd) / sd
+    spread = 1 - g3 * sr + (g4 + 2) / 4 * sr * sr
+    if spread <= 0:
+        return {}
+    trials = max(1, int(trials))
+    var_d = sr_var_annual / TRADING_DAYS if sr_var_annual else spread / (n - 1)
+    sr0 = expected_max_sharpe(trials, var_d)
+    return {"dsr": norm_cdf((sr - sr0) * math.sqrt(n - 1) / math.sqrt(spread)),
+            "sr_hurdle": sr0 * math.sqrt(TRADING_DAYS), "trials": trials}
+
+
+def block_stats(r, n_blocks):
+    """Split daily returns into n_blocks consecutive blocks: [(sum, sum of squares, count)]."""
+    n = len(r)
+    cuts = [int(round(j * n / n_blocks)) for j in range(n_blocks + 1)]
+    out = []
+    for a, b in zip(cuts, cuts[1:]):
+        part = r[a:b]
+        out.append((sum(part), sum(x * x for x in part), len(part)))
+    return out
+
+
+def pbo_cscv(blocks, labels=None):
+    """Probability of Backtest Overfitting by combinatorially symmetric cross-validation
+    (Bailey, Borwein, Lopez de Prado & Zhu, 2015).
+
+    blocks[c] holds block_stats() of configuration c (every configuration on the same
+    dates and blocks). For every way to pick half the blocks as in-sample, the
+    configuration with the best in-sample Sharpe is ranked out of sample. PBO is the
+    share of splits where it lands at or below the median.
+    """
+    from itertools import combinations
+    n_cfg = len(blocks)
+    if n_cfg < 2:
+        raise ValueError("PBO needs at least 2 configurations.")
+    S = len(blocks[0])
+    if S < 4 or S % 2 or any(len(b) != S for b in blocks):
+        raise ValueError("PBO needs an even number of blocks (at least 4), the same for every configuration.")
+
+    def sharpe(c, idx):
+        s = ss = cnt = 0.0
+        for i in idx:
+            s += blocks[c][i][0]
+            ss += blocks[c][i][1]
+            cnt += blocks[c][i][2]
+        var = (ss - s * s / cnt) / (cnt - 1) if cnt > 1 else 0.0
+        return s / cnt / math.sqrt(var) * math.sqrt(TRADING_DAYS) if var > 1e-18 else 0.0
+
+    logits, is_best, oos_best, chosen = [], [], [], {}
+    for comb in combinations(range(S), S // 2):
+        oos = [i for i in range(S) if i not in comb]
+        ins = [sharpe(c, comb) for c in range(n_cfg)]
+        best = max(range(n_cfg), key=lambda c: (ins[c], -c))
+        outs = [sharpe(c, oos) for c in range(n_cfg)]
+        below = sum(1 for c in range(n_cfg) if outs[c] < outs[best])
+        ties = sum(1 for c in range(n_cfg) if outs[c] == outs[best]) - 1
+        w = (below + 0.5 * ties + 1) / (n_cfg + 1)       # relative rank of the in-sample winner
+        logits.append(math.log(w / (1 - w)))
+        is_best.append(ins[best])
+        oos_best.append(outs[best])
+        chosen[best] = chosen.get(best, 0) + 1
+    m = len(logits)
+    slope = covariance(is_best, oos_best) / stdev(is_best) ** 2 if m > 2 and stdev(is_best) > 0 else NAN
+    top = sorted(chosen.items(), key=lambda kv: -kv[1])[:5]
+    return {
+        "pbo": sum(1 for x in logits if x <= 0) / m, "splits": m, "blocks": S, "configs": n_cfg,
+        "logits": histogram([logits], 20), "prob_oos_loss": sum(1 for x in oos_best if x < 0) / m,
+        "is_sharpe": mean(is_best), "oos_sharpe": mean(oos_best), "degradation_slope": slope,
+        "pairs": [[a, b] for a, b in zip(is_best, oos_best)][:400],
+        "most_chosen": [{"config": c, "label": labels[c] if labels else c, "share": k / m} for c, k in top],
+    }
+
+
+def score_returns(r, metric="sharpe", days=None):
+    """A score for a slice of daily returns: sharpe, sortino, cagr, total_return or calmar."""
+    if len(r) < 2:
+        return NAN
+    if metric in ("sharpe", "sortino"):
+        mu = mean(r)
+        sd = stdev(r) if metric == "sharpe" else math.sqrt(mean([min(x, 0.0) ** 2 for x in r]))
+        return mu / sd * math.sqrt(TRADING_DAYS) if sd > 0 else NAN
+    eq, peak, mdd = 1.0, 1.0, 0.0
+    for x in r:
+        eq *= 1 + x
+        peak = max(peak, eq)
+        mdd = min(mdd, eq / peak - 1)
+    if metric == "total_return":
+        return eq - 1
+    years = (days if days else len(r)) / (365.25 if days else TRADING_DAYS)
+    cagr = eq ** (1 / years) - 1 if eq > 0 and years > 0 else -1.0
+    if metric == "cagr":
+        return cagr
+    if metric == "calmar":
+        return cagr / abs(mdd) if mdd < 0 else NAN
+    raise ValueError("unknown score %r (use sharpe, sortino, cagr, total_return or calmar)" % metric)
+
+
+def walk_forward_optimization(dates, returns, labels, train, test, anchored=False, metric="sharpe",
+                              cash=10000.0, rf=0.0, bench_returns=None):
+    """Re-optimize on a moving training window and keep only what comes after it.
+
+    returns[c] are the daily returns of configuration c (returns[c][i] is the return
+    from dates[i] to dates[i + 1]). Every `test` bars, the configuration with the best
+    `metric` over the previous `train` bars (or everything so far, if anchored) is
+    chosen and held for the next `test` bars. The stitched out-of-sample returns are
+    the honest result. Each configuration runs continuously, so switching between them
+    at a fold boundary carries no extra trading cost: a mild simplification.
+    """
+    n_cfg, T = len(returns), len(returns[0])
+    train, test = int(train), int(test)
+    if n_cfg < 1 or T < train + test or train < 20 or test < 5:
+        raise ValueError("Need at least %d bars for a %d-bar training and %d-bar test window." % (train + test + 1, train, test))
+    folds, stitched, chosen_is, chosen_oos = [], [], [], []
+    t0 = train
+    while t0 < T:
+        a = 0 if anchored else t0 - train
+        b = min(T, t0 + test)
+        scores = [score_returns(returns[c][a:t0], metric) for c in range(n_cfg)]
+        best = max(range(n_cfg), key=lambda c: (-math.inf if isnan(scores[c]) else scores[c], -c))
+        oos = returns[best][t0:b]
+        stitched += oos
+        folds.append({"train_start": dates[a], "train_end": dates[t0], "test_start": dates[t0], "test_end": dates[b],
+                      "chosen": labels[best] if labels else best, "config": best,
+                      "is_score": scores[best], "oos_score": score_returns(oos, metric)})
+        chosen_is.append(score_returns(returns[best][a:t0], "cagr"))
+        chosen_oos.append(score_returns(oos, "cagr"))
+        t0 = b
+    start = train
+    eq = [cash]
+    for x in stitched:
+        eq.append(eq[-1] * (1 + x))
+    d = dates[start:start + len(eq)]
+    full = [score_returns(rr, metric) for rr in returns]
+    hind = max(range(n_cfg), key=lambda c: (-math.inf if isnan(full[c]) else full[c], -c))
+    hind_eq = [cash]
+    for x in returns[hind][start:start + len(stitched)]:
+        hind_eq.append(hind_eq[-1] * (1 + x))
+    bench_eq = None
+    if bench_returns is not None:
+        bench_eq = [cash]
+        for x in bench_returns[start:start + len(stitched)]:
+            bench_eq.append(bench_eq[-1] * (1 + x))
+    changes = sum(1 for f, g in zip(folds, folds[1:]) if f["config"] != g["config"])
+    is_mean, oos_mean = mean(_finite(chosen_is)), mean(_finite(chosen_oos))
+    return {
+        "folds": folds, "dates": d, "equity": eq, "hindsight_equity": hind_eq, "bench_equity": bench_eq,
+        "hindsight": labels[hind] if labels else hind, "metric": metric,
+        "metrics": performance(d, eq, rf), "hindsight_metrics": performance(d, hind_eq, rf),
+        "bench_metrics": performance(d, bench_eq, rf) if bench_eq else None,
+        "efficiency": oos_mean / is_mean if is_mean and not isnan(is_mean) and is_mean > 0 else NAN,
+        "param_changes": changes, "anchored": anchored, "train": train, "test": test,
+    }
+
+
+def purged_kfold(n, k=5, horizon=1, embargo=0):
+    """Purged and embargoed k-fold splits for labels that look `horizon` bars ahead
+    (Lopez de Prado, 2018). Yields (train_idx, test_idx) with contiguous test folds;
+    training rows whose label window overlaps the test fold are purged, and the
+    `embargo` rows right after it are dropped too. Use it to measure a model's skill:
+    these folds train on the future as well, so never trade their predictions."""
+    k = max(2, min(int(k), n))
+    cuts = [int(round(j * n / k)) for j in range(k + 1)]
+    for a, b in zip(cuts, cuts[1:]):
+        lo, hi = a - horizon, b + embargo          # rows j in [lo, b) overlap; [b, hi) are embargoed
+        train = [j for j in range(n) if j < lo or j >= hi]
+        yield train, list(range(a, b))
+
+
+def cpcv_splits(n, n_groups=6, n_test=2, horizon=1, embargo=0):
+    """Combinatorial purged cross-validation: every choice of n_test groups out of
+    n_groups is a test set, purged and embargoed like purged_kfold. Returns a list of
+    (train_idx, test_idx, test_groups); each group is tested C(n_groups-1, n_test-1)
+    times, which makes that many out-of-sample backtest paths."""
+    from itertools import combinations
+    cuts = [int(round(j * n / n_groups)) for j in range(n_groups + 1)]
+    out = []
+    for groups in combinations(range(n_groups), n_test):
+        test, banned = [], set()
+        for g in groups:
+            a, b = cuts[g], cuts[g + 1]
+            test += range(a, b)
+            banned.update(range(max(0, a - horizon), min(n, b + embargo)))
+        out.append(([j for j in range(n) if j not in banned], test, list(groups)))
+    return out
+
+
+def cv_score(X, y, fit_predict, score, k=5, horizon=1, embargo=0):
+    """Average out-of-fold score of a model under purged k-fold cross-validation.
+    score(y_true, y_pred) -> number. Rows with NaN features or labels are skipped."""
+    ok = [all(v == v for v in row) and not isnan(t) for row, t in zip(X, y)]
+    take_x = (lambda idx: X[idx]) if hasattr(X, "shape") else (lambda idx: [X[j] for j in idx])
+    take_y = (lambda idx: y[idx]) if hasattr(y, "shape") else (lambda idx: [y[j] for j in idx])
+    scores = []
+    for train, test in purged_kfold(len(y), k, horizon, embargo):
+        train = [j for j in train if ok[j]]
+        test = [j for j in test if ok[j]]
+        if train and test:
+            pred = fit_predict(take_x(train), take_y(train), take_x(test))
+            scores.append(score(take_y(test), pred))
+    return {"mean": mean(scores), "folds": scores}
+
+
 def _same_weight(a, b):
     if isinstance(a, dict) or isinstance(b, dict):
         a, b = a or {}, b or {}
@@ -3702,7 +3965,7 @@ def api_inspect(p):
 def api_run(p):
     res, strat = _run_payload(p)
     cfg = res.config
-    m, b = summarize(res)
+    m, b = summarize(res, trials=p.get("trials"))
     window = int(p.get("rolling_window") or 126)
     out = {
         "ticker": res.ticker, "tickers": res.tickers, "portfolio": res.portfolio,
@@ -3740,10 +4003,18 @@ def api_run(p):
 
 
 def api_metrics(p):
-    """Lightweight run for parameter sweeps: metrics only, optionally split."""
+    """Lightweight run for parameter sweeps: metrics only, optionally split. 'blocks': n
+    adds block_stats for PBO; 'returns': true adds the daily returns (for walk-forward)."""
     res, _ = _run_payload(p)
     m, _ = summarize(res)
     out = {"params": res.params, "full": m}
+    r = daily_returns(res.equity)
+    if p.get("blocks"):
+        out["blocks"] = block_stats(r, int(p["blocks"]))
+    if p.get("returns"):
+        out["returns"] = [round(x, 10) for x in r]
+        out["dates"] = res.dates
+        out["bench_returns"] = [round(x, 10) for x in daily_returns(res.bench_equity)]
     if p.get("split") is not None:
         k = int(round(float(p["split"]) * (len(res.dates) - 1)))
         sm = split_metrics(res, k)
@@ -3787,6 +4058,23 @@ def api_costs(p):
                             cfg, p.get("levels") or [0, 2, 5, 10, 20, 50], p.get("start"), p.get("end"), bench, rates)
 
 
+def api_pbo(p):
+    out = pbo_cscv(p["blocks"], p.get("labels"))
+    sr = p.get("sharpes") or []
+    if sr:
+        best = max(range(len(sr)), key=lambda c: -math.inf if sr[c] is None else sr[c])
+        v = stdev([x for x in sr if x is not None]) ** 2 if len(sr) > 2 else None
+        out["best"] = best
+        out["sr_hurdle"] = expected_max_sharpe(len(sr), v / TRADING_DAYS) * math.sqrt(TRADING_DAYS) if v else NAN
+    return out
+
+
+def api_wfo(p):
+    return walk_forward_optimization(p["dates"], p["returns"], p.get("labels"), p["train"], p["test"],
+                                     bool(p.get("anchored")), p.get("metric", "sharpe"), float(p.get("cash", 10000)),
+                                     float(p.get("rf", 0.0)), p.get("bench_returns"))
+
+
 def api_permutation(p):
     res, _ = _run_payload(p)
     return permutation_test(res, p.get("n_perm", 500), p.get("seed", 7))
@@ -3807,6 +4095,7 @@ API = {
     "inspect": api_inspect, "run": api_run, "metrics": api_metrics,
     "montecarlo": api_montecarlo, "split": api_split, "analytics": api_analytics,
     "subperiods": api_subperiods, "costs": api_costs, "permutation": api_permutation,
+    "pbo": api_pbo, "wfo": api_wfo,
     "metric_list": api_metric_list,
 }
 

@@ -314,6 +314,13 @@ def signals(data):
         <tr><td><code>window</code></td><td>Train on only the most recent <i>n</i> rows (a rolling window) instead of all past rows.</td></tr>
       </tbody>
     </table></div>
+    <p><code>walk_forward(..., embargo=5)</code> also leaves 5 bars between the newest training label and the first prediction, for features that overlap in time.</p>
+    <h3>Cross-Validating a Model</h3>
+    <p>To measure how good a model is (not to trade it), use purged cross-validation. Ordinary k-fold leaks the future when labels span several days; purging drops training rows whose label window overlaps the test fold, and the embargo drops the rows just after it (López de Prado 2018).</p>
+<pre><code>res = cv_score(X, y, fit_predict, score=lambda y_true, y_pred: ..., k=5, horizon=5, embargo=5)
+for train, test in purged_kfold(len(y), k=5, horizon=5, embargo=5): ...
+for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5): ...   # 15 splits, 5 paths</code></pre>
+    <p>These functions train on data after the test fold as well, so their predictions must never be returned from <code>signals</code>: the look-ahead check would flag them.</p>
     <p>Fit any scaling (means, standard deviations) inside <code>fit_predict</code> from the training rows, as the templates do. Scaling with statistics from the whole history leaks the future. Seed anything random (<code>random_state=0</code>, <code>np.random.default_rng(0)</code>) so results repeat; the look-ahead check also needs this. For slow models the look-ahead check samples fewer dates, marked <b>(partial)</b>. Training happens on every run, so retrain monthly or quarterly rather than daily to keep runs fast.</p>
 
     <h2 id="execution">Execution & Costs</h2>
@@ -465,6 +472,9 @@ def signals(data):
 <tr><td>Win-rate p-value</td><td><code>win_rate_p</code></td><td>Optional</td><td>Chance of at least this many winning trades if each trade were a coin flip (one-sided binomial, normal approximation).</td></tr>
 <tr><td>Autocorrelation (1 day)</td><td><code>autocorr</code></td><td>Optional</td><td>Correlation of each day&#x27;s return with the previous day&#x27;s. Far from 0 means returns are not independent.</td></tr>
 <tr><td>Autocorrelation p-value</td><td><code>autocorr_p</code></td><td>Optional</td><td>Two-sided p-value that the 1-day autocorrelation is zero. Below 0.05 = significant serial correlation.</td></tr>
+<tr><td>Deflated Sharpe</td><td><code>dsr</code></td><td>By default</td><td>Probability that the true Sharpe ratio beats the best you&#x27;d expect from this many trials with no skill (Bailey &amp; Lopez de Prado). Below 95%: the result may be the luck of trying many versions.</td></tr>
+<tr><td>Sharpe hurdle (trials)</td><td><code>sr_hurdle</code></td><td>By default</td><td>The highest annualized Sharpe ratio expected by chance from the number of strategy variations tried so far.</td></tr>
+<tr><td>Trials counted</td><td><code>trials</code></td><td>By default</td><td>Distinct versions of this strategy (code, parameters, settings, market) run in this browser. Each one raises the bar.</td></tr>
 <tr><td>Normality p-value</td><td><code>jb_p</code></td><td>Optional</td><td>Jarque-Bera test that daily returns are normally distributed. Below 0.05 = fat tails or skew; treat Sharpe and VaR with care.</td></tr>
 </tbody></table></div>
     <h3>How to Read Them Together</h3>
@@ -474,6 +484,7 @@ def signals(data):
       <li><b>Beta below 1 with positive alpha</b> means the strategy earned more than its market exposure explains. A low beta alone just means it held less of the asset.</li>
       <li><b>Win rate</b> means little alone. Trend followers often win 35% of trades and still profit because their average win is much larger than their average loss; check <b>profit factor</b>.</li>
       <li>Fewer than about 30 trades or 3 years of data is too little to tell skill from luck. Run the Monte Carlo tool.</li>
+      <li><b>Every version you try counts.</b> QuantLab counts the distinct versions of a strategy you have run on the same market (each change of code, parameters, settings or dates, plus every sweep and walk-forward candidate) and reports the <b>Deflated Sharpe Ratio</b> (Bailey &amp; López de Prado 2014): the probability that the true Sharpe ratio beats the best you would expect from that many tries with no skill, using how much the tries' Sharpe ratios varied. The chip under the title shows the count; <b>Reset Trials</b> starts it again, for example when you begin a genuinely new idea.</li>
       <li>The <b>statistical tests</b> answer “could this be luck?”. A p-value is the chance of a result at least this good if there were no real edge; below 0.05 is the usual bar. A <b>minimum track record</b> longer than your backtest means the data can’t yet show the Sharpe ratio is above zero. Test many variations and some will pass by chance, so treat one passing test as a hint, not proof.</li>
     </ul>
 
@@ -526,6 +537,9 @@ def signals(data):
     <p>Each tool uses the instrument, dates, settings and code currently on the Backtest tab.</p>
     <h3>Parameter Sweep</h3>
     <p>Choose one or two numeric entries from <code>PARAMS</code> and a list of values: <code>20:100:10</code> means 20, 30 … 100, and <code>5,10,20</code> lists values directly. Up to 400 runs. With <b>Tune on: First 70%</b>, each run is scored only on the first 70% of the period, and the last 30% is shown next to it as an out-of-sample check. <b>Use these values in the editor</b> writes the best combination into your PARAMS. Good parameters sit in a broad plateau of good results. A single bright cell is usually noise.</p>
+    <p>Every sweep ends with an <b>overfitting check</b>. Each run's daily returns are cut into 10 consecutive blocks; for every one of the 252 ways to call half of them in-sample, the setting with the best in-sample Sharpe is ranked against the others on the remaining half. The <b>probability of backtest overfitting</b> (PBO, Bailey, Borwein, López de Prado &amp; Zhu 2015) is the share of splits where that winner ranks at or below the median. Above 50%, picking the best setting is worse than picking at random. The check also reports the winner's Sharpe ratio in and out of sample and the <b>Sharpe hurdle</b>: the best result expected from that many settings with no skill.</p>
+    <h3>Walk-Forward Optimization</h3>
+    <p>Choose parameters and values like a sweep, a training window and a test window. Starting after the first training window, the setting with the best score over the training window (or over everything so far, with <b>Anchored</b>) is used for the next test window; then both windows move forward by one test window. The stitched test windows are the out-of-sample result, compared with the setting that looks best in hindsight and with the benchmark. <b>Walk-forward efficiency</b> is the out-of-sample CAGR as a share of the CAGR the chosen settings showed while being tuned. Each candidate runs as one continuous backtest, so the switch between settings at a window boundary is assumed to cost nothing.</p>
     <h3>Monte Carlo Resampling</h3>
     <p>Takes the strategy’s daily returns and builds alternative histories by stitching together randomly chosen blocks of consecutive days (a circular block bootstrap). Blocks keep calm and volatile stretches together. The fan chart shows the range of paths, and the table shows percentiles of total return, CAGR and maximum drawdown. If the 5th percentile drawdown would be unbearable, size the strategy down.</p>
     <h3>In-Sample vs Out-of-Sample</h3>

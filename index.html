@@ -637,7 +637,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
     <div class="panel ctxline" id="toolCtx"></div>
     <form class="panel ctxline" id="toolPick" aria-labelledby="toolPickLabel" novalidate>
       <fieldset><legend id="toolPickLabel">Optional Tools</legend><div class="checks wide" id="toolChecks"></div></fieldset>
-      <p class="help">Always shown: Parameter Sweep, Monte Carlo Resampling & In-Sample vs Out-of-Sample.</p>
+      <p class="help">Always shown: Parameter Sweep, Walk-Forward Optimization, Monte Carlo Resampling & In-Sample vs Out-of-Sample.</p>
     </form>
 
     <section class="panel" id="sweep" aria-labelledby="h-sweep">
@@ -657,6 +657,27 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <div class="bar" id="swBar" hidden role="progressbar" aria-label="Sweep progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
         </form>
         <div class="out" id="swOut" aria-live="polite"><p class="out-empty">Pick a parameter & a list of values, then run the sweep.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="wfo" aria-labelledby="h-wfo">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-wfo">Walk-Forward Optimization</h2><p>Pick the best <code translate="no">PARAMS</code> on a training window, trade them on the next stretch the tuning never saw, then move both windows forward & repeat. The stitched out-of-sample result is what tuning would really have earned.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="wfoForm" novalidate>
+          <div class="grid2">
+            <div class="field"><label for="wfP1">Parameter 1</label><select id="wfP1" name="wf-param-1" translate="no"></select></div>
+            <div class="field"><label for="wfV1">Values</label><input type="text" id="wfV1" name="wf-values-1" placeholder="20:100:10…" autocomplete="off" spellcheck="false" aria-describedby="wfV1-err"><p class="ferr" id="wfV1-err" hidden></p></div>
+            <div class="field"><label for="wfP2">Parameter 2</label><select id="wfP2" name="wf-param-2" translate="no"></select></div>
+            <div class="field"><label for="wfV2">Values</label><input type="text" id="wfV2" name="wf-values-2" placeholder="150, 200, 250…" autocomplete="off" spellcheck="false" aria-describedby="wfV2-err"><p class="ferr" id="wfV2-err" hidden></p></div>
+            <div class="field"><label for="wfTrain">Train (years)</label><input type="text" inputmode="decimal" id="wfTrain" name="wf-train" value="3" autocomplete="off" aria-describedby="wfTrain-err"><p class="ferr" id="wfTrain-err" hidden></p></div>
+            <div class="field"><label for="wfTest">Test (months)</label><input type="text" inputmode="decimal" id="wfTest" name="wf-test" value="6" autocomplete="off" aria-describedby="wfTest-err"><p class="ferr" id="wfTest-err" hidden></p></div>
+            <div class="field"><label for="wfMetric">Choose By</label><select id="wfMetric" name="wf-metric"><option value="sharpe">Sharpe ratio</option><option value="sortino">Sortino ratio</option><option value="cagr">CAGR</option><option value="calmar">Calmar ratio</option><option value="total_return">Total return</option></select></div>
+            <div class="field"><span class="label">Training Window</span><label class="check"><input type="checkbox" id="wfAnchored" name="wf-anchored"> Anchored (grows from the start)</label></div>
+          </div>
+          <div class="row"><button class="btn primary" id="wfRun" type="submit">Run Walk-Forward</button><button class="btn" id="wfStop" type="button" hidden>Cancel</button><span class="muted tnum" id="wfCount" aria-live="polite"></span></div>
+          <div class="bar" id="wfBar" hidden role="progressbar" aria-label="Walk-forward progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </form>
+        <div class="out" id="wfOut" aria-live="polite"><p class="out-empty">Choose the parameter values to try, then run the walk-forward test.</p></div>
       </div>
     </section>
 
@@ -812,7 +833,7 @@ const LOCALE = (() => {
   }
   return 'en-US';
 })();
-const TOOL_SECTIONS = ['sweep', 'montecarlo', 'split', 'subperiods', 'costs', 'permutation', 'analytics'];
+const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'subperiods', 'costs', 'permutation', 'analytics'];
 
 const RECOMMENDED = [
   ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
@@ -846,7 +867,7 @@ const fmt = {
   month: iso => (iso ? dfMonth.format(toDate(iso)) : ''),
 };
 const UNSIGNED = new Set(['volatility', 'downside_dev', 'exposure', 'avg_leverage', 'win_rate', 'pct_pos_days', 'pct_pos_months', 'tracking_error',
-  'up_capture', 'down_capture', 'var_95', 'cvar_95', 'ulcer_index', 'var_99', 'cvar_99', 'pain_index', 'pct_pos_years', 'beat_days', 'beat_months', 'psr']);
+  'up_capture', 'down_capture', 'var_95', 'cvar_95', 'ulcer_index', 'var_99', 'cvar_99', 'pain_index', 'pct_pos_years', 'beat_days', 'beat_months', 'psr', 'dsr', 'avg_gross', 'avg_long', 'avg_short', 'max_gross']);
 const fmtMetric = (f, v, key) => (f === 'pct' ? fmt.pct(v, 2, !UNSIGNED.has(key)) : (fmt[f] || fmt.num)(v));
 const sign = v => (v == null ? '' : v > 0 ? 'pos' : v < 0 ? 'neg' : '');
 let METRICS = [];
@@ -855,6 +876,37 @@ let METRICS = [];
 const store = {
   get(k, fallback) { try { const v = localStorage.getItem('ql.' + k); return v == null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
   set(k, v) { try { localStorage.setItem('ql.' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
+};
+
+/* -------------------------------------------------------------- trials -- */
+// Every distinct version of a strategy you run (code, parameters, settings, market) is a trial.
+// The Deflated Sharpe Ratio raises the bar with each one; counts are kept per strategy & market.
+function hash53(str) {   // cyrb53: a fast, stable 53-bit string hash
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) { const ch = str.charCodeAt(i); h1 = Math.imul(h1 ^ ch, 2654435761); h2 = Math.imul(h2 ^ ch, 1597334677); }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
+const trials = {
+  family(p) { return `${currentSource().kind}:${currentSource().name}|${payloadTickers(p).join(',')}`; },
+  key(p, params) { return hash53(JSON.stringify([p.code, params || null, p.config, p.start, p.end, p.benchmark, payloadTickers(p)])); },
+  all() { return store.get('trials', {}); },
+  get(fam) { return this.all()[fam] || {}; },
+  add(fam, entries) {
+    const all = this.all(); const t = all[fam] || {};
+    for (const [k, sr] of entries) if (sr != null) t[k] = +sr.toFixed(4);
+    const keys = Object.keys(t); if (keys.length > 3000) for (const k of keys.slice(0, keys.length - 3000)) delete t[k];
+    all[fam] = t; store.set('trials', all);
+  },
+  // What the engine needs: how many trials (counting this one) & the variance of their Sharpe ratios.
+  stats(fam, k) {
+    const t = this.get(fam); const srs = Object.values(t); const n = Object.keys(t).length + (k in t ? 0 : 1);
+    if (srs.length < 2) return { n };
+    const m = srs.reduce((a, b) => a + b, 0) / srs.length;
+    return { n, var: srs.reduce((a, b) => a + (b - m) ** 2, 0) / (srs.length - 1) };
+  },
+  reset(fam) { const all = this.all(); delete all[fam]; store.set('trials', all); },
 };
 
 /* --------------------------------------------------- optional sections -- */
@@ -1498,7 +1550,9 @@ async function runBacktest() {
   setStatus('busy', 'Running backtest…');
   try {
     await ensurePayload(p);
-    const r = await py.call('run', p);
+    const fam = trials.family(p), tk = trials.key(p);
+    const r = await py.call('run', { ...p, trials: trials.stats(fam, tk) });
+    trials.add(fam, [[tk, r.metrics.sharpe]]); r.trialFamily = fam;
     r.elapsed = performance.now() - t0; r.strategyName = currentSource().name;
     lastRun = { payload: p, result: r }; hideError(); renderResults(r);
     done = `Backtest finished: total return ${fmt.pct(r.metrics.total_return, 1, true)}, Sharpe ${fmt.num(r.metrics.sharpe)}`;
@@ -1547,7 +1601,9 @@ function renderResults(r) {
     const lk = r.lookahead; const part = lk.planned && lk.checked < lk.planned ? ` (${fmt.int(lk.checked)} of ${fmt.int(lk.planned)} spot checks; the rest were skipped to save time)` : '';
     chips.push(lk.violations.length ? '<span class="chip bad">Look-ahead detected</span>' : `<span class="chip ok" title="Recomputed signals with the future removed${esc(part)}">Look-ahead check passed${lk.checked < lk.planned ? ' (partial)' : ''}</span>`);
   }
+  if (r.metrics.trials > 1) chips.push(`<span class="chip${r.metrics.dsr != null && r.metrics.dsr < 0.95 ? ' bad' : ''}" title="Deflated Sharpe ${fmt.pct(r.metrics.dsr, 0)}: the chance this Sharpe beats the best of ${fmt.int(r.metrics.trials)} tries with no skill (hurdle ${fmt.num(r.metrics.sr_hurdle)})">${fmt.int(r.metrics.trials)} trials · DSR ${fmt.pct(r.metrics.dsr, 0)}</span><button class="btn small" type="button" id="trialReset" title="Start counting trials of this strategy afresh">Reset Trials</button>`);
   $('#resChips').innerHTML = chips.join('');
+  const tr = $('#trialReset'); if (tr) tr.onclick = () => { trials.reset(r.trialFamily); toast('Trial count reset. The next run counts as the first.'); tr.remove(); };
 
   const notes = (r.notes || []).map(n => esc(n));
   if (r.lookahead && r.lookahead.violations.length) {
@@ -1768,12 +1824,14 @@ async function refreshParams() {
 }
 function fillParamSelects() {
   const keys = Object.entries(paramsCache || {}).filter(([, v]) => typeof v === 'number').map(([k]) => k);
-  const keep1 = $('#swP1').value, keep2 = $('#swP2').value;
-  $('#swP1').innerHTML = keys.length ? keys.map(k => `<option>${esc(k)}</option>`).join('') : '<option value="">No numeric PARAMS</option>';
-  $('#swP2').innerHTML = '<option value="">None</option>' + keys.map(k => `<option>${esc(k)}</option>`).join('');
-  if (keys.includes(keep1)) $('#swP1').value = keep1;
-  if (keys.includes(keep2) && keep2 !== $('#swP1').value) $('#swP2').value = keep2;
-  suggestValues('#swP1', '#swV1'); suggestValues('#swP2', '#swV2');
+  for (const pre of ['sw', 'wf']) {
+    const s1 = $(`#${pre}P1`), s2 = $(`#${pre}P2`); const keep1 = s1.value, keep2 = s2.value;
+    s1.innerHTML = keys.length ? keys.map(k => `<option>${esc(k)}</option>`).join('') : '<option value="">No numeric PARAMS</option>';
+    s2.innerHTML = '<option value="">None</option>' + keys.map(k => `<option>${esc(k)}</option>`).join('');
+    if (keys.includes(keep1)) s1.value = keep1;
+    if (keys.includes(keep2) && keep2 !== s1.value) s2.value = keep2;
+    suggestValues(`#${pre}P1`, `#${pre}V1`); suggestValues(`#${pre}P2`, `#${pre}V2`);
+  }
 }
 // Suggests a value range for a parameter, but never overwrites values you typed for the same parameter.
 function suggestValues(selId, inId) {
@@ -1799,9 +1857,23 @@ function parseValues(s) {
   return parts.every(isFinite) ? parts : null;
 }
 function updateSweepCount() {
-  const a = $('#swP1').value ? (parseValues($('#swV1').value) || []).length : 0;
-  const b = $('#swP2').value ? Math.max(1, (parseValues($('#swV2').value) || []).length) : 1;
-  const n = a * b; $('#swCount').textContent = n ? `${fmt.int(n)} run${n === 1 ? '' : 's'}` : '';
+  for (const pre of ['sw', 'wf']) {
+    const a = $(`#${pre}P1`).value ? (parseValues($(`#${pre}V1`).value) || []).length : 0;
+    const b = $(`#${pre}P2`).value ? Math.max(1, (parseValues($(`#${pre}V2`).value) || []).length) : 1;
+    const n = a * b; $(`#${pre}Count`).textContent = n ? `${fmt.int(n)} run${n === 1 ? '' : 's'}` : '';
+  }
+}
+// The combinations a sweep-like form asks for, or null after showing what is wrong.
+function gridFromForm(pre) {
+  const p1 = $(`#${pre}P1`).value, p2 = $(`#${pre}P2`).value;
+  const v1 = parseValues($(`#${pre}V1`).value), v2 = p2 ? parseValues($(`#${pre}V2`).value) : [null];
+  const ok = validate([
+    [`${pre}V1`, () => (!p1 ? 'Add a number to PARAMS in your strategy to vary it.' : !v1 || !v1.length ? 'Enter values like 20:100:10 or 5, 10, 20.' : v1.length > 400 ? `That’s ${fmt.int(v1.length)} runs. Use a larger step (max 400).` : null)],
+    [`${pre}V2`, () => (!p2 ? null : p2 === p1 ? 'Pick a different parameter than Parameter 1.' : !v2 || !v2.length ? 'Enter values like 150, 200, 250.' : (v1 || []).length * v2.length > 400 ? `That’s ${fmt.int(v1.length * v2.length)} runs. Use fewer values (max 400).` : null)],
+  ]);
+  if (!ok) return null;
+  const combos = []; for (const a of v1) for (const b of v2) combos.push([a, b]);
+  return { p1, p2, v1, v2, combos, params: ([a, b]) => (p2 ? { [p1]: a, [p2]: b } : { [p1]: a }), label: ([a, b]) => (p2 ? `${p1}=${a}, ${p2}=${b}` : `${p1}=${a}`) };
 }
 let sweepCancel = false, sweepRunning = false;
 async function runSweep(ev) {
@@ -1823,13 +1895,28 @@ async function runSweep(ev) {
     await ensurePayload(base);
     for (let i = 0; i < combos.length && !sweepCancel; i++) {
       const [a, b] = combos[i]; const params = { [p1]: a }; if (p2) params[p2] = b;
-      results.push({ a, b, r: await py.call('metrics', { ...base, params, split }) });
+      results.push({ a, b, r: await py.call('metrics', { ...base, params, split, blocks: PBO_BLOCKS }) });
       const f = (i + 1) / combos.length; bar.firstElementChild.style.transform = `scaleX(${f})`; bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
       $('#swCount').textContent = `${fmt.int(i + 1)} of ${fmt.int(combos.length)}`;
     }
     renderSweep({ p1, p2, v1, v2, metric, split, results, cancelled: sweepCancel });
+    const fam = trials.family(base);
+    trials.add(fam, results.map(x => [trials.key(base, p2 ? { [p1]: x.a, [p2]: x.b } : { [p1]: x.a }), x.r.full.sharpe]));
+    if (results.length >= 2) await renderOverfit(results, p1, p2, fam);
   } catch (e) { out.innerHTML = `<p class="ferr">${esc(e.info ? e.info.message : e.message)} Fix the strategy on the Backtest tab, then run the sweep again.</p>`; }
   finally { sweepRunning = false; busy(false); $('#swStop').hidden = true; bar.hidden = true; updateSweepCount(); await loadingOff(btn); }
+}
+const PBO_BLOCKS = 10;
+async function renderOverfit(results, p1, p2, fam) {
+  const out = $('#swOut'); const box = document.createElement('div'); box.className = 'stack'; box.style.gap = '8px'; out.appendChild(box);
+  const labels = results.map(x => (p2 ? `${p1}=${x.a}, ${p2}=${x.b}` : `${p1}=${x.a}`));
+  try {
+    const r = await py.call('pbo', { blocks: results.map(x => x.r.blocks), labels, sharpes: results.map(x => x.r.full.sharpe) });
+    const best = results[r.best]; const n = Object.keys(trials.get(fam)).length;
+    const verdict = r.pbo > 0.5 ? 'The in-sample winner usually does worse than a typical setting out of sample: the sweep is mostly fitting noise.' : r.pbo > 0.2 ? 'A real risk that the best setting was picked for luck; prefer a broad plateau over the single best value.' : 'The best settings tend to stay good out of sample.';
+    box.innerHTML = `<h3>Overfitting Check</h3><p style="margin:0">Probability of backtest overfitting <b>${fmt.pct(r.pbo, 0)}</b> (${fmt.int(r.splits)} ways to split ${r.blocks} blocks in half). ${verdict} In-sample Sharpe of the winner ${fmt.num(r.is_sharpe)} → out of sample ${fmt.num(r.oos_sharpe)}; it lost money out of sample in ${fmt.pct(r.prob_oos_loss, 0)} of splits.</p>` +
+      `<p class="help">The best full-period Sharpe here (${esc(labels[r.best])}: ${fmt.num(best.r.full.sharpe)}) has to beat <b>${fmt.num(r.sr_hurdle)}</b>, the best expected from ${fmt.int(results.length)} settings with no skill. Deflated Sharpe & trial counts on the Backtest tab now include these ${fmt.int(results.length)} runs (${fmt.int(n)} trials of this strategy so far).</p>`;
+  } catch (e) { box.innerHTML = `<p class="ferr">Overfitting check failed: ${esc(e.info ? e.info.message : e.message)}</p>`; }
 }
 function renderSweep(s) {
   const mm = METRICS.find(x => x.key === s.metric); const f = v => fmtMetric(mm.fmt, v, mm.key);
@@ -1875,6 +1962,51 @@ function applyParams(values) {
   }
   editor.value = code; onCodeChanged(); location.hash = '#backtest';
   toast(missing.length ? `Couldn’t find ${missing.join(', ')} in PARAMS. Edit them by hand.` : 'Updated PARAMS. Run the backtest to see the full result.');
+}
+
+let wfCancel = false;
+async function runWFO(ev) {
+  ev.preventDefault();
+  const g = gridFromForm('wf'); if (!g) return;
+  if (!validate([['wfTrain', between(0.25, 20, 'years', false, 3)], ['wfTest', between(1, 60, 'months', false, 6)]])) return;
+  const base = await freshPayload(); const out = $('#wfOut'); const btn = $('#wfRun'); const bar = $('#wfBar');
+  wfCancel = false; sweepRunning = true; loadingOn(btn); $('#wfStop').hidden = false; bar.hidden = false; bar.firstElementChild.style.transform = 'scaleX(0)';
+  busy(true, 'Walk-forward…'); const runs = [];
+  try {
+    await ensurePayload(base);
+    for (let i = 0; i < g.combos.length && !wfCancel; i++) {
+      runs.push(await py.call('metrics', { ...base, params: g.params(g.combos[i]), returns: true }));
+      const f = (i + 1) / g.combos.length; bar.firstElementChild.style.transform = `scaleX(${f})`; bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
+      $('#wfCount').textContent = `${fmt.int(i + 1)} of ${fmt.int(g.combos.length)}`;
+    }
+    if (wfCancel) { out.innerHTML = '<p class="out-empty">Cancelled.</p>'; return; }
+    const labels = g.combos.map(g.label);
+    trials.add(trials.family(base), runs.map((x, i) => [trials.key(base, g.params(g.combos[i])), x.full.sharpe]));
+    const r = await py.call('wfo', { dates: runs[0].dates, returns: runs.map(x => x.returns), labels, bench_returns: runs[0].bench_returns,
+      train: Math.round(parseNumber($('#wfTrain').value) * 252), test: Math.round(parseNumber($('#wfTest').value) * 21), anchored: $('#wfAnchored').checked,
+      metric: $('#wfMetric').value, cash: base.config.cash, rf: base.config.risk_free });
+    renderWFO(r);
+  } catch (e) { toolError(out, e); }
+  finally { sweepRunning = false; busy(false); $('#wfStop').hidden = true; bar.hidden = true; updateSweepCount(); await loadingOff(btn); }
+}
+function renderWFO(r) {
+  const out = $('#wfOut'); out.innerHTML = ''; const m = r.metrics, hm = r.hindsight_metrics, bm = r.bench_metrics;
+  const p = document.createElement('p'); p.style.margin = '0';
+  p.innerHTML = `Re-tuned ${fmt.int(r.folds.length)} times (${r.anchored ? 'anchored' : 'rolling'} ${fmt.num(r.train / 252, 1)}-year training, ${fmt.num(r.test / 21, 0)}-month tests). Out of sample: CAGR <b>${fmt.pct(m.cagr, 2, true)}</b>, Sharpe <b>${fmt.num(m.sharpe)}</b>, max drawdown ${fmt.pct(m.max_drawdown, 1)}. ` +
+    `The setting that looks best with hindsight (${esc(r.hindsight)}) made ${fmt.pct(hm.cagr, 2, true)} a year over the same dates${bm ? `, the benchmark ${fmt.pct(bm.cagr, 2, true)}` : ''}. ` +
+    `Walk-forward efficiency ${r.efficiency == null ? '—' : fmt.pct(r.efficiency, 0)}: out-of-sample returns as a share of what the chosen settings earned while being tuned; the choice changed ${fmt.int(r.param_changes)} time${r.param_changes === 1 ? '' : 's'}.`;
+  out.appendChild(p);
+  const box = document.createElement('div'); box.className = 'chart'; box.innerHTML = '<canvas role="img" aria-label="Stitched out-of-sample equity vs the hindsight-best setting"></canvas>'; out.appendChild(box);
+  const P = palette(); kill('wfo');
+  const o = baseOptions(r.dates, P, v => fmt.money(v)); o.scales.y.ticks.callback = v => fmt.moneyAxis(v);
+  o.plugins.legend = legendTop(P);
+  const ds = [line('Walk-forward (out of sample)', r.equity, P.strat, { borderWidth: 2 }), line('Best in hindsight', r.hindsight_equity, P.fg3, { borderWidth: 1.2, borderDash: [5, 3] })];
+  if (r.bench_equity) ds.push(line('Benchmark', r.bench_equity, P.bench, { borderWidth: 1.2, borderDash: [2, 3] }));
+  charts.wfo = new Chart(box.firstChild, { data: { datasets: ds }, options: o });
+  let h = '<div class="tablebox" tabindex="0" aria-label="Walk-forward folds"><table><thead><tr><th scope="col">Test Window</th><th scope="col">Chosen</th><th scope="col" class="n">In-Sample</th><th scope="col" class="n">Out-of-Sample</th></tr></thead><tbody>';
+  const f = v => (r.metric === 'cagr' || r.metric === 'total_return' ? fmt.pct(v, 1, true) : fmt.num(v));
+  for (const x of r.folds) h += `<tr><td class="tnum">${fmt.date(x.test_start)} – ${fmt.date(x.test_end)}</td><td translate="no">${esc(x.chosen)}</td><td class="n">${f(x.is_score)}</td><td class="n ${sign(x.oos_score)}">${f(x.oos_score)}</td></tr>`;
+  const t = document.createElement('div'); t.innerHTML = h + '</tbody></table></div><p class="help" style="margin-top:8px">Each candidate runs continuously; switching between them at a window boundary is assumed free. Every candidate counts toward this strategy’s trials.</p>'; out.appendChild(t);
 }
 
 async function runMC(ev) {
@@ -2277,7 +2409,7 @@ function wire() {
   $('#marketForm').addEventListener('submit', e => { e.preventDefault(); runBacktest(); });
   $('#settingsForm').addEventListener('submit', e => { e.preventDefault(); saveSettings(); runBacktest(); });
   $('#settingsBox').addEventListener('toggle', () => url.write());
-  $('#stopBtn').onclick = async () => { sweepCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
+  $('#stopBtn').onclick = async () => { sweepCancel = true; wfCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'wfRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
   $('#template').onchange = loadSelectedTemplate;
   $('#resetBtn').onclick = loadSelectedTemplate;
   $('#errReset').onclick = () => { loadSelectedTemplate(); editor.ta.focus(); };
@@ -2317,6 +2449,12 @@ function wire() {
   $('#swV1').oninput = () => { $('#swV1').dataset.touched = '1'; setFieldError('swV1', null); updateSweepCount(); };
   $('#swV2').oninput = () => { $('#swV2').dataset.touched = '1'; setFieldError('swV2', null); updateSweepCount(); };
   $('#sweepForm').addEventListener('submit', runSweep);
+  $('#wfoForm').addEventListener('submit', runWFO);
+  $('#wfStop').onclick = () => { wfCancel = true; };
+  $('#wfP1').onchange = () => { $('#wfV1').dataset.touched = ''; suggestValues('#wfP1', '#wfV1'); };
+  $('#wfP2').onchange = () => { $('#wfV2').dataset.touched = ''; suggestValues('#wfP2', '#wfV2'); };
+  $('#wfV1').oninput = () => { $('#wfV1').dataset.touched = '1'; setFieldError('wfV1', null); updateSweepCount(); };
+  $('#wfV2').oninput = () => { $('#wfV2').dataset.touched = '1'; setFieldError('wfV2', null); updateSweepCount(); };
   $('#swStop').onclick = () => { sweepCancel = true; };
   $('#mcForm').addEventListener('submit', runMC);
   $('#splitForm').addEventListener('submit', runSplit);

@@ -641,6 +641,105 @@ def test_implementation_shortfall_and_market_on_close():
         assert "unknown order option limt" in e.info["message"]
 
 
+# ------------------------------------------------- overfitting -----
+
+def test_norm_ppf_inverts_norm_cdf():
+    for q in (1e-10, 0.001, 0.02, 0.3, 0.5, 0.8, 0.975, 0.999999):
+        assert abs(engine.norm_cdf(engine.norm_ppf(q)) - q) < 1e-12 * max(1, 1 / q), q
+    assert abs(engine.norm_ppf(0.975) - 1.959963984540054) < 1e-12
+
+
+def test_expected_max_sharpe_matches_simulation():
+    rng = random.Random(11)
+    for trials in (10, 50, 200):
+        sims = [max(rng.gauss(0, 0.2) for _ in range(trials)) for _ in range(3000)]
+        want = sum(sims) / len(sims)
+        got = engine.expected_max_sharpe(trials, 0.04)
+        assert abs(got / want - 1) < 0.05, (trials, got, want)
+    assert engine.expected_max_sharpe(1, 0.04) == 0.0
+
+
+def test_deflated_sharpe_penalizes_many_trials():
+    rng = random.Random(2)
+    good = [rng.gauss(0.0006, 0.01) for _ in range(2500)]
+    one = engine.deflated_sharpe(good, 1)
+    assert approx(one["dsr"], engine.return_tests(good)["psr"], 1e-12), "with one trial DSR is PSR"
+    many = engine.deflated_sharpe(good, 100)
+    assert many["dsr"] < one["dsr"] and many["sr_hurdle"] > 0
+    noise = [[rng.gauss(0, 0.01) for _ in range(1000)] for _ in range(50)]
+    srs = [sum(r) / len(r) / engine.stdev(r) * math.sqrt(252) for r in noise]
+    best = noise[srs.index(max(srs))]
+    var = engine.stdev(srs) ** 2
+    assert engine.return_tests(best)["psr"] > 0.9, "the best of 50 noise strategies looks significant..."
+    assert engine.deflated_sharpe(best, 50, var)["dsr"] < 0.7, "...until it is deflated"
+    res = run("def on_bar(ctx):\n    return 1.0\n")
+    m, _ = engine.summarize(res, trials={"n": 30, "var": 0.1})
+    assert m["trials"] == 30 and 0 <= m["dsr"] <= 1 and m["sr_hurdle"] > 0
+
+
+def test_pbo_cscv():
+    rng = random.Random(4)
+    noise = [engine.block_stats([rng.gauss(0, 0.01) for _ in range(1600)], 10) for _ in range(20)]
+    out = engine.pbo_cscv(noise)
+    assert out["splits"] == 252 and 0.25 < out["pbo"] < 0.75, out["pbo"]
+    skill = [engine.block_stats([rng.gauss(0.0015 if c == 0 else 0, 0.01) for _ in range(1600)], 10) for c in range(20)]
+    out = engine.pbo_cscv(skill, labels=["c%d" % c for c in range(20)])
+    assert out["pbo"] < 0.1 and out["most_chosen"][0]["label"] == "c0"
+    try:
+        engine.pbo_cscv([engine.block_stats([0.01] * 100, 5)] * 2)
+        raise AssertionError("odd block count must raise")
+    except ValueError:
+        pass
+
+
+def test_walk_forward_optimization_stitches_out_of_sample():
+    T = 600
+    a = [0.002 if t < 300 else -0.002 for t in range(T)]        # good, then bad
+    b = [-0.002 if t < 300 else 0.002 for t in range(T)]        # bad, then good
+    c = [0.0001 * ((-1) ** t) for t in range(T)]
+    dates = engine.session_days("2020-01-02", "2030-01-01")[:T + 1]
+    out = engine.walk_forward_optimization(dates, [a, b, c], ["A", "B", "C"], train=100, test=50, metric="total_return")
+    chosen = [f["chosen"] for f in out["folds"]]
+    assert chosen[0] == "A" and chosen[-1] == "B", chosen
+    stitched = []
+    for f in out["folds"]:
+        i, j = dates.index(f["test_start"]), dates.index(f["test_end"])
+        stitched += [a, b, c][f["config"]][i:j]
+    eq = 10000.0
+    for x in stitched:
+        eq *= 1 + x
+    assert approx(out["equity"][-1], eq, 1e-12) and len(out["equity"]) == T - 100 + 1
+    anchored = engine.walk_forward_optimization(dates, [a, b, c], ["A", "B", "C"], 100, 50, anchored=True, metric="total_return")
+    assert "B" not in [f["chosen"] for f in anchored["folds"]], "anchored windows remember the whole past, so adapt slowly"
+
+
+def test_purged_kfold_and_cpcv():
+    n, h, e = 100, 5, 3
+    folds = list(engine.purged_kfold(n, 5, horizon=h, embargo=e))
+    assert sorted(j for _, test in folds for j in test) == list(range(n))
+    for train, test in folds:
+        a, b = test[0], test[-1] + 1
+        assert not any(a - h <= j < b + e for j in train), "purged before and embargoed after the test fold"
+    splits = engine.cpcv_splits(n, 6, 2, horizon=h, embargo=e)
+    assert len(splits) == 15
+    counts = [sum(1 for _, _, g in splits if k in g) for k in range(6)]
+    assert counts == [5] * 6
+    for train, test, _ in splits:
+        assert not set(train) & set(test)
+    X = [[float(i)] for i in range(200)]
+    y = [float(i % 2) for i in range(200)]
+    seen = []
+
+    def fp(xt, yt, xn):
+        newest = max(r[0] for r in xt if r[0] < xn[0][0])
+        seen.append(xn[0][0] - newest)
+        return [0.0] * len(xn)
+    engine.walk_forward(X, y, fp, min_train=50, retrain_every=25, horizon=2, embargo=4)
+    assert min(seen) >= 6, "embargo widens the gap between training and prediction"
+    cv = engine.cv_score(X, y, lambda xt, yt, xn: [0.5] * len(xn), lambda t, p: -sum((a - b) ** 2 for a, b in zip(t, p)) / len(t), k=4)
+    assert approx(cv["mean"], -0.25) and len(cv["folds"]) == 4
+
+
 # ---------------------------------------------- dividends & carry -----
 
 def test_dividends_are_paid_and_total_return_benchmark():
