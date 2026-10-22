@@ -979,6 +979,12 @@ def test_json_api_roundtrip():
     assert len(r["equity"]) == len(r["dates"]) == len(r["bench_equity"])
     bad = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": "def on_bar(ctx):\n  return 'x'\n"})))
     assert not bad["ok"] and "on_bar must return" in bad["error"]["message"]
+    prov = r["provenance"]
+    assert prov["engine_version"] == engine.ENGINE_VERSION and len(prov["code_sha256"]) == 64
+    assert prov["data"]["DEMO-STOCK"] == DEMO.fingerprint() and prov["config"]["cash"] == 10000
+    again = json.loads(engine.handle("run", json.dumps({
+        "ticker": "DEMO-STOCK", "benchmark": "DEMO-BOND", "code": load_templates()["sma_cross"], "config": {"cash": 10000}})))
+    assert again["result"]["equity"] == r["equity"] and again["result"]["provenance"] == prov, "a run reproduces exactly"
     an = json.loads(engine.handle("analytics", json.dumps({"tickers": ["DEMO-STOCK", "DEMO-BOND"]})))
     assert an["ok"] and len(an["result"]["matrix"]) == 2
     assert all(m["tier"] in ("core", "std", "extra") for m in json.loads(engine.handle("metric_list", "{}"))["result"])

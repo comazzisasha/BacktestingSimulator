@@ -49,6 +49,12 @@ Adj Close column or a dividend file dropped on the Data tab), idle cash earns in
 shorts pay financing and borrow fees, and margin calls cut positions. Every instrument gets a
 data-quality check against the NYSE calendar when it loads.
 
+## History, exports and audit
+
+Every run is saved in the browser with its code hash, parameters, settings, data fingerprints and
+engine version (History tab: compare, restore, re-run to check it reproduces). Export CSVs, the run as
+JSON, or a printable tear sheet; back up or move the whole workspace as one file (Data tab).
+
 ## Machine learning
 
 Strategies can `import numpy`, `pandas`, `scipy` and `sklearn`; they load on first use

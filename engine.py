@@ -36,6 +36,7 @@ import datetime as _dt
 from collections import deque
 from types import SimpleNamespace
 
+ENGINE_VERSION = "2.0"   # bump when a change alters results for the same inputs
 NAN = float("nan")
 TRADING_DAYS = 252
 STRATEGY_FILENAME = "<strategy>"
@@ -3991,15 +3992,27 @@ def api_run(p):
                    zip(period_returns(res.dates, res.equity, "year"), period_returns(res.dates, res.bench_equity, "year"))],
         "logs": res.logs, "notes": res.notes, "config": cfg.as_dict(),
         "data": {tk: _data_info(ds) for tk, ds in zip(res.tickers, res.panel.sets)},
+        "provenance": provenance(res, p["code"]),
     }
     if res.portfolio:
         idx = _downsample(len(res.dates))
         out["attribution"] = attribution(res)
-        out["weights"] = {"index": idx, "series": {tk: [res.weights[tk][i] for i in idx] for tk in res.tickers}}
+        out["weights"] = {"index": idx, "series": {tk: [res.weights[tk][i] for i in idx] for tk in res.tickers},
+                          "full": {tk: [round(w, 6) for w in res.weights[tk]] for tk in res.tickers}}
     if res.signals is not None:
         data = res.panel if res.portfolio else res.panel.sets[0]
         out["lookahead"] = lookahead_check(strat, data, res.signals, budget=float(p.get("lookahead_budget", 4.0)))
     return out
+
+
+def provenance(res, code):
+    """What exactly produced a result: enough to reproduce it or tell why it changed."""
+    import hashlib
+    return {"engine_version": ENGINE_VERSION, "python": sys.version.split()[0],
+            "code_sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "params": dict(res.params), "config": res.config.as_dict(),
+            "data": {tk: ds.fingerprint() for tk, ds in zip(res.tickers, res.panel.sets)},
+            "start": res.dates[0], "end": res.dates[-1], "bars": len(res.dates), "benchmark": res.benchmark}
 
 
 def api_metrics(p):

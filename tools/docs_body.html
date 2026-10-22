@@ -102,6 +102,7 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#statistics">Statistics</a></li>
       <li><a href="#strategies">Built-In Strategies</a></li>
       <li><a href="#tools">Research Tools</a></li>
+      <li><a href="#audit">Saving, Exporting &amp; Auditing</a></li>
       <li><a href="#pitfalls">Pitfalls</a></li>
       <li><a href="#running">Running It Yourself</a></li>
       <li><a href="#layout">How the Code Is Organized</a></li>
@@ -397,6 +398,11 @@ for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5):
     <p>A permutation test of timing skill. It shuffles the strategy’s daily exposures, which keeps how often and how heavily it was invested but not when, and pairs them with the instrument’s actual close-to-close returns. Each ordering is scored by its Sharpe ratio before costs. The p-value is the share of shuffles that scored at least as well as the real ordering. Strategies that hold nearly the same position every day, like buy and hold, can’t be tested this way.</p>
     <h3>Instrument Analytics</h3>
     <p>Buy-and-hold statistics for each loaded instrument, a correlation matrix of daily returns on the dates all of them share, and a growth-of-100 chart. Assets with low correlation combine into portfolios with smaller drawdowns.</p>
+
+    <h2 id="audit">Saving, Exporting &amp; Auditing</h2>
+    <p><b>Run history.</b> Every backtest is saved in this browser with exactly what produced it: the code and its SHA-256, the parameters, every setting, the market and dates, a fingerprint of each instrument's data (prices and dividends), and the engine version. The <b>History</b> tab keeps the newest 500 runs. Tick two to compare them: their equity curves rebased to 100, every statistic with the change, the settings that differ, and a line-by-line diff of the code. <b>Restore</b> puts a run's code, settings and market back on the Backtest tab; <b>Re-run</b> also runs it and says whether it reproduced exactly, or what changed (code, settings, data or engine) if it didn't. Add a label to mark runs for review.</p>
+    <p><b>Exports.</b> <b>Export</b> under the results title downloads the equity and exposure series (with per-instrument weights for portfolios), the trades, the fills (with arrival prices), every statistic including hidden ones, or the whole run as JSON. Each file starts with comment lines naming the run, code hash, data fingerprints, parameters, settings and engine. <b>Tear Sheet</b> opens a printable one-page report (save it as PDF from the print dialog) with the provenance and the strategy code on its second page.</p>
+    <p><b>Workspace backup.</b> On the Data tab, <b>Export Workspace</b> saves everything QuantLab keeps in the browser (your strategies, uploaded prices, dividend files and rate series, settings, trial counts and, optionally, run history) as one JSON file. <b>Import Workspace</b> adds a file's contents to this browser: use it to back up, to move to another computer, or to hand a colleague the exact setup behind a result.</p>
 
     <h2 id="pitfalls">Pitfalls</h2>
     <ul>

@@ -219,6 +219,8 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .badge.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
 .badge.ok { color: var(--gain); }
 button.badge { cursor: pointer; font: inherit; font-size: 12px; }
+pre.diff .add { color: var(--gain); }
+pre.diff .del { color: var(--loss); }
 tr.detail td { white-space: normal; background: var(--sunk); font-size: 12.5px; color: var(--fg-2); }
 tr.detail ul { margin: 4px 0; padding-left: 18px; }
 .editor[data-size="m"] { font-size: 14px; --lh: 22px; }
@@ -393,6 +395,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       <a href="#edit" data-tab="edit">Editor</a>
       <a href="#tools" data-tab="tools">Research Tools</a>
       <a href="#data" data-tab="data">Data</a>
+      <a href="#history" data-tab="history">History</a>
       <a href="docs.html">Docs</a>
     </nav>
     <div class="status" id="status" data-state="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="statusText">Loading Python…</span></div>
@@ -524,7 +527,15 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
             <h2 id="resTitle">Preparing Your First Backtest…</h2>
             <p class="meta" id="resMeta">The first visit downloads a 12&nbsp;MB Python runtime; later visits load from your browser’s cache.</p>
             <div class="row"><div class="chips" id="resChips"></div><span class="spacer"></span>
+              <button class="btn small" id="exportBtn" type="button" aria-expanded="false" aria-controls="exportPick" disabled>Export</button>
               <button class="btn small" id="panelPickBtn" type="button" aria-expanded="false" aria-controls="panelPick">Customize Panels</button></div>
+            <div class="picker" id="exportPick" hidden>
+              <div class="row"><button class="btn small primary" type="button" data-export="tearsheet">Tear Sheet (Print / PDF)</button>
+                <button class="btn small" type="button" data-export="equity">Equity &amp; Exposure CSV</button><button class="btn small" type="button" data-export="trades">Trades CSV</button>
+                <button class="btn small" type="button" data-export="fills">Fills CSV</button><button class="btn small" type="button" data-export="stats">Statistics CSV</button>
+                <button class="btn small" type="button" data-export="json">Full Run (JSON)</button></div>
+              <p class="help">Every file names the run, its code hash, data fingerprints & engine version, so the numbers can be traced back. Statistics CSV includes the hidden statistics too.</p>
+            </div>
             <div class="picker" id="panelPick" hidden>
               <fieldset><legend>Optional Panels</legend><div class="checks wide" id="panelChecks"></div></fieldset>
               <div class="row"><button class="btn small" id="panelDefaults" type="button">Defaults</button><button class="btn small" id="panelAll" type="button">Show All</button><button class="btn small" id="panelNone" type="button">Hide All</button>
@@ -766,6 +777,22 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
     </section>
   </section>
 
+  <!-- ================================================================ HISTORY -->
+  <section class="view stack" id="view-history" aria-labelledby="h-history" hidden>
+    <div class="viewhead"><h1 id="h-history">Run History</h1><p>Every backtest is saved in this browser with exactly what produced it: the code & its SHA-256, parameters, settings, market, data fingerprints & engine version. Compare two runs side by side, restore one, or re-run it to prove it reproduces.</p></div>
+    <section class="panel" aria-labelledby="h-runs">
+      <div class="panel-h"><h2 id="h-runs">Saved Runs</h2><span class="muted" id="runCount"></span><span class="spacer"></span>
+        <input type="text" id="runFilter" name="run-filter" placeholder="Filter by strategy, ticker, label…" aria-label="Filter runs" autocomplete="off" style="width:min(260px,100%)">
+        <button class="btn small" id="runCompare" type="button" disabled>Compare Selected</button><button class="btn small danger" id="runDelete" type="button" disabled>Delete Selected</button></div>
+      <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Saved runs" style="max-height:520px"><table id="runTable"></table></div>
+        <div class="row"><p class="help" style="flex:1">Keeps the newest 500 runs. Tick two to compare. Labels are yours to edit (click one).</p><button class="btn small danger" id="runClear" type="button">Clear History</button></div></div>
+    </section>
+    <section class="panel" id="cmpPanel" hidden aria-labelledby="h-cmp" tabindex="-1">
+      <div class="panel-h"><h2 id="h-cmp">Comparison</h2><span class="spacer"></span><button class="btn small" id="cmpClose" type="button">Close</button></div>
+      <div class="panel-b" id="cmpBody"></div>
+    </section>
+  </section>
+
   <!-- ================================================================ DATA -->
   <section class="view stack" id="view-data" aria-labelledby="h-data" hidden>
     <div class="viewhead"><h1 id="h-data">Data</h1><p>Manage the price histories your backtests run on.</p></div>
@@ -789,6 +816,15 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
     <section class="panel" aria-labelledby="h-rates">
       <div class="panel-h"><h2 id="h-rates">Interest-Rate Series</h2><span class="muted">Pick one under Account &amp; Execution to pay cash interest at that rate</span></div>
       <div class="panel-b scroll"><table id="rateTable"></table></div>
+    </section>
+
+    <section class="panel" aria-labelledby="h-ws">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-ws">Workspace Backup</h2><p>Everything QuantLab keeps in this browser (your strategies, uploaded data & rate series, settings, trial counts & run history) in one file. Back it up, move it to another computer, or share it with a colleague.</p></div></div>
+      <div class="panel-b">
+        <div class="row"><button class="btn primary" id="wsExport" type="button">Export Workspace</button><label class="check"><input type="checkbox" id="wsRuns" name="ws-runs" checked> Include run history</label>
+          <span class="spacer"></span><label class="btn" for="wsFile">Import Workspace…</label><input type="file" id="wsFile" name="workspace" accept=".json,application/json" class="sr"></div>
+        <div class="picker" id="wsConfirm" hidden></div>
+      </div>
     </section>
 
     <section class="panel" aria-labelledby="h-nasdaq">
@@ -956,23 +992,28 @@ const idb = {
   async open() {
     if (this.db) return this.db;
     this.db = await new Promise((resolve, reject) => {
-      const req = indexedDB.open('quantlab', 1);
-      req.onupgradeneeded = () => req.result.createObjectStore('instruments', { keyPath: 'ticker' });
+      const req = indexedDB.open('quantlab', 2);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('instruments')) db.createObjectStore('instruments', { keyPath: 'ticker' });
+        if (!db.objectStoreNames.contains('runs')) db.createObjectStore('runs', { keyPath: 'id' });   // run history (v2)
+      };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
     });
     return this.db;
   },
-  async tx(mode, fn) {
+  async tx(mode, fn, store = 'instruments') {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const t = db.transaction('instruments', mode); const r = fn(t.objectStore('instruments'));
+      const t = db.transaction(store, mode); const r = fn(t.objectStore(store));
       t.oncomplete = () => resolve(r && r.result); t.onerror = () => reject(t.error);
     });
   },
-  async all() { try { return (await this.tx('readonly', s => s.getAll())) || []; } catch (e) { return []; } },
-  async put(rec) { try { await this.tx('readwrite', s => s.put(rec)); return true; } catch (e) { return false; } },
-  async del(ticker) { try { await this.tx('readwrite', s => s.delete(ticker)); } catch (e) { /* ignore */ } },
+  async all(store = 'instruments') { try { return (await this.tx('readonly', s => s.getAll(), store)) || []; } catch (e) { return []; } },
+  async put(rec, store = 'instruments') { try { await this.tx('readwrite', s => s.put(rec), store); return true; } catch (e) { return false; } },
+  async del(key, store = 'instruments') { try { await this.tx('readwrite', s => s.delete(key), store); } catch (e) { /* ignore */ } },
+  async clear(store) { try { await this.tx('readwrite', s => s.clear(), store); } catch (e) { /* ignore */ } },
 };
 
 /* ------------------------------------------------------------ URL state -- */
@@ -1537,16 +1578,19 @@ function validInputs() {
   return true;
 }
 
+// Resolves when no backtest is running (the Run button is enabled again).
+function whenRunIdle() { return new Promise(res => { const tick = () => ($('#runBtn').disabled ? setTimeout(tick, 50) : res()); tick(); }); }
+// Returns the result it produced, or null if it didn't run (busy, invalid inputs, or an error).
 async function runBacktest() {
-  if (!py.ready) return;
-  const btn = $('#runBtn'); if (btn.disabled) return;
+  if (!py.ready) return null;
+  const btn = $('#runBtn'); if (btn.disabled) return null;
   if (codeInfo.for !== editor.value) await refreshParams();
   const p = payloadBase();
-  if (!payloadTickers(p).length) { if (isPortfolio()) { toast('Pick at least one instrument for the portfolio in the Market panel.'); $('#univBtn').focus(); } else showEmptyData(); return; }
-  if (!validInputs()) return;
+  if (!payloadTickers(p).length) { if (isPortfolio()) { toast('Pick at least one instrument for the portfolio in the Market panel.'); $('#univBtn').focus(); } else showEmptyData(); return null; }
+  if (!validInputs()) return null;
   closeSave(false);
   loadingOn(btn); busy(true, 'Running backtest…'); $('#results').setAttribute('aria-busy', 'true');
-  const t0 = performance.now(); let done = null;
+  const t0 = performance.now(); let done = null, produced = null;
   setStatus('busy', 'Running backtest…');
   try {
     await ensurePayload(p);
@@ -1555,10 +1599,12 @@ async function runBacktest() {
     trials.add(fam, [[tk, r.metrics.sharpe]]); r.trialFamily = fam;
     r.elapsed = performance.now() - t0; r.strategyName = currentSource().name;
     lastRun = { payload: p, result: r }; hideError(); renderResults(r);
+    $('#exportBtn').disabled = false; saveRun(p, r); produced = r;
     done = `Backtest finished: total return ${fmt.pct(r.metrics.total_return, 1, true)}, Sharpe ${fmt.num(r.metrics.sharpe)}`;
   } catch (e) { showError(e); }
   finally { $('#results').setAttribute('aria-busy', 'false'); busy(false); await loadingOff(btn); }
   if (done) announce(done);
+  return produced;
 }
 function announce(msg) { setStatus('ready', msg); setTimeout(() => { if (busyCount === 0 && $('#statusText').textContent === msg) setStatus('ready', 'Python ready'); }, 5000); }
 
@@ -2351,8 +2397,247 @@ function renderDownloadList() {
   $('#dlList').innerHTML = RECOMMENDED.map(([t, n, kind]) => `<li><a href="https://www.nasdaq.com/market-activity/${kind}/${t.toLowerCase()}/historical" target="_blank" rel="noopener"><b>${t}</b></a> <span class="muted" translate="yes">${esc(n)}</span>${instruments.has(t) ? ' <span class="chip ok">Loaded</span>' : ''}</li>`).join('');
 }
 
+/* ------------------------------------------------- run history & audit -- */
+// Each finished backtest is stored with what produced it, so any number can be traced, compared & reproduced.
+const MAX_RUNS = 500;
+let engineHash = '';
+function downsampleIdx(n, limit = 400) { const step = Math.max(1, Math.ceil(n / limit)); const idx = []; for (let i = 0; i < n; i += step) idx.push(i); if (idx[idx.length - 1] !== n - 1) idx.push(n - 1); return idx; }
+function marketLabel(m) { return m.tickers ? `${m.tickers.length} instruments: ${m.tickers.slice(0, 5).join(', ')}${m.tickers.length > 5 ? '…' : ''}` : m.ticker; }
+async function saveRun(p, r) {
+  const idx = downsampleIdx(r.dates.length);
+  const rec = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: new Date().toISOString(),
+    strategy: { kind: currentSource().kind, name: currentSource().name, template: $('#template').value },
+    code: p.code, market: { ticker: p.ticker || null, tickers: p.tickers || null, benchmark: r.benchmark, start: p.start, end: p.end },
+    provenance: { ...r.provenance, engine_file: engineHash }, metrics: r.metrics, bench_metrics: r.bench_metrics,
+    curve: { dates: idx.map(i => r.dates[i]), equity: idx.map(i => r.equity[i]), bench: idx.map(i => r.bench_equity[i]) },
+    notes: r.notes, label: '',
+  };
+  if (!(await idb.put(rec, 'runs'))) return null;
+  const all = await idb.all('runs');
+  if (all.length > MAX_RUNS) for (const old of all.sort((a, b) => (a.ts < b.ts ? -1 : 1)).slice(0, all.length - MAX_RUNS)) await idb.del(old.id, 'runs');
+  return rec;
+}
+const runSel = new Set();
+async function renderRuns() {
+  const all = (await idb.all('runs')).sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  const q = ($('#runFilter').value || '').trim().toLowerCase();
+  const list = q ? all.filter(x => `${x.strategy.name} ${marketLabel(x.market)} ${x.label}`.toLowerCase().includes(q)) : all;
+  for (const id of [...runSel]) if (!all.some(x => x.id === id)) runSel.delete(id);
+  $('#runCount').textContent = `${fmt.int(all.length)} run${all.length === 1 ? '' : 's'}${q ? `, ${fmt.int(list.length)} shown` : ''}`;
+  $('#runCompare').disabled = runSel.size !== 2; $('#runDelete').disabled = !runSel.size;
+  if (!list.length) { $('#runTable').innerHTML = `<tbody><tr><td class="muted" style="white-space:normal">${all.length ? 'No runs match.' : 'No runs yet. Every backtest you run is saved here.'}</td></tr></tbody>`; return; }
+  const dt = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'medium', timeStyle: 'short' });
+  let h = '<caption class="sr">Saved runs</caption><thead><tr><th scope="col"><span class="sr">Select</span></th><th scope="col">When</th><th scope="col">Strategy</th><th scope="col">Market</th><th scope="col">Period</th><th scope="col" class="n">CAGR</th><th scope="col" class="n">Sharpe</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Trades</th><th scope="col">Label</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
+  for (const x of list) {
+    const m = x.metrics;
+    h += `<tr data-run="${x.id}"><td><input type="checkbox" aria-label="Select run of ${esc(x.strategy.name)} from ${esc(dt.format(new Date(x.ts)))}"${runSel.has(x.id) ? ' checked' : ''}></td><td class="tnum">${esc(dt.format(new Date(x.ts)))}</td><td>${esc(x.strategy.name)}</td><td translate="no">${esc(marketLabel(x.market))}</td>` +
+      `<td class="tnum">${fmt.date(x.provenance.start)} – ${fmt.date(x.provenance.end)}</td><td class="n ${sign(m.cagr)}">${fmt.pct(m.cagr, 2, true)}</td><td class="n">${fmt.num(m.sharpe)}</td><td class="n">${fmt.pct(m.max_drawdown, 1)}</td><td class="n">${fmt.int(m.n_trades)}</td>` +
+      `<td><button class="badge" type="button" data-act="label" title="Edit label">${x.label ? esc(x.label) : '+ label'}</button></td>` +
+      `<td><div class="row" style="flex-wrap:nowrap"><button class="btn small" type="button" data-act="restore">Restore</button><button class="btn small" type="button" data-act="reproduce" title="Restore & re-run, then check the numbers match">Re-run</button></div></td></tr>`;
+  }
+  $('#runTable').innerHTML = h + '</tbody>';
+}
+async function getRun(id) { return (await idb.all('runs')).find(x => x.id === id); }
+// Settings form <- a stored config (the inverse of readConfig).
+function applyConfig(c) {
+  const pct = v => (v == null ? '' : String(+(v * 100).toPrecision(10)));
+  const set = (id, v) => { const el = $('#' + id); if (el && v != null) el.value = v; };
+  set('cfgCash', c.cash); set('cfgCommBps', c.commission_bps); set('cfgCommFixed', c.commission_fixed); set('cfgSlip', c.slippage_bps);
+  set('cfgExec', c.execution); set('cfgLev', c.max_leverage); set('cfgBand', pct(c.rebalance_band)); set('cfgRf', pct(c.risk_free)); set('cfgSeed', c.seed);
+  $('#cfgFrac').checked = !!c.fractional; $('#cfgShort').checked = !!c.allow_short; $('#cfgTR').checked = c.total_return !== false;
+  $('#cfgCashRate').value = c.cash_rate == null ? '' : pct(c.cash_rate); if (c.rate_ticker && rates.has(c.rate_ticker)) $('#cfgRateSeries').value = c.rate_ticker; else $('#cfgRateSeries').value = '';
+  set('cfgSpread', pct(c.margin_spread)); set('cfgBorrow', pct(c.borrow_fee)); set('cfgMaint', pct(c.maintenance_margin));
+  $('#cfgHtb').value = Object.entries(c.borrow_fees || {}).map(([t, v]) => `${t}:${pct(v)}`).join(', ');
+  set('cfgSpread2', c.spread_bps); set('cfgImpact', c.impact_coef); set('cfgPart', pct(c.max_participation)); set('cfgFill', c.fill_model);
+}
+async function restoreRun(x) {
+  const tpl = x.strategy.template;
+  if (tpl && [...$('#template').options].some(o => o.value === tpl)) $('#template').value = tpl;
+  editor.value = x.code; store.set('draft', { template: $('#template').value, code: x.code });
+  const s = currentSource(); $('#about').textContent = s.about; $('#delBtn').hidden = s.kind !== 'mine';
+  applyConfig(x.provenance.config);
+  await refreshParams();
+  if (x.market.tickers) setPicked(x.market.tickers);
+  else if (x.market.ticker && instruments.has(x.market.ticker)) { $('#instrument').value = x.market.ticker; updateDateBounds(); }
+  const b = x.market.benchmark; $('#benchmark').value = instruments.has(b) && !(x.market.ticker === b) ? b : '';
+  $('#start').value = x.market.start || ''; $('#end').value = x.market.end || ''; markRange();
+  saveSettings(); onCodeChanged(); location.hash = '#backtest';
+}
+// Re-run a stored run & say whether everything that determines the result is the same.
+async function reproduceRun(x) {
+  await py.ready; await whenRunIdle();
+  await restoreRun(x); await whenRunIdle();
+  const now = await runBacktest();
+  if (!now) { toast('The re-run didn’t finish; see the Backtest tab.'); return; }
+  const was = x.provenance, diffs = [];
+  if (now.provenance.code_sha256 !== was.code_sha256) diffs.push('the code');
+  if (JSON.stringify(now.provenance.config) !== JSON.stringify(was.config)) diffs.push('the settings');
+  const dataDiff = Object.keys({ ...was.data, ...now.provenance.data }).filter(t => was.data[t] !== now.provenance.data[t]);
+  if (dataDiff.length) diffs.push(`the data for ${dataDiff.join(', ')}`);
+  if (now.provenance.engine_version !== was.engine_version) diffs.push(`the engine (${was.engine_version} → ${now.provenance.engine_version})`);
+  const same = Math.abs(now.metrics.final_equity - x.metrics.final_equity) < 0.005 && now.metrics.n_trades === x.metrics.n_trades;
+  toast(same && !diffs.length ? `Reproduced exactly: same code, settings, data & engine; final equity ${fmt.money(now.metrics.final_equity)} matches to the cent.`
+    : same ? `Same result (${fmt.money(now.metrics.final_equity)}), although ${diffs.join(', ')} changed.`
+      : `Not reproduced: final equity ${fmt.money(now.metrics.final_equity)} vs ${fmt.money(x.metrics.final_equity)} saved. Changed: ${diffs.join(', ') || 'nothing recorded; check external files'}.`);
+}
+// Line diff (longest common subsequence) for the code comparison.
+function lineDiff(a, b) {
+  const A = a.split('\n'), B = b.split('\n'), n = A.length, m = B.length;
+  const L = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = A[i] === B[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = []; let i = 0, j = 0;
+  while (i < n && j < m) { if (A[i] === B[j]) { out.push([' ', A[i]]); i++; j++; } else if (L[i + 1][j] >= L[i][j + 1]) out.push(['-', A[i++]]); else out.push(['+', B[j++]]); }
+  while (i < n) out.push(['-', A[i++]]); while (j < m) out.push(['+', B[j++]]);
+  return out;
+}
+function flatConfig(x) { const c = { ...x.provenance.config, ...Object.fromEntries(Object.entries(x.provenance.params || {}).map(([k, v]) => ['PARAMS.' + k, v])) }; c.market = marketLabel(x.market); c.benchmark = x.market.benchmark; c.period = `${x.provenance.start} – ${x.provenance.end}`; return c; }
+async function ensureMetrics() { if (!METRICS.length) { await py.ready; METRICS = await py.call('metric_list', {}); } }
+async function compareRuns(idA, idB) {
+  await ensureMetrics();
+  const [a, b] = [await getRun(idA), await getRun(idB)].sort((x, y) => (x.ts < y.ts ? -1 : 1));
+  const dt = new Intl.DateTimeFormat(LOCALE, { dateStyle: 'medium', timeStyle: 'short' });
+  const name = x => `${x.label || x.strategy.name} (${dt.format(new Date(x.ts))})`;
+  const body = $('#cmpBody'); body.innerHTML = '';
+  const box = document.createElement('div'); box.className = 'chart'; box.innerHTML = '<canvas role="img" aria-label="Equity of both runs, rebased to 100"></canvas>'; body.appendChild(box);
+  const P = palette(); kill('cmp');
+  const ser = (x, c, dash) => ({ type: 'line', label: name(x), data: x.curve.dates.map((d, i) => ({ x: Date.parse(d), y: 100 * x.curve.equity[i] / x.curve.equity[0] })), borderColor: c, backgroundColor: c, borderWidth: 1.8, pointRadius: 0, borderDash: dash || [] });
+  charts.cmp = new Chart(box.firstChild, { data: { datasets: [ser(a, P.fg3, [5, 3]), ser(b, P.strat)] }, options: { animation: false, responsive: true, maintainAspectRatio: false, parsing: false,
+    interaction: { mode: 'nearest', intersect: false, axis: 'x' }, plugins: { legend: legendTop(P), tooltip: { ...tipStyle(P), callbacks: { title: it => fmt.date(new Date(it[0].parsed.x).toISOString().slice(0, 10)), label: c => ` ${c.dataset.label}: ${fmt.num(c.parsed.y, 1)}` } } },
+    scales: { x: { type: 'linear', grid: { color: P.grid }, ticks: { color: P.fg3, maxTicksLimit: 8, callback: v => fmt.month(new Date(v).toISOString().slice(0, 10)) } }, y: { grid: { color: P.grid }, ticks: { color: P.fg3 } } } } });
+  const keys = METRICS.filter(m => m.tier !== 'extra' && (a.metrics[m.key] != null || b.metrics[m.key] != null));
+  let h = `<h3>Statistics</h3><div class="tablebox" tabindex="0" aria-label="Statistics of both runs"><table class="metrics"><thead><tr><th scope="col">Statistic</th><th scope="col" class="n">${esc(name(a))}</th><th scope="col" class="n">${esc(name(b))}</th><th scope="col" class="n">Change</th></tr></thead><tbody>`;
+  for (const m of keys) {
+    const va = a.metrics[m.key], vb = b.metrics[m.key]; const d = va != null && vb != null ? vb - va : null;
+    h += `<tr><th scope="row">${esc(m.label)}</th><td class="n">${fmtMetric(m.fmt, va, m.key)}</td><td class="n">${fmtMetric(m.fmt, vb, m.key)}</td><td class="n ${d ? sign(d) : ''}">${d == null || Math.abs(d) < 1e-12 ? '' : fmtMetric(m.fmt === 'pct' ? 'pct' : m.fmt, d, '_delta')}</td></tr>`;
+  }
+  h += '</tbody></table></div>';
+  const ca = flatConfig(a), cb = flatConfig(b);
+  const changed = [...new Set([...Object.keys(ca), ...Object.keys(cb)])].filter(k => JSON.stringify(ca[k]) !== JSON.stringify(cb[k]));
+  h += `<h3>What Changed</h3>` + (changed.length ? `<div class="scroll"><table><thead><tr><th scope="col">Setting</th><th scope="col">Before</th><th scope="col">After</th></tr></thead><tbody>${changed.map(k => `<tr><th scope="row" translate="no">${esc(k)}</th><td translate="no">${esc(JSON.stringify(ca[k]))}</td><td translate="no">${esc(JSON.stringify(cb[k]))}</td></tr>`).join('')}</tbody></table></div>` : '<p class="help">Same settings, market & parameters.</p>');
+  const dd = Object.keys({ ...a.provenance.data, ...b.provenance.data }).filter(t => a.provenance.data[t] !== b.provenance.data[t]);
+  h += `<p class="help">Data: ${dd.length ? `different for ${esc(dd.join(', '))}` : 'identical fingerprints'}. Engine: ${esc(a.provenance.engine_version)}${a.provenance.engine_version !== b.provenance.engine_version ? ' → ' + esc(b.provenance.engine_version) : ''}. Code: ${a.provenance.code_sha256 === b.provenance.code_sha256 ? 'identical' : 'changed (below)'}.</p>`;
+  if (a.provenance.code_sha256 !== b.provenance.code_sha256) {
+    const diff = lineDiff(a.code, b.code);
+    h += `<h3>Code Changes</h3><pre class="logs diff" translate="no">${diff.filter((x, i) => x[0] !== ' ' || diff.slice(Math.max(0, i - 2), i + 3).some(y => y[0] !== ' ')).map(([k, l]) => `<span class="${k === '+' ? 'add' : k === '-' ? 'del' : ''}">${k} ${esc(l)}</span>`).join('\n')}</pre>`;
+  }
+  const extra = document.createElement('div'); extra.className = 'stack'; extra.innerHTML = h; body.appendChild(extra);
+  $('#cmpPanel').hidden = false; $('#cmpPanel').focus({ preventScroll: true }); $('#cmpPanel').scrollIntoView({ block: 'start' });
+}
+
+/* ------------------------------------------------------------- exports -- */
+function downloadFile(name, text, type) {
+  const blob = new Blob([text], { type }); const href = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = href; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 4000);
+}
+const csvCell = v => { if (v == null) return ''; const s = typeof v === 'number' ? (Number.isFinite(v) ? String(v) : '') : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const toCSV = (head, rows) => [head, ...rows].map(r => r.map(csvCell).join(',')).join('\n') + '\n';
+function exportStem(r) { return `quantlab_${(r.strategyName || 'strategy').replace(/[^\w]+/g, '-').replace(/^-|-$/g, '').toLowerCase()}_${r.portfolio ? 'portfolio' : r.ticker}_${r.provenance.code_sha256.slice(0, 8)}`; }
+function provenanceLines(r) {
+  const pv = r.provenance;
+  return [`# ${r.strategyName} on ${r.portfolio ? r.tickers.join(' ') : r.ticker} vs ${r.benchmark}, ${pv.start} to ${pv.end}`,
+    `# engine ${pv.engine_version} (file ${engineHash}), code sha256 ${pv.code_sha256}`,
+    `# data ${Object.entries(pv.data).map(([t, f]) => `${t}:${f}`).join(' ')}`, `# params ${JSON.stringify(pv.params)}`, `# config ${JSON.stringify(pv.config)}`].join('\n') + '\n';
+}
+function exportRun(kind) {
+  if (!lastRun) return;
+  const r = lastRun.result, stem = exportStem(r), head = provenanceLines(r);
+  if (kind === 'equity') {
+    const tk = r.portfolio ? r.tickers : [];
+    const rows = r.dates.map((d, i) => [d, r.equity[i], r.bench_equity[i], r.drawdown[i], r.bench_drawdown[i], r.gross[i], r.net[i], r.long[i], r.short[i], r.portfolio ? null : r.position[i],
+      ...tk.map(t => r.weights.full[t][i])]);
+    downloadFile(stem + '_equity.csv', head + toCSV(['date', 'equity', 'benchmark', 'drawdown', 'benchmark_drawdown', 'gross', 'net', 'long', 'short', 'shares', ...tk.map(t => 'weight_' + t)], rows), 'text/csv');
+  } else if (kind === 'trades') {
+    const cols = ['ticker', 'side', 'entry_date', 'exit_date', 'bars', 'shares', 'entry_price', 'exit_price', 'pnl', 'ret', 'ret_notional', 'open'];
+    downloadFile(stem + '_trades.csv', head + toCSV(cols, r.trades.map(t => cols.map(c => t[c]))), 'text/csv');
+  } else if (kind === 'fills') {
+    const cols = ['date', 'ticker', 'side', 'qty', 'price', 'commission', 'position', 'kind', 'arrival', 'reason'];
+    downloadFile(stem + '_fills.csv', head + toCSV(cols, r.fills.map(f => cols.map(c => f[c]))), 'text/csv');
+  } else if (kind === 'stats') {
+    downloadFile(stem + '_statistics.csv', head + toCSV(['key', 'statistic', 'group', 'strategy', 'benchmark', 'definition'],
+      METRICS.filter(m => r.metrics[m.key] !== undefined || r.bench_metrics[m.key] !== undefined).map(m => [m.key, m.label, m.group, r.metrics[m.key], r.bench_metrics[m.key], m.desc])), 'text/csv');
+  } else if (kind === 'json') {
+    downloadFile(stem + '.json', JSON.stringify({ format: 'quantlab-run', strategy: r.strategyName, code: lastRun.payload.code, payload: lastRun.payload, result: r }, null, 1), 'application/json');
+  } else if (kind === 'tearsheet') tearSheet(r);
+}
+// Light-theme chart images for paper, whatever the screen theme is.
+function chartImage(build, w = 1000, h = 300) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h; c.style.width = w + 'px'; c.style.height = h + 'px';
+  const holder = document.createElement('div'); holder.style.cssText = `position:fixed;left:-10000px;top:0;width:${w}px;height:${h}px`; holder.appendChild(c); document.body.appendChild(holder);
+  const P = { fg: '#171717', fg2: '#4D4D4D', fg3: '#6B6B6B', grid: '#EEEEEE', border: '#E5E5E5', strat: '#0062D1', bench: '#C46F00', gain: '#0A7A50', loss: '#C93A1E', warn: '#9E5700', panel: '#FFFFFF', primary: '#171717' };
+  const cfg = build(P); cfg.options.responsive = false; cfg.options.devicePixelRatio = 2;
+  const ch = new Chart(c, cfg); const url = ch.toBase64Image('image/png', 1); ch.destroy(); holder.remove(); return url;
+}
+function tearSheet(r) {
+  const m = r.metrics, b = r.bench_metrics, pv = r.provenance, d = r.dates;
+  const eq = chartImage(P => { const o = baseOptions(d, P, v => fmt.money(v)); o.scales.y.ticks.callback = v => fmt.moneyAxis(v); o.plugins.legend = { display: true, labels: { color: P.fg2, boxWidth: 10 } };
+    return { data: { datasets: [line('Strategy', r.equity, P.strat, { borderWidth: 2 }), line('Benchmark (' + r.benchmark + ')', r.bench_equity, P.bench, { borderDash: [5, 3] })] }, options: o }; });
+  const dd = chartImage(P => { const o = baseOptions(d, P, v => fmt.pct(v, 0)); o.scales.y.max = 0;
+    return { data: { datasets: [line('Drawdown', r.drawdown, P.loss, { fill: 'origin', backgroundColor: alpha(P.loss, 0.16), borderWidth: 1.2 })] }, options: o }; }, 1000, 180);
+  const keyStats = METRICS.filter(x => x.tier !== 'extra' && (m[x.key] !== undefined || b[x.key] !== undefined));
+  let groups = '', g = null;
+  for (const x of keyStats) { if (x.group !== g) { g = x.group; groups += `<tr class="g"><th colspan="3">${esc(g)}</th></tr>`; } groups += `<tr><td>${esc(x.label)}</td><td>${fmtMetric(x.fmt, m[x.key], x.key)}</td><td>${b[x.key] === undefined ? '' : fmtMetric(x.fmt, b[x.key], x.key)}</td></tr>`; }
+  const kpi = [['Total return', fmt.pct(m.total_return, 1, true)], ['CAGR', fmt.pct(m.cagr, 2, true)], ['Sharpe', fmt.num(m.sharpe)], ['Max drawdown', fmt.pct(m.max_drawdown, 1)], ['Volatility', fmt.pct(m.volatility, 1)], ['Trades', fmt.int(m.n_trades)]];
+  const yearly = r.annual.map(x => `<tr><td>${x.year}</td><td>${fmt.pct(x.strategy, 1, true)}</td><td>${fmt.pct(x.bench, 1, true)}</td></tr>`).join('');
+  const attr = r.portfolio ? `<h2>Attribution</h2><table><thead><tr><th>Instrument</th><th>P&amp;L</th><th>Contribution</th><th>Avg. weight</th></tr></thead><tbody>${r.attribution.rows.map(x => `<tr><td>${esc(x.ticker)}</td><td>${fmt.money(x.pnl)}</td><td>${fmt.pct(x.contribution, 2, true)}</td><td>${fmt.pct(x.avg_weight, 1)}</td></tr>`).join('')}</tbody></table>` : '';
+  const html = `<!doctype html><html lang="en"><meta charset="utf-8"><title>${esc(r.strategyName)} · Tear Sheet</title>
+<style>body{font:12px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif;color:#171717;margin:28px;max-width:1000px}h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;margin:20px 0 6px;border-bottom:1px solid #ddd;padding-bottom:3px}
+.meta{color:#555}.kpis{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:14px 0}.kpis div{border:1px solid #ddd;border-radius:6px;padding:8px}.kpis b{display:block;font-size:17px}
+table{border-collapse:collapse;width:100%}td,th{padding:3px 6px;border-bottom:1px solid #eee;text-align:left}td+td,th+th{text-align:right}tr.g th{padding-top:10px;font-size:12.5px}
+.cols{display:grid;grid-template-columns:1.3fr 1fr;gap:24px}img{width:100%}pre{white-space:pre-wrap;font:10.5px/1.4 ui-monospace,Menlo,monospace;background:#f6f6f6;padding:10px;border-radius:6px}
+.prov td{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;word-break:break-all}@media print{body{margin:12mm}h2{break-after:avoid}.page{break-before:page}}</style>
+<h1>${esc(r.strategyName)} on ${esc(r.portfolio ? r.tickers.join(', ') : r.ticker)}</h1>
+<div class="meta">${fmt.date(pv.start)} – ${fmt.date(pv.end)} · ${fmt.int(pv.bars)} bars · vs ${esc(r.benchmark)} · generated ${esc(new Date().toLocaleString(LOCALE))}</div>
+<div class="kpis">${kpi.map(([k, v]) => `<div>${k}<b>${v}</b></div>`).join('')}</div>
+${r.notes.length ? `<p><b>Notes.</b> ${r.notes.map(esc).join(' ')}</p>` : ''}
+<h2>Equity</h2><img src="${eq}" alt="Equity curve"><img src="${dd}" alt="Drawdown">
+<div class="cols"><div><h2>Statistics</h2><table><thead><tr><th>Statistic</th><th>Strategy</th><th>Benchmark</th></tr></thead><tbody>${groups}</tbody></table></div>
+<div><h2>Calendar Years</h2><table><thead><tr><th>Year</th><th>Strategy</th><th>Benchmark</th></tr></thead><tbody>${yearly}</tbody></table>${attr}</div></div>
+<h2 class="page">Provenance</h2><table class="prov"><tbody><tr><td>Engine</td><td>${esc(pv.engine_version)} (engine.py ${esc(engineHash)}, Python ${esc(pv.python)})</td></tr><tr><td>Code SHA-256</td><td>${esc(pv.code_sha256)}</td></tr>
+<tr><td>Data fingerprints</td><td>${Object.entries(pv.data).map(([t, f]) => esc(`${t} ${f}`)).join('<br>')}</td></tr><tr><td>Parameters</td><td>${esc(JSON.stringify(pv.params))}</td></tr><tr><td>Settings</td><td>${esc(JSON.stringify(pv.config))}</td></tr></tbody></table>
+<h2>Strategy Code</h2><pre>${esc(lastRun.payload.code)}</pre></html>`;
+  const w = window.open('', '_blank');
+  if (!w) { downloadFile(exportStem(r) + '_tearsheet.html', html, 'text/html'); toast('Pop-ups are blocked, so the tear sheet was downloaded. Open it & print to PDF.'); return; }
+  w.document.open(); w.document.write(html); w.document.close(); setTimeout(() => { try { w.focus(); w.print(); } catch (e) { /* closed */ } }, 400);
+}
+
+/* ----------------------------------------------------------- workspace -- */
+async function exportWorkspace() {
+  const local = {}; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('ql.')) local[k.slice(3)] = JSON.parse(localStorage.getItem(k)); } } catch (e) { /* storage unavailable */ }
+  const recs = await idb.all(); const runs = $('#wsRuns').checked ? await idb.all('runs') : [];
+  const ws = { format: 'quantlab-workspace', version: 1, exported: new Date().toISOString(), engine: engineHash, local, instruments: recs, runs };
+  downloadFile(`quantlab-workspace-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(ws), 'application/json');
+  toast(`Exported ${fmt.int(Object.keys(local.mine || {}).length)} strategies, ${fmt.int(recs.length)} uploaded files & ${fmt.int(runs.length)} runs.`);
+}
+let wsPending = null;
+async function readWorkspace(file) {
+  try {
+    const ws = JSON.parse(await file.text());
+    if (ws.format !== 'quantlab-workspace') throw new Error('this isn’t a QuantLab workspace file');
+    wsPending = ws;
+    const n = k => fmt.int(k);
+    $('#wsConfirm').innerHTML = `<p style="margin:0"><b>${esc(file.name)}</b> (exported ${fmt.date((ws.exported || '').slice(0, 10))}) has ${n(Object.keys((ws.local || {}).mine || {}).length)} strategies, ${n((ws.instruments || []).length)} uploaded files & ${n((ws.runs || []).length)} runs. Importing adds them & replaces anything with the same name; settings are replaced.</p><div class="row"><button class="btn small primary" type="button" id="wsDo">Import</button><button class="btn small" type="button" id="wsCancel">Cancel</button></div>`;
+    $('#wsConfirm').hidden = false; $('#wsDo').focus();
+    $('#wsDo').onclick = applyWorkspace; $('#wsCancel').onclick = () => { wsPending = null; $('#wsConfirm').hidden = true; };
+  } catch (e) { toast(`${file.name}: ${e.message}`); }
+}
+async function applyWorkspace() {
+  const ws = wsPending; if (!ws) return; wsPending = null; $('#wsConfirm').hidden = true;
+  const local = ws.local || {};
+  for (const [k, v] of Object.entries(local)) {
+    if (k === 'mine') store.set('mine', { ...myStrategies(), ...v });
+    else if (k === 'trials') store.set('trials', { ...trials.all(), ...v });
+    else store.set(k, v);
+  }
+  for (const rec of ws.instruments || []) { await idb.put(rec); addInstrument(rec); }
+  for (const run of ws.runs || []) await idb.put(run, 'runs');
+  fillTemplateSelect($('#template').value); fillInstrumentSelects(); fillRateSelect(); restoreSettings(); summarizeSettings(); renderInstTable(); renderRateTable(); renderDownloadList();
+  toast(`Imported ${fmt.int(Object.keys(local.mine || {}).length)} strategies, ${fmt.int((ws.instruments || []).length)} files & ${fmt.int((ws.runs || []).length)} runs.`);
+}
+
 /* ---------------------------------------------------------------- tabs -- */
-const TAB_TITLES = { backtest: 'Backtest', edit: 'Strategy Editor', tools: 'Research Tools', data: 'Data' };
+const TAB_TITLES = { backtest: 'Backtest', edit: 'Strategy Editor', tools: 'Research Tools', data: 'Data', history: 'Run History' };
 // The Editor tab borrows these elements from the Backtest tab instead of copying them,
 // so there is one editor (one undo history) & one set of results. A comment marks each home.
 const EDIT_DOCK = [['strategyBody', 'editSlotCode'], ['errBox', 'editSlotSide'], ['notes', 'editSlotSide'], ['kpis', 'editSlotSide'], ['eqPanel', 'editSlotSide'], ['logPanel', 'editSlotSide']];
@@ -2389,6 +2674,7 @@ function showTab(name) {
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); }
   if (name === 'data') { renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
+  if (name === 'history') renderRuns();
   document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
   store.set('tab', name);
   if (changed && name !== 'edit') { const h1 = $(`#view-${name} h1`); if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } }
@@ -2428,6 +2714,22 @@ function wire() {
   $('#showDesc').onchange = () => { if (lastRun) renderMetrics(lastRun.result); };
   $$('#edSize button').forEach(b => { b.onclick = () => setEditorSize(b.dataset.size); });
   $('#panelPickBtn').onclick = () => togglePicker($('#panelPickBtn'), $('#panelPick'));
+  $('#exportBtn').onclick = () => togglePicker($('#exportBtn'), $('#exportPick'));
+  $('#exportPick').addEventListener('click', e => { const b = e.target.closest('button[data-export]'); if (b) exportRun(b.dataset.export); });
+  $('#runFilter').addEventListener('input', renderRuns);
+  $('#runTable').addEventListener('change', e => { const tr = e.target.closest('tr[data-run]'); if (!tr) return; if (e.target.checked) runSel.add(tr.dataset.run); else runSel.delete(tr.dataset.run); $('#runCompare').disabled = runSel.size !== 2; $('#runDelete').disabled = !runSel.size; });
+  $('#runTable').addEventListener('click', async e => {
+    const b = e.target.closest('button[data-act]'); if (!b) return; const x = await getRun(b.closest('tr').dataset.run); if (!x) return;
+    if (b.dataset.act === 'restore') { await restoreRun(x); toast('Restored the code, settings & market of that run. Run it to see the result again.'); }
+    else if (b.dataset.act === 'reproduce') reproduceRun(x);
+    else if (b.dataset.act === 'label') { const v = prompt('Label for this run (e.g. “candidate for review”):', x.label || ''); if (v != null) { x.label = v.trim().slice(0, 60); await idb.put(x, 'runs'); renderRuns(); } }
+  });
+  $('#runCompare').onclick = () => { const [a, b] = [...runSel]; compareRuns(a, b); };
+  $('#runDelete').onclick = () => armConfirm($('#runDelete'), `Delete ${fmt.int(runSel.size)}`, async () => { for (const id of runSel) await idb.del(id, 'runs'); runSel.clear(); renderRuns(); });
+  $('#runClear').onclick = () => armConfirm($('#runClear'), 'Confirm Clear', async () => { await idb.clear('runs'); runSel.clear(); renderRuns(); $('#cmpPanel').hidden = true; toast('Run history cleared.'); });
+  $('#cmpClose').onclick = () => { $('#cmpPanel').hidden = true; kill('cmp'); };
+  $('#wsExport').onclick = exportWorkspace;
+  $('#wsFile').onchange = e => { if (e.target.files[0]) readWorkspace(e.target.files[0]); e.target.value = ''; };
   $('#panelChecks').addEventListener('change', e => { shown.set('panels', { [e.target.value]: e.target.checked }); applyPanels(true); });
   $('#panelDefaults').onclick = () => { shown.reset('panels'); renderPanelChecks(); applyPanels(true); };
   $('#panelAll').onclick = () => setPanels(true);
@@ -2538,7 +2840,7 @@ async function boot() {
     $('#resMeta').innerHTML = 'Browsers block pages opened straight from disk from reading <code translate="no">engine.py</code>. In the project folder run <code translate="no">python -m http.server</code>, then open <a href="http://localhost:8000">http://localhost:8000</a>.';
     return;
   }
-  templates = parseTemplates(tplText);
+  templates = parseTemplates(tplText); engineHash = hash53(engineSrc);
   const draft = store.get('draft', null); const qs = q.get('strategy');
   const wanted = qs && templates.some(t => t.id === qs) ? 'tpl:' + qs : draft ? draft.template : 'tpl:sma_cross';
   fillTemplateSelect(wanted);
