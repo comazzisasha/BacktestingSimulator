@@ -343,3 +343,124 @@ def signals(data):
     fast = qt.sma(data.close, PARAMS["fast"])
     slow = qt.sma(data.close, PARAMS["slow"])
     return [1.0 if f > s else 0.0 for f, s in zip(fast, slow)]
+
+#%% id: ml_logistic
+#%% name: Logistic Regression (NumPy)
+#%% group: Machine Learning
+#%% about: Predicts whether tomorrow is up from momentum, RSI, trend & volatility; retrained every quarter on past data only. Uses NumPy.
+# A machine-learning strategy in three steps:
+#   1. features(data): one row of inputs per bar, built from causal indicators
+#   2. walk_forward(): trains on the past & predicts the next bars, retraining on a
+#      schedule; it never trains on a label the model couldn't have known yet
+#   3. turn each predicted probability into a position
+import numpy as np
+
+PARAMS = {"min_train": 504, "retrain": 63, "threshold": 0.53, "l2": 0.01}
+
+def features(data):
+    c = data.close
+    trend = [p / s - 1 for p, s in zip(c, qt.sma(c, 50))]
+    return np.column_stack([
+        qt.roc(c, 1), qt.roc(c, 5), qt.roc(c, 20),       # momentum: 1 day, 1 week, 1 month
+        np.array(qt.rsi(c, 14)) / 100 - 0.5,              # overbought / oversold
+        trend,                                            # distance from the 50-day average
+        qt.realized_vol(c, 20),                           # recent volatility
+    ])
+
+def fit_predict(X, y, X_new):
+    mu, sd = X.mean(0), X.std(0) + 1e-12     # scale with training rows only
+    X, X_new = (X - mu) / sd, (X_new - mu) / sd
+    up = (y > 0).astype(float)
+    w, b = np.zeros(X.shape[1]), 0.0
+    for _ in range(200):                     # gradient descent on log-loss + L2 penalty
+        p = 1 / (1 + np.exp(-(X @ w + b)))
+        w -= 0.5 * (X.T @ (p - up) / len(up) + PARAMS["l2"] * w)
+        b -= 0.5 * (p - up).mean()
+    return 1 / (1 + np.exp(-(X_new @ w + b)))  # probability that the next day is up
+
+def signals(data):
+    c = data.close
+    # label for bar i = the NEXT day's return, known one bar later (horizon=1)
+    y = np.array([c[i + 1] / c[i] - 1 if i + 1 < len(c) else NAN for i in range(len(c))])
+    prob = walk_forward(features(data), y, fit_predict, min_train=PARAMS["min_train"],
+                        retrain_every=PARAMS["retrain"], horizon=1)
+    return [1.0 if p > PARAMS["threshold"] else 0.0 for p in prob]   # NaN compares False -> cash
+
+#%% id: ml_mlp
+#%% name: Neural Network (NumPy)
+#%% group: Machine Learning
+#%% about: A small two-layer neural network trained with Adam in plain NumPy, retrained twice a year: the same training loop you would write in PyTorch.
+# PyTorch can't run in the browser, but a small network is only a few lines of NumPy.
+# The forward pass, backward pass & Adam update below are what loss.backward() and
+# optimizer.step() do for you in PyTorch. Training is seeded, so runs are repeatable.
+import numpy as np
+
+PARAMS = {"min_train": 504, "retrain": 126, "hidden": 16, "epochs": 100, "lr": 0.02, "threshold": 0.53}
+
+def features(data):
+    c = data.close
+    trend = [p / s - 1 for p, s in zip(c, qt.sma(c, 50))]
+    return np.column_stack([qt.roc(c, 1), qt.roc(c, 5), qt.roc(c, 20),
+                            np.array(qt.rsi(c, 14)) / 100 - 0.5, trend, qt.realized_vol(c, 20)])
+
+def fit_predict(X, y, X_new):
+    mu, sd = X.mean(0), X.std(0) + 1e-12
+    X, X_new = (X - mu) / sd, (X_new - mu) / sd
+    t = (y > 0).astype(float)[:, None]
+    rng = np.random.default_rng(0)
+    h = PARAMS["hidden"]
+    params = [rng.normal(0, 1 / np.sqrt(X.shape[1]), (X.shape[1], h)), np.zeros(h),
+              rng.normal(0, 1 / np.sqrt(h), (h, 1)), np.zeros(1)]
+    m = [np.zeros_like(p) for p in params]
+    v = [np.zeros_like(p) for p in params]
+    for step in range(1, PARAMS["epochs"] + 1):
+        W1, b1, W2, b2 = params
+        a = np.tanh(X @ W1 + b1)                        # forward
+        p = 1 / (1 + np.exp(-(a @ W2 + b2)))
+        d2 = (p - t) / len(t)                           # backward (log-loss gradient)
+        da = (d2 @ W2.T) * (1 - a ** 2)
+        grads = [X.T @ da, da.sum(0), a.T @ d2, d2.sum(0)]
+        for k, g in enumerate(grads):                   # Adam update
+            m[k] = 0.9 * m[k] + 0.1 * g
+            v[k] = 0.999 * v[k] + 0.001 * g * g
+            params[k] -= PARAMS["lr"] * (m[k] / (1 - 0.9 ** step)) / (np.sqrt(v[k] / (1 - 0.999 ** step)) + 1e-8)
+    W1, b1, W2, b2 = params
+    return (1 / (1 + np.exp(-(np.tanh(X_new @ W1 + b1) @ W2 + b2))))[:, 0]
+
+def signals(data):
+    c = data.close
+    y = np.array([c[i + 1] / c[i] - 1 if i + 1 < len(c) else NAN for i in range(len(c))])
+    prob = walk_forward(features(data), y, fit_predict, min_train=PARAMS["min_train"],
+                        retrain_every=PARAMS["retrain"], horizon=1)
+    return [1.0 if p > PARAMS["threshold"] else 0.0 for p in prob]
+
+#%% id: ml_forest
+#%% name: Random Forest (scikit-learn)
+#%% group: Machine Learning
+#%% about: A random forest predicts whether the next week is up, retrained twice a year. The first run downloads scikit-learn (about 75 MB, cached afterwards).
+# Any scikit-learn model works the same way: swap RandomForestClassifier for
+# GradientBoostingClassifier, LogisticRegression, MLPClassifier, SVC, ...
+import numpy as np
+from sklearn.ensemble import RandomForestClassifier
+
+PARAMS = {"min_train": 504, "retrain": 126, "horizon": 5, "trees": 40, "depth": 4, "threshold": 0.55}
+
+def features(data):
+    c = data.close
+    trend = [p / s - 1 for p, s in zip(c, qt.sma(c, 50))]
+    return np.column_stack([qt.roc(c, 5), qt.roc(c, 20), qt.roc(c, 60),
+                            qt.rsi(c, 14), trend, qt.realized_vol(c, 20)])
+
+def fit_predict(X, y, X_new):
+    model = RandomForestClassifier(n_estimators=PARAMS["trees"], max_depth=PARAMS["depth"],
+                                   min_samples_leaf=20, random_state=0)
+    model.fit(X, (y > 0).astype(int))
+    return model.predict_proba(X_new)[:, 1]        # probability of class 1 = "up"
+
+def signals(data):
+    c, h = data.close, PARAMS["horizon"]
+    # label = return over the next h days, so it is only known h bars later
+    y = np.array([c[i + h] / c[i] - 1 if i + h < len(c) else NAN for i in range(len(c))])
+    prob = walk_forward(features(data), y, fit_predict, min_train=PARAMS["min_train"],
+                        retrain_every=PARAMS["retrain"], horizon=h)
+    return [1.0 if p > PARAMS["threshold"] else 0.0 for p in prob]

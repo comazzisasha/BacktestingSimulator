@@ -41,6 +41,13 @@ def on_bar(ctx):
 0 = cash, -1 = short, None = no change). The trade fills at the next day's open.
 Full reference: `docs.html` (also linked from the app).
 
+## Machine learning
+
+Strategies can `import numpy`, `pandas`, `scipy` and `sklearn`; they load on first use
+(NumPy is bundled in `pyodide/`, the rest come from the Pyodide CDN). `walk_forward(X, y, fit_predict, ...)`
+trains and retrains a model on past data only. See the *Machine Learning* templates.
+PyTorch can't run in a browser, but works when you run the engine from Python as below.
+
 ## Use the engine from Python
 
 ```python
@@ -55,7 +62,7 @@ stats, bench = engine.summarize(res)
 | Path | What it is |
 |---|---|
 | `engine.py` | Indicators, backtest loop, statistics, research tools, JSON API (pure Python, no dependencies) |
-| `templates.py` | 20 built-in strategies |
+| `templates.py` | 24 built-in strategies, including 3 machine-learning ones |
 | `index.html` | The web app |
 | `runtime.js`, `worker.js` | Start Pyodide in a background Web Worker |
 | `docs.html` | Documentation (rebuild with `python tools/build_docs.py`) |

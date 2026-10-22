@@ -119,7 +119,11 @@ main:focus { outline: none; }
 .bench { display: grid; grid-template-columns: minmax(340px, 460px) minmax(0, 1fr); gap: 20px; align-items: start; }
 @media (max-width: 1060px) { .bench { grid-template-columns: minmax(0, 1fr); } }
 .rail, .readout { display: grid; gap: var(--gap); min-width: 0; }
-@media (min-width: 1061px) { .rail { position: sticky; top: 76px; } }
+/* The rail scrolls on its own so the editor & Run button stay reachable however long the readout gets. */
+@media (min-width: 1061px) {
+  .rail { position: sticky; top: 76px; max-height: calc(100vh - 92px); max-height: calc(100dvh - 92px); overflow-y: auto;
+    scrollbar-width: thin; scrollbar-gutter: stable; padding: 2px; margin: -2px; }
+}
 
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow); min-width: 0; }
 .panel-h { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; padding: 14px 16px 0; }
@@ -195,7 +199,7 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .ed-main pre { position: absolute; inset: 0; pointer-events: none; color: var(--fg); overflow: hidden; }
 .ed-main pre code { display: block; font: inherit; background: none; border: 0; padding: 0; }
 .ed-main textarea { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; outline: none; resize: none; background: transparent;
-  color: transparent; caret-color: var(--fg); overflow: auto; overscroll-behavior: contain; }
+  color: transparent; caret-color: var(--fg); overflow: auto; }
 .ed-main textarea::selection { background: color-mix(in srgb, var(--focus) 30%, transparent); color: transparent; }
 .ed-err { position: absolute; left: 0; right: 0; height: var(--lh); background: color-mix(in srgb, var(--loss) 15%, transparent); pointer-events: none; }
 .tok-kw { color: var(--syn-kw); }
@@ -290,6 +294,18 @@ td.best { outline: 2px solid var(--fg); outline-offset: -2px; font-weight: 600; 
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); margin-bottom: 6px; }
 .checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 0 8px; }
+.checks.wide { grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); }
+.check input:disabled { opacity: 0.6; }
+.check:has(input:disabled) { cursor: default; color: var(--fg-3); }
+
+/* ---------- show/hide pickers ---------- */
+.picker { display: grid; gap: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--r); background: var(--sunk); }
+.picker fieldset { display: grid; gap: 2px; }
+.picker legend { display: flex; }
+.picker .row .help { margin-left: auto; }
+.runline .row { gap: 6px 12px; }
+.hidden-note { margin: 0; font-size: 12.5px; color: var(--fg-3); }
+.two.one { grid-template-columns: minmax(0, 1fr); }
 
 .drop { display: grid; place-items: center; gap: 6px; text-align: center; padding: 32px 16px; border: 1.5px dashed var(--border-strong); border-radius: var(--r-lg);
   background: var(--sunk); color: var(--fg-2); cursor: pointer; transition: background-color 0.15s, border-color 0.15s; }
@@ -444,7 +460,13 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <div class="runline">
             <h2 id="resTitle">Preparing Your First Backtest…</h2>
             <p class="meta" id="resMeta">The first visit downloads a 12&nbsp;MB Python runtime; later visits load from your browser’s cache.</p>
-            <div class="chips" id="resChips"></div>
+            <div class="row"><div class="chips" id="resChips"></div><span class="spacer"></span>
+              <button class="btn small" id="panelPickBtn" type="button" aria-expanded="false" aria-controls="panelPick">Customize Panels</button></div>
+            <div class="picker" id="panelPick" hidden>
+              <fieldset><legend>Optional Panels</legend><div class="checks wide" id="panelChecks"></div></fieldset>
+              <div class="row"><button class="btn small" id="panelDefaults" type="button">Defaults</button><button class="btn small" id="panelAll" type="button">Show All</button><button class="btn small" id="panelNone" type="button">Hide All</button>
+                <p class="help">Always shown: equity, drawdown, price &amp; trades, statistics &amp; the trade list.</p></div>
+            </div>
           </div>
           <ul class="notes" id="notes" hidden></ul>
 
@@ -468,26 +490,45 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           </section>
 
           <div class="two">
-            <section class="panel" aria-labelledby="h-heat">
+            <section class="panel" data-opt="heat" aria-labelledby="h-heat">
               <div class="panel-h"><h3 id="h-heat">Monthly Returns</h3><span class="spacer"></span>
                 <div class="seg" id="heatWhich" role="group" aria-label="Monthly returns for"><button type="button" aria-pressed="true" data-which="strategy">Strategy</button><button type="button" aria-pressed="false" data-which="bench">Benchmark</button></div>
               </div>
               <div class="panel-b scroll"><table class="heat" id="heat"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div>
             </section>
-            <section class="panel" aria-labelledby="h-hist">
+            <section class="panel" data-opt="hist" aria-labelledby="h-hist">
               <div class="panel-h"><h3 id="h-hist">Daily Return Distribution</h3></div>
               <div class="panel-b"><div class="chart mid"><canvas id="chHist" role="img" aria-label="Histogram of daily returns"></canvas><div class="chart-empty">Return histogram appears after the first run.</div></div></div>
             </section>
           </div>
 
-          <section class="panel" aria-labelledby="h-roll">
+          <section class="panel" data-opt="annual" aria-labelledby="h-annual">
+            <div class="panel-h"><h3 id="h-annual">Annual Returns</h3><span class="spacer"></span><span class="muted">First & last years may be partial</span></div>
+            <div class="panel-b"><div class="chart mid"><canvas id="chAnnual" role="img" aria-label="Calendar-year returns"></canvas><div class="chart-empty">Annual returns appear after the first run.</div></div></div>
+          </section>
+
+          <section class="panel" data-opt="roll" aria-labelledby="h-roll">
             <div class="panel-h"><h3 id="h-roll">Rolling Sharpe Ratio</h3><span class="muted" id="rollInfo"></span></div>
             <div class="panel-b"><div class="chart short"><canvas id="chRoll" role="img" aria-label="Rolling Sharpe ratio"></canvas><div class="chart-empty">Rolling Sharpe appears after the first run.</div></div></div>
           </section>
 
+          <section class="panel" data-opt="vol" aria-labelledby="h-vol">
+            <div class="panel-h"><h3 id="h-vol">Rolling Volatility</h3><span class="muted" id="volInfo"></span></div>
+            <div class="panel-b"><div class="chart short"><canvas id="chVol" role="img" aria-label="Rolling annualized volatility"></canvas><div class="chart-empty">Rolling volatility appears after the first run.</div></div></div>
+          </section>
+
           <section class="panel" aria-labelledby="h-stats">
-            <div class="panel-h"><h3 id="h-stats">All Statistics</h3><span class="spacer"></span><label class="check"><input type="checkbox" id="showDesc" name="definitions"> Show definitions</label></div>
-            <div class="panel-b scroll"><table class="metrics" id="metricsTable"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div>
+            <div class="panel-h"><h3 id="h-stats">Statistics</h3><span class="spacer"></span><label class="check"><input type="checkbox" id="showDesc" name="definitions"> Show definitions</label>
+              <button class="btn small" id="metricPickBtn" type="button" aria-expanded="false" aria-controls="metricPick">Choose Statistics</button></div>
+            <div class="panel-b">
+              <div class="picker" id="metricPick" hidden>
+                <div id="metricChecks" class="stack"></div>
+                <div class="row"><button class="btn small" id="metricDefaults" type="button">Defaults</button><button class="btn small" id="metricAll" type="button">Show All</button><button class="btn small" id="metricCore" type="button">Essentials Only</button>
+                  <p class="help">Greyed-out statistics are always shown.</p></div>
+              </div>
+              <div class="scroll"><table class="metrics" id="metricsTable"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div>
+              <p class="hidden-note" id="metricHidden" hidden></p>
+            </div>
           </section>
 
           <section class="panel" aria-labelledby="h-trades">
@@ -508,6 +549,10 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
   <section class="view stack" id="view-tools" aria-labelledby="h-tools" hidden>
     <div class="viewhead"><h1 id="h-tools">Research Tools</h1><p>Stress-test your strategy before you trust it.</p></div>
     <div class="panel ctxline" id="toolCtx"></div>
+    <form class="panel ctxline" id="toolPick" aria-labelledby="toolPickLabel" novalidate>
+      <fieldset><legend id="toolPickLabel">Optional Tools</legend><div class="checks wide" id="toolChecks"></div></fieldset>
+      <p class="help">Always shown: Parameter Sweep, Monte Carlo Resampling & In-Sample vs Out-of-Sample.</p>
+    </form>
 
     <section class="panel" id="sweep" aria-labelledby="h-sweep">
       <div class="panel-h"><div class="toolhead"><h2 id="h-sweep">Parameter Sweep</h2><p>Re-run your strategy for every combination of <code translate="no">PARAMS</code> values & score each run. Tune on older data, then check the result on data the tuning never saw.</p></div></div>
@@ -558,7 +603,45 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       </div>
     </section>
 
-    <section class="panel" id="analytics" aria-labelledby="h-an">
+    <section class="panel" id="subperiods" data-opt="subperiods" aria-labelledby="h-sub">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-sub">Sub-Period Consistency</h2><p>Cut the backtest into equal back-to-back periods & score each one. A real edge shows up in most periods; one lucky stretch carrying the whole result is a warning sign.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="subForm" novalidate>
+          <div class="field"><label for="subN">Number of Periods</label><input type="text" inputmode="numeric" id="subN" name="periods" value="5" autocomplete="off" aria-describedby="subN-err"><p class="ferr" id="subN-err" hidden></p></div>
+          <div class="row"><button class="btn primary" id="subRun" type="submit">Score Each Period</button></div>
+        </form>
+        <div class="out" id="subOut" aria-live="polite"><p class="out-empty">Runs your current strategy & splits it into periods.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="costs" data-opt="costs" aria-labelledby="h-cost">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-cost">Cost Sensitivity</h2><p>Re-run the backtest at rising trading costs. Strategies that trade often can look great at zero cost & lose money at realistic ones; this shows where the edge runs out.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="costForm" novalidate>
+          <div class="field"><label for="costLv">Cost per Fill (bps)</label><input type="text" id="costLv" name="cost-levels" value="0, 2, 5, 10, 20, 50" autocomplete="off" spellcheck="false" aria-describedby="costLv-help costLv-err"><p class="ferr" id="costLv-err" hidden></p></div>
+          <p class="help" id="costLv-help">Each level replaces your commission % & slippage; the flat fee per fill is kept. Use a list or <code translate="no">start:stop:step</code>.</p>
+          <div class="row"><button class="btn primary" id="costRun" type="submit">Test Costs</button></div>
+        </form>
+        <div class="out" id="costOut" aria-live="polite"><p class="out-empty">Runs your current strategy once per cost level.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="permutation" data-opt="permutation" aria-labelledby="h-perm">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-perm">Random-Timing Test</h2><p>Shuffle the days your strategy was invested, keeping how often & how much, & pair them with the real price moves. If random timing scores as well as yours, the entries & exits aren’t adding skill.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="permForm" novalidate>
+          <div class="grid2">
+            <div class="field"><label for="permN">Shuffles</label><input type="text" inputmode="numeric" id="permN" name="shuffles" value="500" autocomplete="off" aria-describedby="permN-err"><p class="ferr" id="permN-err" hidden></p></div>
+            <div class="field"><label for="permSeed">Seed</label><input type="text" inputmode="numeric" id="permSeed" name="seed" value="7" autocomplete="off" aria-describedby="permSeed-err"><p class="ferr" id="permSeed-err" hidden></p></div>
+          </div>
+          <p class="help">Scores are Sharpe ratios before costs, so they measure timing alone.</p>
+          <div class="row"><button class="btn primary" id="permRun" type="submit">Run Test</button></div>
+        </form>
+        <div class="out" id="permOut" aria-live="polite"><p class="out-empty">Runs your current strategy, then shuffles its timing.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="analytics" data-opt="analytics" aria-labelledby="h-an">
       <div class="panel-h"><div class="toolhead"><h2 id="h-an">Instrument Analytics</h2><p>Buy-&-hold statistics for each loaded instrument & how their daily returns move together. Low or negative correlation is what makes diversification work.</p></div></div>
       <div class="panel-b toolgrid">
         <form class="toolform" id="anForm" novalidate>
@@ -625,6 +708,7 @@ const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const PYODIDE_CDN = 'https://cdn.jsdelivr.net/npm/pyodide@0.26.4/';
+const PYODIDE_PACKAGES = 'https://cdn.jsdelivr.net/pyodide/v0.26.4/full/';  // wheels not bundled in pyodide/
 const CHART_CDN = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.js';
 const IS_MAC = /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
 const LOCALE = (() => {
@@ -636,7 +720,7 @@ const LOCALE = (() => {
   }
   return 'en-US';
 })();
-const TOOL_SECTIONS = ['sweep', 'montecarlo', 'split', 'analytics'];
+const TOOL_SECTIONS = ['sweep', 'montecarlo', 'split', 'subperiods', 'costs', 'permutation', 'analytics'];
 
 const RECOMMENDED = [
   ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
@@ -662,12 +746,14 @@ const fmt = {
   money: v => (v == null ? '—' : NF('usd2', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
   moneyAxis: v => NF('usd0', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(v),
   days: v => (v == null ? '—' : NF('int', { maximumFractionDigits: 0 }).format(Math.round(v)) + ' days'),
+  years: v => (v == null ? '—' : NF('n1', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v) + ' years'),
+  pval: v => (v == null ? '—' : v < 0.001 ? '< ' + NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(0.001) : NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(v)),
   price: v => (v == null ? '—' : NF('px', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
   date: iso => (iso ? dfDay.format(toDate(iso)) : '—'),
   month: iso => (iso ? dfMonth.format(toDate(iso)) : ''),
 };
 const UNSIGNED = new Set(['volatility', 'downside_dev', 'exposure', 'avg_leverage', 'win_rate', 'pct_pos_days', 'pct_pos_months', 'tracking_error',
-  'up_capture', 'down_capture', 'var_95', 'cvar_95', 'ulcer_index']);
+  'up_capture', 'down_capture', 'var_95', 'cvar_95', 'ulcer_index', 'var_99', 'cvar_99', 'pain_index', 'pct_pos_years', 'beat_days', 'beat_months', 'psr']);
 const fmtMetric = (f, v, key) => (f === 'pct' ? fmt.pct(v, 2, !UNSIGNED.has(key)) : (fmt[f] || fmt.num)(v));
 const sign = v => (v == null ? '' : v > 0 ? 'pos' : v < 0 ? 'neg' : '');
 let METRICS = [];
@@ -677,6 +763,49 @@ const store = {
   get(k, fallback) { try { const v = localStorage.getItem('ql.' + k); return v == null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
   set(k, v) { try { localStorage.setItem('ql.' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
 };
+
+/* --------------------------------------------------- optional sections -- */
+// Tiers: 'core' is always shown, 'std' is shown by default, 'extra' is hidden by default.
+// Choices are remembered in this browser, separately for panels, statistics & tools.
+const PANELS = [['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
+  ['roll', 'Rolling Sharpe Ratio', 'std'], ['vol', 'Rolling Volatility', 'extra']];
+const TOOLS = [['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
+  ['analytics', 'Instrument Analytics', 'std']];
+const shown = {
+  is(kind, key, tier) { if (tier === 'core') return true; const o = store.get('show.' + kind, {}); return key in o ? !!o[key] : tier === 'std'; },
+  set(kind, changes) { store.set('show.' + kind, { ...store.get('show.' + kind, {}), ...changes }); },
+  reset(kind) { store.set('show.' + kind, {}); },
+};
+const checkbox = (name, value, label, on) => `<label class="check"><input type="checkbox" name="${name}" value="${esc(value)}"${on ? ' checked' : ''}> ${esc(label)}</label>`;
+function togglePicker(btn, box) { const open = box.hidden; box.hidden = !open; btn.setAttribute('aria-expanded', String(open)); }
+const panelOn = k => !$(`#view-backtest [data-opt="${k}"]`).hidden;
+
+function renderPanelChecks() { $('#panelChecks').innerHTML = PANELS.map(([k, lab, t]) => checkbox('panel', k, lab, shown.is('panels', k, t))).join(''); }
+function applyPanels(redraw) {
+  for (const [k, , t] of PANELS) $(`#view-backtest [data-opt="${k}"]`).hidden = !shown.is('panels', k, t);
+  const two = $('#results .two'); const vis = $$(':scope > .panel', two).filter(p => !p.hidden).length;
+  two.hidden = !vis; two.classList.toggle('one', vis === 1);
+  if (redraw && lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); }
+}
+function setPanels(on) { shown.set('panels', Object.fromEntries(PANELS.map(([k]) => [k, on]))); renderPanelChecks(); applyPanels(true); }
+
+function renderMetricChecks() {
+  const groups = [...new Set(METRICS.map(m => m.group))];
+  $('#metricChecks').innerHTML = groups.map(g => `<fieldset><legend><label class="check"><input type="checkbox" data-group="${esc(g)}"> <b>${esc(g)}</b></label></legend><div class="checks wide">` +
+    METRICS.filter(m => m.group === g).map(m => `<label class="check" title="${esc(m.desc)}"><input type="checkbox" name="metric" value="${esc(m.key)}"${shown.is('metrics', m.key, m.tier) ? ' checked' : ''}${m.tier === 'core' ? ' disabled' : ''}> ${esc(m.label)}</label>`).join('') +
+    '</div></fieldset>').join('');
+  syncGroupChecks();
+}
+function syncGroupChecks() {
+  $$('#metricChecks input[data-group]').forEach(g => {
+    const boxes = $$('input[name="metric"]:not(:disabled)', g.closest('fieldset')); const on = boxes.filter(b => b.checked).length;
+    g.checked = on > 0 && on === boxes.length; g.indeterminate = on > 0 && on < boxes.length; g.disabled = !boxes.length;
+  });
+}
+function setMetrics(on) { shown.set('metrics', Object.fromEntries(METRICS.filter(m => m.tier !== 'core').map(m => [m.key, on]))); renderMetricChecks(); if (lastRun) renderMetrics(lastRun.result); }
+
+function renderToolChecks() { $('#toolChecks').innerHTML = TOOLS.map(([k, lab, t]) => checkbox('tool', k, lab, shown.is('tools', k, t))).join(''); }
+function applyTools() { for (const [k, , t] of TOOLS) $('#' + k).hidden = !shown.is('tools', k, t); }
 const idb = {
   db: null,
   async open() {
@@ -793,23 +922,24 @@ class PyError extends Error { constructor(info) { super(info.message || 'Python 
 const py = {
   mode: null, worker: null, seq: 0, waiting: new Map(), loaded: new Set(), ready: null, engineSrc: null,
   indexURLs() { return [new URL('pyodide/', location.href).href, PYODIDE_CDN]; },
+  initMsg() { return { type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs(), packageURL: PYODIDE_PACKAGES }; },
   start(engineSrc) { this.engineSrc = engineSrc; this.ready = this._start(); return this.ready; },
   async _start() {
     try {
       this._spawn();
-      await this._post({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() }, 180000);
+      await this._post(this.initMsg(), 180000);
       this.mode = 'worker';
     } catch (e) {
       console.warn('Worker unavailable, running Python on the page:', e);
       this._kill();
       await new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'runtime.js'; s.onload = res; s.onerror = () => rej(new Error('runtime.js is missing')); document.head.appendChild(s); });
-      await this._inline({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() });
+      await this._inline(this.initMsg());
       this.mode = 'inline';
     }
   },
   _spawn() {
     this.worker = new Worker('worker.js');
-    this.worker.onmessage = e => { const w = this.waiting.get(e.data.id); if (w) { this.waiting.delete(e.data.id); clearTimeout(w.t); e.data.ok ? w.resolve(e.data.result) : w.reject(new Error(e.data.error)); } };
+    this.worker.onmessage = e => { if (e.data.progress) { setStatus('busy', e.data.progress); return; } const w = this.waiting.get(e.data.id); if (w) { this.waiting.delete(e.data.id); clearTimeout(w.t); e.data.ok ? w.resolve(e.data.result) : w.reject(new Error(e.data.error)); } };
     this.worker.onerror = e => { if (e.preventDefault) e.preventDefault(); for (const w of this.waiting.values()) w.reject(new Error(e.message || 'worker error')); this.waiting.clear(); };
   },
   _kill() { if (this.worker) { this.worker.terminate(); this.worker = null; } },
@@ -821,7 +951,7 @@ const py = {
       this.worker.postMessage({ ...msg, id });
     });
   },
-  _inline(msg) { return new Promise((resolve, reject) => { setTimeout(() => self.QLRuntime.onMessage({ ...msg, id: 0 }, r => (r.ok ? resolve(r.result) : reject(new Error(r.error)))), 30); }); },
+  _inline(msg) { return new Promise((resolve, reject) => { setTimeout(() => self.QLRuntime.onMessage({ ...msg, id: 0 }, r => (r.progress ? setStatus('busy', r.progress) : r.ok ? resolve(r.result) : reject(new Error(r.error)))), 30); }); },
   async call(method, payload) {
     await this.ready;
     const msg = { type: 'call', method, payload: JSON.stringify(payload) };
@@ -844,7 +974,7 @@ const py = {
   async restart() {
     for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
     this.waiting.clear(); this._kill(); this.loaded.clear();
-    this.ready = (async () => { this._spawn(); await this._post({ type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs() }, 180000); })();
+    this.ready = (async () => { this._spawn(); await this._post(this.initMsg(), 180000); })();
     return this.ready;
   },
 };
@@ -1206,7 +1336,10 @@ function renderResults(r) {
   if (currentTab === 'backtest') document.title = `${r.strategyName} on ${r.ticker} · QuantLab`;
   $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${fmt.num(r.elapsed / 1000, 2)} s`;
   const chips = [`<span class="chip">${r.mode === 'signals' ? 'signals(data)' : 'on_bar(ctx)'}</span>`];
-  if (r.lookahead) chips.push(r.lookahead.violations.length ? '<span class="chip bad">Look-ahead detected</span>' : '<span class="chip ok">Look-ahead check passed</span>');
+  if (r.lookahead) {
+    const lk = r.lookahead; const part = lk.planned && lk.checked < lk.planned ? ` (${fmt.int(lk.checked)} of ${fmt.int(lk.planned)} spot checks; the rest were skipped to save time)` : '';
+    chips.push(lk.violations.length ? '<span class="chip bad">Look-ahead detected</span>' : `<span class="chip ok" title="Recomputed signals with the future removed${esc(part)}">Look-ahead check passed${lk.checked < lk.planned ? ' (partial)' : ''}</span>`);
+  }
   $('#resChips').innerHTML = chips.join('');
 
   const notes = (r.notes || []).map(n => esc(n));
@@ -1229,6 +1362,7 @@ function renderResults(r) {
   drawResultCharts(r); renderHeat(r); renderMetrics(r); renderTrades(r); toolContext();
   $('#ddInfo').textContent = m.dd_trough ? `Worst ${fmt.pct(m.max_drawdown, 1)}, ${fmt.date(m.dd_peak)} to ${fmt.date(m.dd_trough)}, ${m.dd_recovery ? 'recovered ' + fmt.date(m.dd_recovery) : 'not yet recovered'}` : 'No drawdown';
   $('#rollInfo').textContent = `${r.rolling.window}-day window, annualized`;
+  $('#volInfo').textContent = `${r.rolling.vol_window}-day window, annualized`;
   $('#logPanel').hidden = !r.logs; $('#logs').textContent = r.logs || '';
 }
 
@@ -1266,18 +1400,36 @@ function drawResultCharts(r) {
   $('#pxLegend').innerHTML = legendHTML([[P.fg2, 'Close'], [P.gain, '▲ Buy fill'], [P.loss, '▼ Sell fill'], [alpha(P.strat, 0.35), 'Exposure', 8]]);
 
   kill('hist');
-  const e = r.hist.edges; const labels = e.slice(0, -1).map((v, i) => fmt.pct((v + e[i + 1]) / 2, 1));
-  charts.hist = new Chart($('#chHist'), { type: 'bar', data: { labels, datasets: [
-    { label: 'Strategy', data: r.hist.counts[0], backgroundColor: alpha(P.strat, 0.8), barPercentage: 1, categoryPercentage: 0.9 },
-    { label: 'Benchmark', data: r.hist.counts[1], backgroundColor: alpha(P.bench, 0.6), barPercentage: 1, categoryPercentage: 0.9 },
-  ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
-    plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } },
-      tooltip: { backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel, callbacks: { label: c => ` ${c.dataset.label}: ${fmt.int(c.parsed.y)} days` } } },
-    scales: { x: { grid: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 7, maxRotation: 0 }, border: { color: P.border } },
-      y: { grid: { color: P.grid }, border: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 5 } } } } });
+  if (panelOn('hist')) {
+    const e = r.hist.edges; const labels = e.slice(0, -1).map((v, i) => fmt.pct((v + e[i + 1]) / 2, 1));
+    charts.hist = new Chart($('#chHist'), { type: 'bar', data: { labels, datasets: [
+      { label: 'Strategy', data: r.hist.counts[0], backgroundColor: alpha(P.strat, 0.8), barPercentage: 1, categoryPercentage: 0.9 },
+      { label: 'Benchmark', data: r.hist.counts[1], backgroundColor: alpha(P.bench, 0.6), barPercentage: 1, categoryPercentage: 0.9 },
+    ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } },
+        tooltip: { backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel, callbacks: { label: c => ` ${c.dataset.label}: ${fmt.int(c.parsed.y)} days` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 7, maxRotation: 0 }, border: { color: P.border } },
+        y: { grid: { color: P.grid }, border: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 5 } } } } });
+  }
+
+  kill('annual');
+  if (panelOn('annual')) {
+    const a = r.annual;
+    charts.annual = new Chart($('#chAnnual'), { type: 'bar', data: { labels: a.map(x => x.year), datasets: [
+      { label: 'Strategy', data: a.map(x => x.strategy), backgroundColor: alpha(P.strat, 0.85), categoryPercentage: 0.8, barPercentage: 0.9 },
+      { label: 'Benchmark', data: a.map(x => x.bench), backgroundColor: alpha(P.bench, 0.65), categoryPercentage: 0.8, barPercentage: 0.9 },
+    ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: true, position: 'top', align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } },
+        tooltip: { backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel, callbacks: { label: c => ` ${c.dataset.label}: ${fmt.pct(c.parsed.y, 1, true)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: P.fg3, maxRotation: 0 }, border: { color: P.border } },
+        y: { grid: { color: P.grid }, border: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 6, callback: v => fmt.pct(v, 0) } } } } });
+  }
 
   kill('roll');
-  charts.roll = new Chart($('#chRoll'), { data: { datasets: [line('Strategy', r.rolling.sharpe, P.strat, { borderWidth: 1.6 }), line('Benchmark', r.rolling.bench, P.bench, { borderWidth: 1.1, borderDash: [4, 3] })] }, options: baseOptions(d, P, v => fmt.num(v, 1)) });
+  if (panelOn('roll')) charts.roll = new Chart($('#chRoll'), { data: { datasets: [line('Strategy', r.rolling.sharpe, P.strat, { borderWidth: 1.6 }), line('Benchmark', r.rolling.bench, P.bench, { borderWidth: 1.1, borderDash: [4, 3] })] }, options: baseOptions(d, P, v => fmt.num(v, 1)) });
+
+  kill('vol');
+  if (panelOn('vol')) charts.vol = new Chart($('#chVol'), { data: { datasets: [line('Strategy', r.rolling.vol, P.strat, { borderWidth: 1.6 }), line('Benchmark', r.rolling.bench_vol, P.bench, { borderWidth: 1.1, borderDash: [4, 3] })] }, options: baseOptions(d, P, v => fmt.pct(v, 0)) });
 }
 
 function heatColor(v) { if (v == null) return 'transparent'; const P = palette(); return alpha(v >= 0 ? P.gain : P.loss, Math.min(1, Math.abs(v) / 0.08) * 0.5 + 0.06); }
@@ -1292,14 +1444,17 @@ function renderHeat(r) {
 function renderMetrics(r) {
   const showDesc = $('#showDesc').checked;
   let h = `<thead><tr><th scope="col">Statistic</th><th scope="col" class="n">Strategy</th><th scope="col" class="n">Benchmark</th>${showDesc ? '<th scope="col">Definition</th>' : ''}</tr></thead><tbody>`;
-  let group = null;
+  let group = null, hidden = 0;
   for (const mm of METRICS) {
     const v = r.metrics[mm.key], bv = r.bench_metrics[mm.key];
     if (v === undefined && bv === undefined) continue;
+    if (!shown.is('metrics', mm.key, mm.tier)) { hidden++; continue; }
     if (mm.group !== group) { group = mm.group; h += `<tr class="group"><th colspan="${showDesc ? 4 : 3}" scope="colgroup">${esc(group)}</th></tr>`; }
     h += `<tr><th scope="row">${esc(mm.label)}</th><td class="n">${fmtMetric(mm.fmt, v, mm.key)}</td><td class="n">${bv === undefined ? '' : fmtMetric(mm.fmt, bv, mm.key)}</td>${showDesc ? `<td class="desc">${esc(mm.desc)}</td>` : ''}</tr>`;
   }
   $('#metricsTable').innerHTML = h + '</tbody>';
+  $('#metricHidden').hidden = !hidden;
+  $('#metricHidden').textContent = `${fmt.int(hidden)} more statistic${hidden === 1 ? ' is' : 's are'} hidden. Use Choose Statistics to show ${hidden === 1 ? 'it' : 'them'}.`;
 }
 function renderTrades(r) {
   const t = r.trades; const max = 500;
@@ -1531,6 +1686,107 @@ async function runSplit(ev) {
   finally { busy(false); await loadingOff(btn); }
 }
 
+const toolError = (out, e) => { out.innerHTML = `<p class="ferr">${esc(e.info ? e.info.message : e.message)} Fix the strategy on the Backtest tab, then try again.</p>`; };
+const legendTop = P => ({ display: true, position: 'top', align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } });
+const tipStyle = P => ({ backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel });
+
+async function runSub(ev) {
+  ev.preventDefault();
+  if (!validate([['subN', between(2, 20, '', true, 5)]])) return;
+  const base = payloadBase(); const out = $('#subOut'); const btn = $('#subRun');
+  loadingOn(btn); busy(true, 'Scoring periods…');
+  try {
+    await py.ensure([base.ticker, base.benchmark]);
+    const r = await py.call('subperiods', { ...base, n: parseNumber($('#subN').value) });
+    out.innerHTML = '';
+    const p = document.createElement('p'); p.style.margin = '0';
+    p.innerHTML = `Made money in <b>${fmt.int(r.positive)} of ${fmt.int(r.n)}</b> periods & beat the benchmark in <b>${fmt.int(r.beat)} of ${fmt.int(r.n)}</b>.` +
+      (r.beat * 2 <= r.n ? ' The strategy trailed the benchmark more often than not.' : r.beat === r.n ? ' It led in every period.' : '');
+    out.appendChild(p);
+    const label = x => `${fmt.month(x.start)} – ${fmt.month(x.end)}`;
+    const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = '<canvas role="img" aria-label="Total return in each period, strategy & benchmark"></canvas>'; out.appendChild(box);
+    const P = palette(); kill('sub');
+    charts.sub = new Chart(box.firstChild, { type: 'bar', data: { labels: r.periods.map(label), datasets: [
+      { label: 'Strategy', data: r.periods.map(x => x.metrics.total_return), backgroundColor: alpha(P.strat, 0.85), categoryPercentage: 0.8, barPercentage: 0.9 },
+      { label: 'Benchmark', data: r.periods.map(x => x.bench.total_return), backgroundColor: alpha(P.bench, 0.65), categoryPercentage: 0.8, barPercentage: 0.9 },
+    ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: { legend: legendTop(P), tooltip: { ...tipStyle(P), callbacks: { label: c => ` ${c.dataset.label}: ${fmt.pct(c.parsed.y, 1, true)}` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: P.fg3, maxRotation: 0, autoSkip: true }, border: { color: P.border } },
+        y: { grid: { color: P.grid }, border: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 6, callback: v => fmt.pct(v, 0) } } } } });
+    let h = '<div class="scroll"><table class="metrics"><caption class="sr">Statistics for each period</caption><thead><tr><th scope="col">Period</th><th scope="col" class="n">Return</th><th scope="col" class="n">Benchmark</th><th scope="col" class="n">CAGR</th><th scope="col" class="n">Sharpe</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Trades</th></tr></thead><tbody>';
+    for (const x of r.periods) {
+      const m = x.metrics, b = x.bench;
+      h += `<tr><th scope="row" class="tnum">${esc(label(x))}</th><td class="n ${sign(m.total_return)}">${fmt.pct(m.total_return, 1, true)}</td><td class="n">${fmt.pct(b.total_return, 1, true)}</td><td class="n">${fmt.pct(m.cagr, 2, true)}</td><td class="n">${fmt.num(m.sharpe)}</td><td class="n">${fmt.pct(m.max_drawdown, 1)}</td><td class="n">${fmt.int(m.n_trades)}</td></tr>`;
+    }
+    const t = document.createElement('div'); t.innerHTML = h + '</tbody></table></div><p class="help">Periods have equal numbers of trading days. Positions & indicator warm-up carry across the boundaries.</p>'; out.appendChild(t);
+  } catch (e) { toolError(out, e); }
+  finally { busy(false); await loadingOff(btn); }
+}
+
+async function runCosts(ev) {
+  ev.preventDefault();
+  const lv = parseValues($('#costLv').value);
+  if (!validate([['costLv', () => (!lv || !lv.length ? 'Enter levels like 0, 5, 10, 20 or 0:50:5.' : lv.length > 30 ? `That’s ${fmt.int(lv.length)} levels. Use 30 or fewer.` : lv.some(v => v < 0 || v > 1000) ? 'Use levels from 0 to 1,000 bps.' : null)]])) return;
+  const base = payloadBase(); const out = $('#costOut'); const btn = $('#costRun');
+  loadingOn(btn); busy(true, 'Testing costs…');
+  try {
+    await py.ensure([base.ticker, base.benchmark]);
+    const r = await py.call('costs', { ...base, levels: lv });
+    out.innerHTML = '';
+    const bps = v => `${fmt.num(v, v % 1 ? 1 : 0)}&nbsp;bps`; const rows = r.rows;
+    let s;
+    if (rows[0].cagr <= r.bench_cagr) s = `Even at ${bps(rows[0].bps)} per fill, the strategy’s CAGR (${fmt.pct(rows[0].cagr, 2, true)}) is below the benchmark’s (${fmt.pct(r.bench_cagr, 2, true)}).`;
+    else if (r.breakeven_bench != null) s = `The strategy’s CAGR falls below the benchmark’s at about <b>${bps(r.breakeven_bench)}</b> per fill.`;
+    else s = `The strategy beats the benchmark’s CAGR at every level tested, up to ${bps(rows[rows.length - 1].bps)}.`;
+    if (r.breakeven_zero != null) s += ` It starts losing money at about <b>${bps(r.breakeven_zero)}</b>.`;
+    s += ` Your current settings charge ${bps(r.current_bps)} plus any flat fee.`;
+    const p = document.createElement('p'); p.style.margin = '0'; p.innerHTML = s; out.appendChild(p);
+    const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = '<canvas role="img" aria-label="CAGR at each cost level"></canvas>'; out.appendChild(box);
+    const P = palette(); kill('costs');
+    charts.costs = new Chart(box.firstChild, { type: 'line', data: { datasets: [
+      { label: 'Strategy CAGR', data: rows.map(x => ({ x: x.bps, y: x.cagr })), borderColor: P.strat, backgroundColor: P.strat, pointRadius: 3, borderWidth: 2 },
+      { label: 'Benchmark CAGR', data: [{ x: rows[0].bps, y: r.bench_cagr }, { x: rows[rows.length - 1].bps, y: r.bench_cagr }], borderColor: P.bench, backgroundColor: P.bench, pointRadius: 0, borderWidth: 1.5, borderDash: [5, 4] },
+    ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: { legend: legendTop(P), tooltip: { ...tipStyle(P), callbacks: { title: it => `${fmt.num(it[0].parsed.x, it[0].parsed.x % 1 ? 1 : 0)} bps per fill`, label: c => ` ${c.dataset.label}: ${fmt.pct(c.parsed.y, 2, true)}` } } },
+      scales: { x: { type: 'linear', title: { display: true, text: 'Cost per fill (bps)', color: P.fg3 }, grid: { color: P.grid }, ticks: { color: P.fg3 } },
+        y: { grid: { color: P.grid }, ticks: { color: P.fg3, callback: v => fmt.pct(v, 1) } } } } });
+    let h = '<div class="tablebox" tabindex="0" aria-label="Results at each cost level"><table><thead><tr><th scope="col" class="n">Cost (bps)</th><th scope="col" class="n">Total Return</th><th scope="col" class="n">CAGR</th><th scope="col" class="n">Sharpe</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Costs Paid</th></tr></thead><tbody>';
+    for (const x of rows) h += `<tr><td class="n">${fmt.num(x.bps, x.bps % 1 ? 1 : 0)}</td><td class="n ${sign(x.total_return)}">${fmt.pct(x.total_return, 1, true)}</td><td class="n">${fmt.pct(x.cagr, 2, true)}</td><td class="n">${fmt.num(x.sharpe)}</td><td class="n">${fmt.pct(x.max_drawdown, 1)}</td><td class="n">${fmt.money(x.costs)}</td></tr>`;
+    const t = document.createElement('div'); t.innerHTML = h + '</tbody></table></div>'; out.appendChild(t);
+  } catch (e) { toolError(out, e); }
+  finally { busy(false); await loadingOff(btn); }
+}
+
+async function runPerm(ev) {
+  ev.preventDefault();
+  if (!validate([['permN', between(50, 5000, '', true, 500)], ['permSeed', between(0, 1e9, '', true, 7)]])) return;
+  const base = payloadBase(); const out = $('#permOut'); const btn = $('#permRun');
+  loadingOn(btn); busy(true, 'Shuffling timing…');
+  try {
+    await py.ensure([base.ticker, base.benchmark]);
+    const r = await py.call('permutation', { ...base, n_perm: parseNumber($('#permN').value), seed: parseNumber($('#permSeed').value) });
+    out.innerHTML = '';
+    const p = document.createElement('p'); p.style.margin = '0';
+    if (r.constant) p.innerHTML = '<b>This test doesn’t apply.</b> Your strategy held nearly the same position every day, so shuffling its timing changes nothing. Use it on strategies that move in & out of the market.';
+    else {
+      const verdict = r.p_value < 0.05 ? 'Timing this good is unlikely to be luck.' : r.p_value < 0.1 ? 'Weak evidence of timing skill.' : 'Random timing does about as well, so the entries & exits may not be adding skill.';
+      p.innerHTML = `Your timing scored a Sharpe of <b>${fmt.num(r.actual)}</b> before costs, better than <b>${fmt.pct(r.percentile, 1)}</b> of ${fmt.int(r.n_perm)} random orderings (median ${fmt.num(r.q['50'])}). p-value <b>${fmt.pval(r.p_value)}</b>: ${verdict}`;
+    }
+    out.appendChild(p);
+    const e = r.hist.edges; if (!e.length) return;
+    const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = '<canvas role="img" aria-label="Histogram of Sharpe ratios from shuffled timing, with your strategy marked"></canvas>'; out.appendChild(box);
+    const P = palette(); kill('perm'); const width = e[1] - e[0];
+    const at = Math.min(e.length - 2, Math.max(0, (r.actual - e[0]) / width - 0.5));  // bar index; off-scale scores sit at the edge
+    charts.perm = new Chart(box.firstChild, { type: 'bar', data: { labels: e.slice(0, -1).map((v, i) => fmt.num((v + e[i + 1]) / 2)), datasets: [
+      { label: 'Shuffled timing', data: r.hist.counts[0], backgroundColor: alpha(P.fg3, 0.45), barPercentage: 1, categoryPercentage: 0.95 },
+    ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, splitLine: { index: at, color: P.strat, label: 'Your strategy' }, tooltip: { ...tipStyle(P), callbacks: { title: it => `Sharpe ≈ ${it[0].label}`, label: c => ` ${fmt.int(c.parsed.y)} shuffles` } } },
+      scales: { x: { grid: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 8, maxRotation: 0 }, border: { color: P.border }, title: { display: true, text: 'Sharpe ratio before costs', color: P.fg3 } },
+        y: { grid: { color: P.grid }, border: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 5 } } } }, plugins: [splitLinePlugin] });
+  } catch (e) { toolError(out, e); }
+  finally { busy(false); await loadingOff(btn); }
+}
+
 function renderAnalyticsList() {
   const keep = new Set($$('#anList input:checked').map(i => i.value)); const first = !$('#anList').childElementCount;
   $('#anList').innerHTML = sortedTickers().map(t => `<label class="check"><input type="checkbox" name="an-ticker" value="${esc(t)}" ${first || keep.has(t) ? 'checked' : ''}> ${esc(t)}</label>`).join('');
@@ -1619,6 +1875,8 @@ const TAB_TITLES = { backtest: 'Backtest', tools: 'Research Tools', data: 'Data'
 let currentTab = null;
 function route() {
   const h = location.hash.slice(1);
+  const opt = TOOLS.find(t => t[0] === h);
+  if (opt && !shown.is('tools', h, opt[2])) { shown.set('tools', { [h]: true }); renderToolChecks(); applyTools(); }
   if (TOOL_SECTIONS.includes(h)) { showTab('tools'); requestAnimationFrame(() => { const el = document.getElementById(h); if (el) el.scrollIntoView(); }); return; }
   if (h === 'content') { $('#content').focus(); return; }
   if (TAB_TITLES[h]) showTab(h);
@@ -1651,7 +1909,7 @@ function wire() {
   $('#marketForm').addEventListener('submit', e => { e.preventDefault(); runBacktest(); });
   $('#settingsForm').addEventListener('submit', e => { e.preventDefault(); saveSettings(); runBacktest(); });
   $('#settingsBox').addEventListener('toggle', () => url.write());
-  $('#stopBtn').onclick = async () => { sweepCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'mcRun', 'spRun', 'anRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
+  $('#stopBtn').onclick = async () => { sweepCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
   $('#template').onchange = loadSelectedTemplate;
   $('#resetBtn').onclick = loadSelectedTemplate;
   $('#errReset').onclick = () => { loadSelectedTemplate(); editor.ta.focus(); };
@@ -1668,6 +1926,22 @@ function wire() {
   $$('#eqScale button').forEach(b => { b.onclick = () => { $$('#eqScale button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); if (lastRun) drawResultCharts(lastRun.result); }; });
   $$('#heatWhich button').forEach(b => { b.onclick = () => { $$('#heatWhich button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); if (lastRun) renderHeat(lastRun.result); }; });
   $('#showDesc').onchange = () => { if (lastRun) renderMetrics(lastRun.result); };
+  $('#panelPickBtn').onclick = () => togglePicker($('#panelPickBtn'), $('#panelPick'));
+  $('#panelChecks').addEventListener('change', e => { shown.set('panels', { [e.target.value]: e.target.checked }); applyPanels(true); });
+  $('#panelDefaults').onclick = () => { shown.reset('panels'); renderPanelChecks(); applyPanels(true); };
+  $('#panelAll').onclick = () => setPanels(true);
+  $('#panelNone').onclick = () => setPanels(false);
+  $('#metricPickBtn').onclick = () => togglePicker($('#metricPickBtn'), $('#metricPick'));
+  $('#metricChecks').addEventListener('change', e => {
+    const t = e.target; let boxes = [t];
+    if (t.dataset.group) { boxes = $$('input[name="metric"]:not(:disabled)', t.closest('fieldset')); boxes.forEach(b => { b.checked = t.checked; }); }
+    shown.set('metrics', Object.fromEntries(boxes.map(b => [b.value, b.checked]))); syncGroupChecks();
+    if (lastRun) renderMetrics(lastRun.result);
+  });
+  $('#metricDefaults').onclick = () => { shown.reset('metrics'); renderMetricChecks(); if (lastRun) renderMetrics(lastRun.result); };
+  $('#metricAll').onclick = () => setMetrics(true);
+  $('#metricCore').onclick = () => setMetrics(false);
+  $('#toolChecks').addEventListener('change', e => { shown.set('tools', { [e.target.value]: e.target.checked }); applyTools(); });
 
   $('#swP1').onchange = () => { $('#swV1').dataset.touched = ''; suggestValues('#swP1', '#swV1'); };
   $('#swP2').onchange = () => { $('#swV2').dataset.touched = ''; suggestValues('#swP2', '#swV2'); };
@@ -1677,6 +1951,9 @@ function wire() {
   $('#swStop').onclick = () => { sweepCancel = true; };
   $('#mcForm').addEventListener('submit', runMC);
   $('#splitForm').addEventListener('submit', runSplit);
+  $('#subForm').addEventListener('submit', runSub);
+  $('#costForm').addEventListener('submit', runCosts);
+  $('#permForm').addEventListener('submit', runPerm);
   $('#anForm').addEventListener('submit', runAnalytics);
   $('#anAll').onclick = () => { $$('#anList input').forEach(i => { i.checked = true; }); $('#anList-err').hidden = true; };
   $('#anNone').onclick = () => $$('#anList input').forEach(i => { i.checked = false; });
@@ -1721,7 +1998,7 @@ function ensureChartLib() {
 }
 
 async function boot() {
-  setThemeColor(); renderKpiSkeleton(); editor.init(); wire(); route();
+  setThemeColor(); renderKpiSkeleton(); renderPanelChecks(); applyPanels(); renderToolChecks(); applyTools(); editor.init(); wire(); route();
   const settings = restoreSettings(); const q = url.read();
   if (q.get('settings') === 'open') $('#settingsBox').open = true;
   summarizeSettings();
@@ -1759,8 +2036,8 @@ async function boot() {
   try {
     await pyReady;
     setStatus('ready', 'Python ready');
-    METRICS = await py.call('metric_list', {});
-    $('#swMetric').innerHTML = ['sharpe', 'cagr', 'total_return', 'sortino', 'calmar', 'max_drawdown', 'win_rate', 'profit_factor', 'information_ratio', 'alpha']
+    METRICS = await py.call('metric_list', {}); renderMetricChecks();
+    $('#swMetric').innerHTML = ['sharpe', 'cagr', 'total_return', 'sortino', 'calmar', 'max_drawdown', 'win_rate', 'profit_factor', 'information_ratio', 'alpha', 'psr', 'sqn']
       .map(k => METRICS.find(m => m.key === k)).filter(Boolean).map(m => `<option value="${m.key}">${esc(m.label)}</option>`).join('');
     refreshParams();
     if (instruments.size) runBacktest();

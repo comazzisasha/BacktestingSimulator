@@ -96,6 +96,7 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#ctx">The ctx Object</a></li>
       <li><a href="#indicators">Indicators</a></li>
       <li><a href="#signals">Vectorized Signals</a></li>
+      <li><a href="#ml">Machine Learning</a></li>
       <li><a href="#execution">Execution & Costs</a></li>
       <li><a href="#statistics">Statistics</a></li>
       <li><a href="#strategies">Built-In Strategies</a></li>
@@ -239,6 +240,43 @@ def on_bar(ctx):
     return [1.0 if f &gt; s else 0.0 for f, s in zip(fast, slow)]</code></pre>
     <p>The engine still applies weight <code>i</code> on bar <code>i + 1</code>. However, nothing stops <code>signals</code> from reading <code>data.close[i + 1]</code> by mistake. To catch that, QuantLab re-runs your function on histories cut off at several dates and compares the results. If any weight changes, the run is flagged <b>Look-ahead detected</b>, and its numbers are not achievable.</p>
 
+    <h2 id="ml">Machine Learning</h2>
+    <p>Strategies can <code>import numpy</code>, <code>pandas</code>, <code>scipy</code> and <code>sklearn</code> (scikit-learn). QuantLab loads what your code imports the first time you run it. NumPy (12&nbsp;MB) ships with the site. pandas, SciPy and scikit-learn download from the Pyodide CDN on first use: scikit-learn needs SciPy, about 75&nbsp;MB in all. The browser caches them afterwards.</p>
+    <p><b>PyTorch and TensorFlow don’t run in browsers</b>: they have no WebAssembly build. There are three ways around that:</p>
+    <ul>
+      <li>Write the network in NumPy. The <i>Neural Network (NumPy)</i> template is a two-layer network trained with Adam: the same forward pass, backward pass and optimizer step PyTorch runs for you.</li>
+      <li>Use scikit-learn’s models, including <code>MLPClassifier</code> / <code>MLPRegressor</code> neural networks, random forests and gradient boosting.</li>
+      <li>Run the engine in regular Python (see <a href="#running">Running It Yourself</a>). Strategy code is plain Python there, so <code>import torch</code> works like any other package.</li>
+    </ul>
+    <h3>Training Without Look-Ahead</h3>
+    <p>The easy mistake in ML backtests is training on labels from the future. A label such as “the next day’s return” for bar <i>i</i> is only known at bar <i>i</i> + 1. <code>walk_forward</code> (available in every strategy) handles this. It retrains on a fixed schedule, gives each model only the rows whose labels were already known, and returns one out-of-sample prediction per bar:</p>
+<pre><code>import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+def fit_predict(X_train, y_train, X_new):
+    model = LogisticRegression().fit(X_train, y_train &gt; 0)
+    return model.predict_proba(X_new)[:, 1]          # probability the next day is up
+
+def signals(data):
+    c = data.close
+    X = np.column_stack([qt.roc(c, 5), qt.roc(c, 20), qt.rsi(c, 14)])
+    y = np.array([c[i + 1] / c[i] - 1 if i + 1 &lt; len(c) else NAN for i in range(len(c))])
+    prob = walk_forward(X, y, fit_predict, min_train=504, retrain_every=63, horizon=1)
+    return [1.0 if p &gt; 0.55 else 0.0 for p in prob]</code></pre>
+    <div class="scroll"><table>
+      <thead><tr><th>Argument</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>X</code></td><td>One row of features per bar: a list of lists or a 2-D NumPy array. Rows containing NaN (indicator warm-up) are skipped.</td></tr>
+        <tr><td><code>y</code></td><td>One label per bar describing what happens <i>after</i> it. Use NaN where the future isn’t available yet.</td></tr>
+        <tr><td><code>fit_predict</code></td><td>Your function <code>(X_train, y_train, X_new) → predictions</code>. It gets NumPy arrays when <code>X</code> is one.</td></tr>
+        <tr><td><code>min_train</code></td><td>Labelled rows needed before the first model (default 252).</td></tr>
+        <tr><td><code>retrain_every</code></td><td>Bars between retrainings (default 21). Each model predicts the bars until the next one.</td></tr>
+        <tr><td><code>horizon</code></td><td>Bars until a label is known (default 1). Use 5 for a label built from the next 5 days.</td></tr>
+        <tr><td><code>window</code></td><td>Train on only the most recent <i>n</i> rows (a rolling window) instead of all past rows.</td></tr>
+      </tbody>
+    </table></div>
+    <p>Fit any scaling (means, standard deviations) inside <code>fit_predict</code> from the training rows, as the templates do. Scaling with statistics from the whole history leaks the future. Seed anything random (<code>random_state=0</code>, <code>np.random.default_rng(0)</code>) so results repeat; the look-ahead check also needs this. For slow models the look-ahead check samples fewer dates, marked <b>(partial)</b>. Training happens on every run, so retrain monthly or quarterly rather than daily to keep runs fast.</p>
+
     <h2 id="execution">Execution & Costs</h2>
     <div class="timeline">
       <div><b>Day t, at the close</b>on_bar sees prices up to day t and returns a weight or places orders.</div>
@@ -267,6 +305,7 @@ def on_bar(ctx):
 
     <h2 id="statistics">Statistics</h2>
     <p>All statistics come from the daily equity curve, marked at each close, and from the list of trades. Annualization assumes 252 trading days. Years are measured in calendar days divided by 365.25.</p>
+    <p>The <b>Shown</b> column says what the Backtest tab displays. <i>Always</i> statistics can’t be hidden; <i>By default</i> ones are on until you hide them; <i>Optional</i> ones are off until you turn them on with <b>Choose Statistics</b>. Your choice is remembered in the browser. The same applies to the chart panels (<b>Customize Panels</b>) and to the Research Tools (<b>Optional Tools</b>). Every statistic is always computed and returned by <code>engine.summarize</code>, whatever the page shows.</p>
 <!--METRICS-->
     <h3>How to Read Them Together</h3>
     <ul>
@@ -275,6 +314,7 @@ def on_bar(ctx):
       <li><b>Beta below 1 with positive alpha</b> means the strategy earned more than its market exposure explains. A low beta alone just means it held less of the asset.</li>
       <li><b>Win rate</b> means little alone. Trend followers often win 35% of trades and still profit because their average win is much larger than their average loss; check <b>profit factor</b>.</li>
       <li>Fewer than about 30 trades or 3 years of data is too little to tell skill from luck. Run the Monte Carlo tool.</li>
+      <li>The <b>statistical tests</b> answer “could this be luck?”. A p-value is the chance of a result at least this good if there were no real edge; below 0.05 is the usual bar. A <b>minimum track record</b> longer than your backtest means the data can’t yet show the Sharpe ratio is above zero. Test many variations and some will pass by chance, so treat one passing test as a hint, not proof.</li>
     </ul>
 
     <h2 id="strategies">Built-In Strategies</h2>
@@ -289,6 +329,12 @@ def on_bar(ctx):
     <p>Takes the strategy’s daily returns and builds alternative histories by stitching together randomly chosen blocks of consecutive days (a circular block bootstrap). Blocks keep calm and volatile stretches together. The fan chart shows the range of paths, and the table shows percentiles of total return, CAGR and maximum drawdown. If the 5th percentile drawdown would be unbearable, size the strategy down.</p>
     <h3>In-Sample vs Out-of-Sample</h3>
     <p>Runs one continuous backtest and reports statistics separately before and after a split date. Indicator warm-up and open positions carry across the split. A strategy designed by looking at the whole chart will almost always look worse after the split, and that worse result is the realistic one.</p>
+    <h3>Sub-Period Consistency <span class="muted">(optional)</span></h3>
+    <p>Cuts one continuous backtest into 2–20 back-to-back periods with equal numbers of trading days and scores each against the benchmark. A strategy whose whole profit comes from one period depended on one market regime.</p>
+    <h3>Cost Sensitivity <span class="muted">(optional)</span></h3>
+    <p>Re-runs the backtest once per cost level. Each level is the cost of every fill in basis points of traded value and replaces both the commission percentage and the slippage; the flat fee per fill is kept. The summary reports, by linear interpolation between the levels you tested, the cost at which CAGR drops below the benchmark’s and below zero.</p>
+    <h3>Random-Timing Test <span class="muted">(optional)</span></h3>
+    <p>A permutation test of timing skill. It shuffles the strategy’s daily exposures, which keeps how often and how heavily it was invested but not when, and pairs them with the instrument’s actual close-to-close returns. Each ordering is scored by its Sharpe ratio before costs. The p-value is the share of shuffles that scored at least as well as the real ordering. Strategies that hold nearly the same position every day, like buy and hold, can’t be tested this way.</p>
     <h3>Instrument Analytics</h3>
     <p>Buy-and-hold statistics for each loaded instrument, a correlation matrix of daily returns on the dates all of them share, and a growth-of-100 chart. Assets with low correlation combine into portfolios with smaller drawdowns.</p>
 
@@ -308,7 +354,7 @@ def on_bar(ctx):
 python -m http.server 8000
 # then open http://localhost:8000</code></pre>
     <p>Opening <code>index.html</code> directly from disk doesn’t work, because browsers block pages loaded that way from reading <code>engine.py</code>. To publish the site, push the folder to a GitHub repository and turn on GitHub Pages.</p>
-    <p>The engine also works as a normal Python module, with no dependencies:</p>
+    <p>The engine also works as a normal Python module, with no dependencies of its own. Strategies may import anything installed, including PyTorch:</p>
 <pre><code>import engine
 ds = engine.load_csv("SPY.csv", "SPY")
 strat = engine.Strategy.from_code(open("my_strategy.py").read())
@@ -324,7 +370,8 @@ print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['ma
         <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, about 1900 lines.</td></tr>
         <tr><td><code>templates.py</code></td><td>The built-in strategies, separated by <code>#%% id:</code> markers. Add your own by following the same format.</td></tr>
         <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
-        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped.</td></tr>
+        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports.</td></tr>
+        <tr><td><code>pyodide/</code></td><td>The Python runtime and the NumPy wheel. Other package wheels from the Pyodide 0.26.4 release placed here are used instead of the CDN.</td></tr>
         <tr><td><code>data/</code></td><td>Bundled CSV files and <code>manifest.json</code>.</td></tr>
         <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics and the look-ahead detector.</td></tr>
         <tr><td><code>tools/build_docs.py</code></td><td>Regenerates this page's statistics and strategy tables from the code.</td></tr>

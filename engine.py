@@ -11,7 +11,8 @@ Contents
   4. Context: the object passed to your on_bar(ctx)
   5. Strategy loading, configuration and the backtest loop
   6. Performance metrics
-  7. Research tools: Monte Carlo, in/out-of-sample split, analytics, look-ahead check
+  7. Research tools: Monte Carlo, in/out-of-sample split, sub-periods, cost
+     sensitivity, random-timing test, analytics, look-ahead check
   8. JSON API used by the web page (handle(method, payload_json))
 
 Using it from plain Python:
@@ -123,6 +124,15 @@ def _div(a, b):
     if b == 0 or isnan(a) or isnan(b):
         return NAN
     return a / b
+
+
+def norm_cdf(x):
+    """Standard normal cumulative distribution function."""
+    return 0.5 * math.erfc(-x / math.sqrt(2.0))
+
+
+Z_95 = 1.6448536269514722   # one-sided 95% quantile of the standard normal
+Z_975 = 1.959963984540054   # two-sided 95%
 
 
 # =============================================================================
@@ -494,6 +504,58 @@ def drawdown(x):
         if v > peak:
             peak = v
         out.append(v / peak - 1 if peak > 0 else 0.0)
+    return out
+
+
+def walk_forward(X, y, fit_predict, min_train=252, retrain_every=21, horizon=1, window=None, fill=NAN):
+    """Out-of-sample model predictions for every bar, without look-ahead.
+
+    X             one row of features per bar (list of lists or a 2-D NumPy array).
+                  Rows containing NaN are skipped for training and get `fill`.
+    y             one label per bar describing what happens AFTER that bar, e.g. the
+                  next day's return. y[i] only becomes known `horizon` bars later.
+    fit_predict   fit_predict(X_train, y_train, X_new) -> one prediction per row of X_new.
+                  Gets NumPy arrays when X is one, else lists.
+
+    Retrains every `retrain_every` bars, starting once `min_train` labelled rows
+    exist. A model trained at bar t only sees rows j with j + horizon <= t (labels
+    already known at t's close), the most recent `window` of them if set, and
+    predicts bars t .. t + retrain_every - 1. Returns one value per bar.
+    """
+    n = len(X)
+    if len(y) != n:
+        raise ValueError("walk_forward: X has %d rows but y has %d" % (n, len(y)))
+    retrain_every, horizon = max(1, int(retrain_every)), max(1, int(horizon))
+    is_array = hasattr(X, "shape")
+    take_x = (lambda idx: X[idx]) if is_array else (lambda idx: [X[j] for j in idx])
+    y_array = hasattr(y, "shape")
+    take_y = (lambda idx: y[idx]) if y_array else (lambda idx: [y[j] for j in idx])
+    ok_x = [all(v == v for v in row) for row in X]
+    ok_y = [not isnan(v) for v in y]
+    out = [fill] * n
+    known = []          # usable training rows whose labels are known by bar t
+    t = 0
+    started = False
+    while t < n:
+        j = t - horizon
+        if j >= 0 and ok_x[j] and ok_y[j]:
+            known.append(j)
+        if not started and len(known) < min_train:
+            t += 1
+            continue
+        started = True
+        train = known[-int(window):] if window else known
+        new = [k for k in range(t, min(t + retrain_every, n)) if ok_x[k]]
+        if new and train:
+            preds = fit_predict(take_x(train), take_y(train), take_x(new))
+            for k, p in zip(new, preds):
+                out[k] = float(p)
+        # collect the labels that become known before the next retrain
+        for t2 in range(t + 1, min(t + retrain_every, n)):
+            j = t2 - horizon
+            if j >= 0 and ok_x[j] and ok_y[j]:
+                known.append(j)
+        t += retrain_every
     return out
 
 
@@ -950,7 +1012,7 @@ def _namespace():
         "__name__": "strategy",
         "__builtins__": __builtins__,
         "math": math, "statistics": statistics, "random": random,
-        "datetime": _dt, "qt": qt, "NAN": NAN, "isnan": isnan,
+        "datetime": _dt, "qt": qt, "NAN": NAN, "isnan": isnan, "walk_forward": walk_forward,
     }
 
 
@@ -971,6 +1033,10 @@ def format_error(exc, bar_date=None):
     frames = traceback.extract_tb(exc.__traceback__)
     user = [f for f in frames if f.filename == STRATEGY_FILENAME]
     msg = "%s: %s" % (type(exc).__name__, exc)
+    if isinstance(exc, ModuleNotFoundError) and sys.platform == "emscripten":
+        msg += (". In the browser, strategies can import NumPy, pandas, SciPy and scikit-learn plus the "
+                "standard library. PyTorch, TensorFlow and other packages without a WebAssembly build "
+                "only work when you run engine.py in regular Python.")
     if bar_date:
         msg += "  (on bar %s)" % bar_date
     if user:
@@ -1353,6 +1419,7 @@ def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_o
         commission=acct.commission, slippage=acct.slippage,
         traded_notional=acct.traded_notional, clipped=acct.clipped,
         logs=logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
+        signals=sig,
     )
 
 
@@ -1360,65 +1427,102 @@ def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_o
 # 6. Performance metrics
 # =============================================================================
 
+# Each statistic has a tier that decides whether the web page shows it:
+#   core   always shown (the numbers almost everyone looks at)
+#   std    shown by default, can be hidden
+#   extra  hidden by default, can be switched on
 METRICS = [
-    # key, label, group, format, description
-    ("total_return", "Total return", "Returns", "pct", "Final equity / starting equity - 1."),
-    ("cagr", "CAGR", "Returns", "pct", "Compound annual growth rate: (final / start) ^ (1 / years) - 1."),
-    ("final_equity", "Final equity", "Returns", "money", "Account value on the last bar."),
-    ("best_day", "Best day", "Returns", "pct", "Largest one-day return."),
-    ("worst_day", "Worst day", "Returns", "pct", "Largest one-day loss."),
-    ("best_month", "Best month", "Returns", "pct", "Largest calendar-month return."),
-    ("worst_month", "Worst month", "Returns", "pct", "Largest calendar-month loss."),
-    ("best_year", "Best year", "Returns", "pct", "Largest calendar-year return (first and last years may be partial)."),
-    ("worst_year", "Worst year", "Returns", "pct", "Worst calendar-year return."),
-    ("pct_pos_days", "Positive days", "Returns", "pct", "Share of days with a gain."),
-    ("pct_pos_months", "Positive months", "Returns", "pct", "Share of months with a gain."),
+    # key, label, group, format, tier, description
+    ("total_return", "Total return", "Returns", "pct", "core", "Final equity / starting equity - 1."),
+    ("cagr", "CAGR", "Returns", "pct", "core", "Compound annual growth rate: (final / start) ^ (1 / years) - 1."),
+    ("final_equity", "Final equity", "Returns", "money", "core", "Account value on the last bar."),
+    ("ret_1y", "Last 12 months", "Returns", "pct", "extra", "Return over the final 365 calendar days of the backtest."),
+    ("avg_month", "Average month", "Returns", "pct", "extra", "Mean calendar-month return."),
+    ("best_day", "Best day", "Returns", "pct", "std", "Largest one-day return."),
+    ("worst_day", "Worst day", "Returns", "pct", "std", "Largest one-day loss."),
+    ("best_month", "Best month", "Returns", "pct", "std", "Largest calendar-month return."),
+    ("worst_month", "Worst month", "Returns", "pct", "std", "Largest calendar-month loss."),
+    ("best_year", "Best year", "Returns", "pct", "std", "Largest calendar-year return (first and last years may be partial)."),
+    ("worst_year", "Worst year", "Returns", "pct", "std", "Worst calendar-year return."),
+    ("pct_pos_days", "Positive days", "Returns", "pct", "std", "Share of days with a gain."),
+    ("pct_pos_months", "Positive months", "Returns", "pct", "std", "Share of months with a gain."),
+    ("pct_pos_years", "Positive years", "Returns", "pct", "extra", "Share of calendar years with a gain."),
 
-    ("volatility", "Volatility (ann.)", "Risk", "pct", "Standard deviation of daily returns x sqrt(252)."),
-    ("downside_dev", "Downside deviation", "Risk", "pct", "Root-mean-square of returns below the risk-free rate, annualized."),
-    ("max_drawdown", "Max drawdown", "Risk", "pct", "Largest peak-to-trough fall in equity."),
-    ("max_dd_days", "Longest drawdown", "Risk", "days", "Most trading days spent below a previous equity high."),
-    ("avg_drawdown", "Average drawdown", "Risk", "pct", "Mean depth of all drawdown episodes."),
-    ("ulcer_index", "Ulcer index", "Risk", "pct", "sqrt(mean(drawdown^2)): punishes deep and long drawdowns."),
-    ("var_95", "VaR 95% (1 day)", "Risk", "pct", "Historical 1-day Value at Risk: the loss exceeded on 5% of days."),
-    ("cvar_95", "CVaR 95% (1 day)", "Risk", "pct", "Expected shortfall: the average loss on the worst 5% of days."),
-    ("skew", "Skew", "Risk", "num", "Asymmetry of daily returns. Negative = fat left tail."),
-    ("kurtosis", "Excess kurtosis", "Risk", "num", "Tail heaviness vs. a normal distribution (0 = normal)."),
+    ("volatility", "Volatility (ann.)", "Risk", "pct", "core", "Standard deviation of daily returns x sqrt(252)."),
+    ("downside_dev", "Downside deviation", "Risk", "pct", "std", "Root-mean-square of returns below the risk-free rate, annualized."),
+    ("max_drawdown", "Max drawdown", "Risk", "pct", "core", "Largest peak-to-trough fall in equity."),
+    ("max_dd_days", "Longest drawdown", "Risk", "days", "core", "Most trading days spent below a previous equity high."),
+    ("avg_drawdown", "Average drawdown", "Risk", "pct", "std", "Mean depth of all drawdown episodes."),
+    ("pain_index", "Pain index", "Risk", "pct", "extra", "Mean depth below the running equity high, over every day (0 on new highs)."),
+    ("ulcer_index", "Ulcer index", "Risk", "pct", "std", "sqrt(mean(drawdown^2)): punishes deep and long drawdowns."),
+    ("var_95", "VaR 95% (1 day)", "Risk", "pct", "std", "Historical 1-day Value at Risk: the loss exceeded on 5% of days."),
+    ("cvar_95", "CVaR 95% (1 day)", "Risk", "pct", "std", "Expected shortfall: the average loss on the worst 5% of days."),
+    ("var_99", "VaR 99% (1 day)", "Risk", "pct", "extra", "Historical 1-day Value at Risk: the loss exceeded on 1% of days."),
+    ("cvar_99", "CVaR 99% (1 day)", "Risk", "pct", "extra", "Expected shortfall: the average loss on the worst 1% of days."),
+    ("skew", "Skew", "Risk", "num", "std", "Asymmetry of daily returns. Negative = fat left tail."),
+    ("kurtosis", "Excess kurtosis", "Risk", "num", "std", "Tail heaviness vs. a normal distribution (0 = normal)."),
 
-    ("sharpe", "Sharpe ratio", "Risk-adjusted", "num", "(mean daily return - rf) / std x sqrt(252)."),
-    ("sortino", "Sortino ratio", "Risk-adjusted", "num", "Like Sharpe but only penalizes downside volatility."),
-    ("calmar", "Calmar ratio", "Risk-adjusted", "num", "CAGR / |max drawdown|."),
-    ("omega", "Omega ratio", "Risk-adjusted", "num", "Sum of daily gains / sum of daily losses (threshold 0)."),
-    ("tail_ratio", "Tail ratio", "Risk-adjusted", "num", "|95th percentile| / |5th percentile| of daily returns."),
+    ("sharpe", "Sharpe ratio", "Risk-adjusted", "num", "core", "(mean daily return - rf) / std x sqrt(252)."),
+    ("sortino", "Sortino ratio", "Risk-adjusted", "num", "core", "Like Sharpe but only penalizes downside volatility."),
+    ("calmar", "Calmar ratio", "Risk-adjusted", "num", "core", "CAGR / |max drawdown|."),
+    ("omega", "Omega ratio", "Risk-adjusted", "num", "std", "Sum of daily gains / sum of daily losses (threshold 0)."),
+    ("tail_ratio", "Tail ratio", "Risk-adjusted", "num", "std", "|95th percentile| / |5th percentile| of daily returns."),
+    ("martin", "Martin ratio", "Risk-adjusted", "num", "extra", "(CAGR - rf) / ulcer index. Rewards returns earned with shallow, short drawdowns."),
+    ("pain_ratio", "Pain ratio", "Risk-adjusted", "num", "extra", "(CAGR - rf) / pain index."),
+    ("recovery_factor", "Recovery factor", "Risk-adjusted", "num", "extra", "Total return / |max drawdown|: how many times the worst loss was earned back."),
+    ("gain_to_pain", "Gain-to-pain ratio", "Risk-adjusted", "num", "extra", "Sum of monthly returns / |sum of losing months| (Schwager). Above 1 is good."),
+    ("kelly", "Kelly fraction", "Risk-adjusted", "num", "extra", "(mean daily return - rf) / variance: the growth-optimal leverage if returns repeat. Most traders use half or less."),
+    ("stability", "Stability (R\u00b2)", "Risk-adjusted", "num", "extra", "R-squared of a straight-line fit to log equity. 1 = perfectly steady growth."),
 
-    ("beta", "Beta", "Vs benchmark", "num", "Sensitivity to the benchmark: cov(r, rb) / var(rb)."),
-    ("alpha", "Alpha (ann.)", "Vs benchmark", "pct", "Jensen's alpha: return not explained by beta x benchmark, annualized."),
-    ("correlation", "Correlation", "Vs benchmark", "num", "Correlation of daily returns with the benchmark."),
-    ("r_squared", "R-squared", "Vs benchmark", "num", "Share of return variance explained by the benchmark."),
-    ("tracking_error", "Tracking error", "Vs benchmark", "pct", "Annualized std of (strategy - benchmark) daily returns."),
-    ("information_ratio", "Information ratio", "Vs benchmark", "num", "Annualized excess return / tracking error."),
-    ("up_capture", "Up capture", "Vs benchmark", "pct", "Average strategy return on benchmark up days / benchmark's."),
-    ("down_capture", "Down capture", "Vs benchmark", "pct", "Average strategy return on benchmark down days / benchmark's. Lower is better."),
-    ("excess_cagr", "Excess CAGR", "Vs benchmark", "pct", "Strategy CAGR - benchmark CAGR."),
+    ("beta", "Beta", "Vs benchmark", "num", "core", "Sensitivity to the benchmark: cov(r, rb) / var(rb)."),
+    ("alpha", "Alpha (ann.)", "Vs benchmark", "pct", "core", "Jensen's alpha: return not explained by beta x benchmark, annualized."),
+    ("correlation", "Correlation", "Vs benchmark", "num", "core", "Correlation of daily returns with the benchmark."),
+    ("r_squared", "R-squared", "Vs benchmark", "num", "std", "Share of return variance explained by the benchmark."),
+    ("tracking_error", "Tracking error", "Vs benchmark", "pct", "std", "Annualized std of (strategy - benchmark) daily returns."),
+    ("information_ratio", "Information ratio", "Vs benchmark", "num", "std", "Annualized excess return / tracking error."),
+    ("treynor", "Treynor ratio", "Vs benchmark", "num", "extra", "(CAGR - rf) / beta: return per unit of market risk."),
+    ("up_capture", "Up capture", "Vs benchmark", "pct", "std", "Average strategy return on benchmark up days / benchmark's."),
+    ("down_capture", "Down capture", "Vs benchmark", "pct", "std", "Average strategy return on benchmark down days / benchmark's. Lower is better."),
+    ("beat_days", "Days beating benchmark", "Vs benchmark", "pct", "extra", "Share of days the strategy returned more than the benchmark."),
+    ("beat_months", "Months beating benchmark", "Vs benchmark", "pct", "extra", "Share of calendar months the strategy returned more than the benchmark."),
+    ("excess_cagr", "Excess CAGR", "Vs benchmark", "pct", "core", "Strategy CAGR - benchmark CAGR."),
 
-    ("n_trades", "Trades", "Trading", "int", "Closed round trips (flat -> position -> flat)."),
-    ("win_rate", "Win rate", "Trading", "pct", "Share of closed trades with a profit."),
-    ("avg_trade", "Average trade", "Trading", "pct", "Mean return per closed trade."),
-    ("avg_win", "Average win", "Trading", "pct", "Mean return of winning trades."),
-    ("avg_loss", "Average loss", "Trading", "pct", "Mean return of losing trades."),
-    ("best_trade", "Best trade", "Trading", "pct", "Largest single-trade return."),
-    ("worst_trade", "Worst trade", "Trading", "pct", "Largest single-trade loss."),
-    ("profit_factor", "Profit factor", "Trading", "num", "Gross profit / gross loss over closed trades."),
-    ("expectancy", "Expectancy", "Trading", "money", "Average dollar profit per closed trade."),
-    ("avg_bars", "Avg. bars held", "Trading", "num", "Mean length of a closed trade in bars."),
-    ("max_consec_wins", "Max win streak", "Trading", "int", "Most winning trades in a row."),
-    ("max_consec_losses", "Max loss streak", "Trading", "int", "Most losing trades in a row."),
-    ("exposure", "Time in market", "Trading", "pct", "Share of bars with an open position."),
-    ("avg_leverage", "Avg. exposure", "Trading", "pct", "Mean |position value| / equity."),
-    ("turnover", "Turnover (ann.)", "Trading", "num", "Traded value / average equity per year (2.0 = account traded twice a year)."),
-    ("n_fills", "Fills", "Trading", "int", "Number of executed orders."),
-    ("total_costs", "Costs paid", "Trading", "money", "Commissions plus slippage."),
-    ("orders_clipped", "Orders reduced", "Trading", "int", "Share orders cut down for lack of cash or the no-short rule."),
+    ("n_trades", "Trades", "Trading", "int", "core", "Closed round trips (flat -> position -> flat)."),
+    ("trades_per_year", "Trades per year", "Trading", "num", "extra", "Closed trades / years in the backtest."),
+    ("win_rate", "Win rate", "Trading", "pct", "core", "Share of closed trades with a profit."),
+    ("avg_trade", "Average trade", "Trading", "pct", "core", "Mean return per closed trade."),
+    ("avg_win", "Average win", "Trading", "pct", "std", "Mean return of winning trades."),
+    ("avg_loss", "Average loss", "Trading", "pct", "std", "Mean return of losing trades."),
+    ("payoff_ratio", "Payoff ratio", "Trading", "num", "extra", "Average win / |average loss|. A low win rate needs a high payoff ratio."),
+    ("best_trade", "Best trade", "Trading", "pct", "std", "Largest single-trade return."),
+    ("worst_trade", "Worst trade", "Trading", "pct", "std", "Largest single-trade loss."),
+    ("profit_factor", "Profit factor", "Trading", "num", "core", "Gross profit / gross loss over closed trades."),
+    ("expectancy", "Expectancy", "Trading", "money", "std", "Average dollar profit per closed trade."),
+    ("sqn", "System quality (SQN)", "Trading", "num", "extra", "sqrt(trades) x mean trade return / std of trade returns (Van Tharp). Above 2 is decent, above 3 good."),
+    ("avg_bars", "Avg. bars held", "Trading", "num", "std", "Mean length of a closed trade in bars."),
+    ("avg_bars_win", "Avg. bars in winners", "Trading", "num", "extra", "Mean length of winning trades in bars."),
+    ("avg_bars_loss", "Avg. bars in losers", "Trading", "num", "extra", "Mean length of losing trades in bars. Longer than winners can mean losers are held too long."),
+    ("max_consec_wins", "Max win streak", "Trading", "int", "std", "Most winning trades in a row."),
+    ("max_consec_losses", "Max loss streak", "Trading", "int", "std", "Most losing trades in a row."),
+    ("exposure", "Time in market", "Trading", "pct", "core", "Share of bars with an open position."),
+    ("avg_leverage", "Avg. exposure", "Trading", "pct", "std", "Mean |position value| / equity."),
+    ("turnover", "Turnover (ann.)", "Trading", "num", "std", "Traded value / average equity per year (2.0 = account traded twice a year)."),
+    ("n_fills", "Fills", "Trading", "int", "std", "Number of executed orders."),
+    ("total_costs", "Costs paid", "Trading", "money", "core", "Commissions plus slippage."),
+    ("orders_clipped", "Orders reduced", "Trading", "int", "std", "Share orders cut down for lack of cash or the no-short rule."),
+
+    ("t_stat", "t-statistic (mean return)", "Statistical tests", "num", "extra", "Mean daily excess return / its standard error. Above 2 suggests the mean is not zero."),
+    ("p_value", "p-value (mean return > 0)", "Statistical tests", "pval", "extra", "Chance of a t-statistic this high if the true mean return were zero (one-sided, normal approximation). Below 0.05 is the usual bar."),
+    ("psr", "Probabilistic Sharpe", "Statistical tests", "pct", "extra", "Probability that the true Sharpe ratio is above 0, allowing for skew, fat tails and track length (Bailey & Lopez de Prado)."),
+    ("sharpe_lo", "Sharpe 95% CI low", "Statistical tests", "num", "extra", "Lower end of a 95% confidence interval for the annualized Sharpe ratio."),
+    ("sharpe_hi", "Sharpe 95% CI high", "Statistical tests", "num", "extra", "Upper end of a 95% confidence interval for the annualized Sharpe ratio."),
+    ("min_trl", "Min. track record", "Statistical tests", "years", "extra", "Years of data needed to be 95% sure the Sharpe ratio is above 0. Longer than the backtest = not proven yet."),
+    ("alpha_t", "Alpha t-statistic", "Statistical tests", "num", "extra", "Alpha / its standard error from the regression on the benchmark. Above 2 suggests real alpha."),
+    ("alpha_p", "Alpha p-value", "Statistical tests", "pval", "extra", "Chance of an alpha t-statistic this high if true alpha were zero (one-sided, normal approximation)."),
+    ("win_rate_p", "Win-rate p-value", "Statistical tests", "pval", "extra", "Chance of at least this many winning trades if each trade were a coin flip (one-sided binomial, normal approximation)."),
+    ("autocorr", "Autocorrelation (1 day)", "Statistical tests", "num", "extra", "Correlation of each day's return with the previous day's. Far from 0 means returns are not independent."),
+    ("autocorr_p", "Autocorrelation p-value", "Statistical tests", "pval", "extra", "Two-sided p-value that the 1-day autocorrelation is zero. Below 0.05 = significant serial correlation."),
+    ("jb_p", "Normality p-value", "Statistical tests", "pval", "extra", "Jarque-Bera test that daily returns are normally distributed. Below 0.05 = fat tails or skew; treat Sharpe and VaR with care."),
 ]
 
 
@@ -1460,6 +1564,7 @@ def drawdown_stats(equity, dates):
     out["max_dd_days"] = longest
     out["avg_drawdown"] = mean(episodes) if episodes else 0.0
     out["ulcer_index"] = math.sqrt(mean([v * v for v in dd])) if dd else 0.0
+    out["pain_index"] = -mean(dd) if dd else 0.0
     return out
 
 
@@ -1478,6 +1583,44 @@ def period_returns(dates, equity, kind="month"):
             cur_key = k
         last = v
     out.append((cur_key, last / prev_end - 1 if prev_end > 0 else 0.0))
+    return out
+
+
+def return_tests(r, rfd=0.0):
+    """Significance tests on daily returns r (rfd = daily risk-free rate).
+
+    The Sharpe ratio's standard error follows Lo (2002) / Mertens (2002), which
+    widens it for negative skew and fat tails; PSR and the minimum track record
+    length follow Bailey & Lopez de Prado (2012). p-values use the normal
+    approximation, which is accurate for the hundreds of days a backtest has.
+    """
+    out = {}
+    n = len(r)
+    if n < 4:
+        return out
+    mu, sd = mean(r), stdev(r)
+    g3, g4 = skewness(r), kurtosis(r)
+    if sd > 0:
+        sr = (mu - rfd) / sd
+        out["t_stat"] = sr * math.sqrt(n)
+        out["p_value"] = 1 - norm_cdf(out["t_stat"])
+        if not isnan(g3) and not isnan(g4):
+            spread = 1 - g3 * sr + (g4 + 2) / 4 * sr * sr   # (g4 + 2) = raw kurtosis - 1
+            if spread > 0:
+                se = math.sqrt(spread / (n - 1))
+                ann = math.sqrt(TRADING_DAYS)
+                out["psr"] = norm_cdf(sr / se)
+                out["sharpe_lo"] = (sr - Z_975 * se) * ann
+                out["sharpe_hi"] = (sr + Z_975 * se) * ann
+                if sr > 0:
+                    out["min_trl"] = (1 + spread * (Z_95 / sr) ** 2) / TRADING_DAYS
+    if not isnan(g3) and not isnan(g4):
+        jb = n / 6 * (g3 * g3 + g4 * g4 / 4)
+        out["jb_p"] = math.exp(-jb / 2)   # chi-squared with 2 degrees of freedom
+    rho = correlation(r[:-1], r[1:])
+    if not isnan(rho):
+        out["autocorr"] = rho
+        out["autocorr_p"] = math.erfc(abs(rho) * math.sqrt(n) / math.sqrt(2))
     return out
 
 
@@ -1501,6 +1644,14 @@ def trade_stats(trades):
     m["profit_factor"] = gp / gl if gl > 0 else (math.inf if gp > 0 else NAN)
     m["expectancy"] = mean(pnls)
     m["avg_bars"] = mean([t["bars"] for t in closed])
+    m["avg_bars_win"] = mean([t["bars"] for t in wins]) if wins else NAN
+    m["avg_bars_loss"] = mean([t["bars"] for t in losses]) if losses else NAN
+    m["payoff_ratio"] = _div(m["avg_win"], abs(m["avg_loss"]))
+    sd = stdev(rets)
+    m["sqn"] = math.sqrt(len(rets)) * mean(rets) / sd if len(rets) >= 2 and sd > 0 else NAN
+    # One-sided binomial test of the win rate against a coin flip, with continuity correction.
+    n = len(closed)
+    m["win_rate_p"] = 1 - norm_cdf((len(wins) - 0.5 - n / 2) / math.sqrt(n / 4))
     best = worst = cw = cl = 0
     for p in pnls:
         if p > 0:
@@ -1547,24 +1698,45 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
         losses = -sum(x for x in r if x < 0)
         m["omega"] = gains / losses if losses > 0 else NAN
         m["tail_ratio"] = abs(p95 / p5) if p5 != 0 else NAN
+        p1 = percentile(r, 1)
+        m["var_99"] = -p1
+        m["cvar_99"] = -mean([x for x in r if x <= p1])
+        m["kelly"] = (mu - rfd) / (sd * sd) if sd > 0 else NAN
+        m.update(return_tests(r, rfd))
 
     dd = drawdown_stats(equity, dates)
     m["max_drawdown"] = dd["max_drawdown"]
     m["max_dd_days"] = dd["max_dd_days"]
     m["avg_drawdown"] = dd["avg_drawdown"]
     m["ulcer_index"] = dd["ulcer_index"]
+    m["pain_index"] = dd["pain_index"]
     for k in ("dd_peak", "dd_trough", "dd_recovery"):
         if k in dd:
             m[k] = dd[k]
     m["calmar"] = m["cagr"] / abs(m["max_drawdown"]) if m["max_drawdown"] < 0 else NAN
+    m["recovery_factor"] = m["total_return"] / abs(m["max_drawdown"]) if m["max_drawdown"] < 0 else NAN
+    m["martin"] = (m["cagr"] - rf) / m["ulcer_index"] if m["ulcer_index"] > 0 else NAN
+    m["pain_ratio"] = (m["cagr"] - rf) / m["pain_index"] if m["pain_index"] > 0 else NAN
+    if all(v > 0 for v in equity) and n >= 3:
+        rho = correlation(list(range(n)), [math.log(v) for v in equity])
+        m["stability"] = rho * rho if not isnan(rho) else NAN
+
+    if years >= 1:
+        cut = (_dt.date.fromisoformat(dates[-1]) - _dt.timedelta(days=365)).isoformat()
+        k = next(i for i, d in enumerate(dates) if d >= cut)
+        m["ret_1y"] = e1 / equity[k] - 1 if equity[k] > 0 else NAN
 
     months = [v for _, v in period_returns(dates, equity, "month")]
     yrs = [v for _, v in period_returns(dates, equity, "year")]
     if months:
         m["best_month"], m["worst_month"] = max(months), min(months)
         m["pct_pos_months"] = sum(1 for v in months if v > 0) / len(months)
+        m["avg_month"] = mean(months)
+        pain = -sum(v for v in months if v < 0)
+        m["gain_to_pain"] = sum(months) / pain if pain > 0 else NAN
     if yrs:
         m["best_year"], m["worst_year"] = max(yrs), min(yrs)
+        m["pct_pos_years"] = sum(1 for v in yrs if v > 0) / len(yrs)
 
     if exposure is not None and exposure:
         m["exposure"] = sum(1 for w in exposure if abs(w) > 1e-9) / len(exposure)
@@ -1579,6 +1751,7 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
         m["orders_clipped"] = clipped
     if trades is not None:
         m.update(trade_stats(trades))
+        m["trades_per_year"] = m["n_trades"] / years
 
     if bench_equity is not None and len(bench_equity) == n and n > 2:
         rb = daily_returns(bench_equity)
@@ -1600,6 +1773,23 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
         m["down_capture"] = _div(mean([a for a, _ in dn]), mean([b for _, b in dn])) if dn else NAN
         b_cagr = (bench_equity[-1] / bench_equity[0]) ** (1 / years) - 1 if bench_equity[-1] > 0 else -1.0
         m["excess_cagr"] = m["cagr"] - b_cagr
+        m["treynor"] = (m["cagr"] - rf) / beta if not isnan(beta) and abs(beta) > 1e-6 else NAN
+        m["beat_days"] = sum(1 for a, b in zip(r, rb) if a > b) / len(r)
+        sm = period_returns(dates, equity, "month")
+        bm = period_returns(dates, bench_equity, "month")
+        m["beat_months"] = sum(1 for (_, a), (_, b) in zip(sm, bm) if a > b) / len(sm)
+        # Regression r - rf = a + beta (rb - rf) + e; the t-statistic of the intercept a.
+        if not isnan(beta):
+            x = [v - rfd for v in rb]
+            y = [v - rfd for v in r]
+            mx = mean(x)
+            a = mean(y) - beta * mx
+            sxx = sum((v - mx) ** 2 for v in x)
+            s2 = sum((yv - a - beta * xv) ** 2 for xv, yv in zip(x, y)) / (len(x) - 2)
+            se = math.sqrt(s2 * (1 / len(x) + mx * mx / sxx)) if sxx > 0 else 0.0
+            if se > 1e-15:
+                m["alpha_t"] = a / se
+                m["alpha_p"] = 1 - norm_cdf(a / se)
     return m
 
 
@@ -1619,6 +1809,16 @@ def rolling_sharpe(equity, window=126, rf=0.0):
         mu = s / window
         var = (ss - s * s / window) / (window - 1)
         out[t] = (mu - rfd) / math.sqrt(var) * math.sqrt(TRADING_DAYS) if var > 1e-18 else NAN
+    return out
+
+
+def rolling_vol(equity, window=63):
+    """Annualized volatility of the last `window` daily returns, aligned with equity."""
+    r = daily_returns(equity)
+    out = [NAN] * len(equity)
+    ann = math.sqrt(TRADING_DAYS)
+    for t, v in enumerate(rolling_std(r, window, ddof=1)):
+        out[t + 1] = v * ann if not isnan(v) else NAN
     return out
 
 
@@ -1723,45 +1923,155 @@ def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120):
     }
 
 
+def _segment(res, a, b, rf):
+    """Metrics for bars a..b-1 of a Result (indexes relative to res.dates)."""
+    d = res.dates[a:b]
+    eq = res.equity[a:b]
+    be = res.bench_equity[a:b]
+    lo, hi = res.start + a, res.start + b - 1
+    trades = [t for t in res.trades if lo <= t["entry_i"] <= hi]
+    notional = sum(abs(f["qty"]) * f["price"] for f in res.fills if lo <= f["i"] <= hi)
+    fills = sum(1 for f in res.fills if lo <= f["i"] <= hi)
+    return {
+        "start": d[0], "end": d[-1],
+        "metrics": performance(d, eq, rf, be, trades, res.exposure[a:b], notional, None, fills),
+        "bench": performance(d, be, rf),
+    }
+
+
 def split_metrics(res, split_index, rf=None):
     """Metrics for the in-sample (before split) and out-of-sample (after) parts of
     one continuous backtest. Positions and indicator warm-up carry across the split."""
     rf = res.config.risk_free if rf is None else rf
     n = len(res.dates)
     k = max(2, min(int(split_index), n - 2))
-
-    def seg(a, b):
-        d = res.dates[a:b]
-        eq = res.equity[a:b]
-        be = res.bench_equity[a:b]
-        lo, hi = res.start + a, res.start + b - 1
-        trades = [t for t in res.trades if lo <= t["entry_i"] <= hi]
-        notional = sum(abs(f["qty"]) * f["price"] for f in res.fills if lo <= f["i"] <= hi)
-        fills = sum(1 for f in res.fills if lo <= f["i"] <= hi)
-        return {
-            "start": d[0], "end": d[-1],
-            "metrics": performance(d, eq, rf, be, trades, res.exposure[a:b], notional, None, fills),
-            "bench": performance(d, be, rf),
-        }
-
-    return {"split_date": res.dates[k], "in_sample": seg(0, k + 1), "out_of_sample": seg(k, n)}
+    return {"split_date": res.dates[k], "in_sample": _segment(res, 0, k + 1, rf),
+            "out_of_sample": _segment(res, k, n, rf)}
 
 
-def lookahead_check(strategy, ds, full_signals, samples=8):
+def subperiod_metrics(res, n_periods=5, rf=None):
+    """Cut one continuous backtest into n_periods back-to-back pieces of equal length
+    and score each. A real edge should show up in most of them, not just one."""
+    rf = res.config.risk_free if rf is None else rf
+    n = len(res.dates)
+    n_periods = max(2, min(int(n_periods), n // 20))
+    if n_periods < 2:
+        raise ValueError("Need at least 40 bars to compare sub-periods.")
+    cuts = [int(round(j * (n - 1) / n_periods)) for j in range(n_periods + 1)]
+    periods = [_segment(res, cuts[j], cuts[j + 1] + 1, rf) for j in range(n_periods)]
+    pos = sum(1 for p in periods if p["metrics"]["total_return"] > 0)
+    beat = sum(1 for p in periods if p["metrics"]["total_return"] > p["bench"]["total_return"])
+    return {"periods": periods, "n": n_periods, "positive": pos, "beat": beat}
+
+
+def _fresh(strategy):
+    """Strategies may be passed as a Strategy or a function that builds a new one."""
+    return strategy() if callable(strategy) and not isinstance(strategy, Strategy) else strategy
+
+
+def cost_sensitivity(strategy, ds, cfg, levels, start=None, end=None, bench=None):
+    """Re-run the backtest at each cost level and report how the result decays.
+
+    A level is the cost of every fill in basis points of traded value. It replaces
+    the percentage commission and the slippage; the flat per-fill fee is kept.
+    """
+    levels = sorted(set(float(v) for v in levels))
+    if not levels:
+        raise ValueError("Give at least one cost level.")
+    base = cfg.as_dict()
+    rows, bench_m = [], None
+    for lv in levels:
+        c = Config(**dict(base, commission_bps=0.0, slippage_bps=lv))
+        res = backtest(_fresh(strategy), ds, c, start, end, bench)
+        m, bench_m = summarize(res)
+        rows.append({"bps": lv, "total_return": m["total_return"], "cagr": m["cagr"], "sharpe": m.get("sharpe"),
+                     "max_drawdown": m["max_drawdown"], "costs": m.get("total_costs"), "turnover": m.get("turnover"),
+                     "excess_cagr": m.get("excess_cagr")})
+
+    def crossing(key, target):
+        # First cost level (linearly interpolated) at which rows[key] falls to target.
+        for a, b in zip(rows, rows[1:]):
+            va, vb = a[key], b[key]
+            if isnan(va) or isnan(vb):
+                continue
+            if va > target >= vb:
+                return a["bps"] + (b["bps"] - a["bps"]) * (va - target) / (va - vb)
+        return None
+
+    return {"rows": rows, "bench_cagr": bench_m["cagr"], "current_bps": cfg.commission_bps + cfg.slippage_bps,
+            "breakeven_zero": crossing("cagr", 0.0), "breakeven_bench": crossing("cagr", bench_m["cagr"])}
+
+
+def permutation_test(res, n_perm=500, seed=7):
+    """Random-timing test: is the strategy's timing better than chance?
+
+    Shuffles the strategy's daily exposures (keeping how often and how heavily it
+    is invested, but not WHEN) and pairs them with the asset's actual daily
+    returns. If many shuffles score as well as the real ordering, the timing adds
+    little. Scores are before costs, so they isolate timing skill.
+    """
+    close, w = res.close, res.exposure
+    n = len(close)
+    if n < 30:
+        raise ValueError("Need at least 30 bars for a random-timing test.")
+    r = [close[t] / close[t - 1] - 1 for t in range(1, n)]
+    pos = list(w[:-1])  # exposure at bar t's close is held over bar t + 1
+    ann = math.sqrt(TRADING_DAYS)
+    m = len(r)
+
+    def sharpe(p):
+        s = ss = 0.0
+        for a, b in zip(p, r):
+            x = a * b
+            s += x
+            ss += x * x
+        var = (ss - s * s / m) / (m - 1)
+        return s / m / math.sqrt(var) * ann if var > 1e-18 else 0.0
+
+    actual = sharpe(pos)
+    n_perm = max(50, min(int(n_perm), 5000))
+    # Nearly the same exposure every day (e.g. buy and hold): shuffling changes nothing.
+    constant = percentile(pos, 98) - percentile(pos, 2) < 0.05
+    rng = random.Random(seed)
+    perm, scores = pos[:], []
+    for _ in range(n_perm):
+        rng.shuffle(perm)
+        scores.append(sharpe(perm))
+    better = sum(1 for s in scores if s >= actual - 1e-12)
+    return {
+        "actual": actual, "n_perm": n_perm, "constant": constant,
+        "p_value": (1 + better) / (n_perm + 1),
+        "percentile": sum(1 for s in scores if s < actual) / n_perm,
+        "q": {str(q): percentile(scores, q) for q in (5, 50, 95)},
+        "hist": histogram([scores], 40),
+    }
+
+
+def lookahead_check(strategy, ds, full_signals, samples=8, budget=None):
     """For signals(data) strategies: recompute the signal using only data up to bar k
     and compare with the full-history value. Any difference means the signal for bar k
-    used later bars."""
+    used later bars. With a time budget in seconds (for slow strategies such as
+    machine-learning models), stops after the budget once two samples are done."""
+    import time
     n = ds.n
     lo = max(1, n // 5)
     picks = sorted(set(lo + (n - 1 - lo) * j // max(1, samples - 1) for j in range(samples)))
+    # check the extremes first, so a cut-short check still covers early and late bars
+    picks = [picks[0], picks[-1]] + picks[1:-1] if len(picks) > 2 else picks
     bad = []
+    t0 = time.time()
+    done = 0
     for k in picks:
+        if budget is not None and done >= 2 and time.time() - t0 > budget:
+            break
+        done += 1
         sub = list(strategy.signals(DataView(ds, k + 1)))
         a, b = sub[k] if len(sub) > k else None, full_signals[k]
         same = (isnan(a) and isnan(b)) or (not isnan(a) and not isnan(b) and abs(float(a) - float(b)) < 1e-9)
         if not same:
             bad.append({"date": ds.dates[k], "with_future": b, "without_future": a})
-    return {"checked": len(picks), "violations": bad}
+    bad.sort(key=lambda v: v["date"])
+    return {"checked": done, "planned": len(picks), "violations": bad}
 
 
 def instrument_stats(datasets, start=None, end=None, rf=0.0):
@@ -1867,12 +2177,14 @@ def api_run(p):
         "bench_monthly": monthly_table(res.dates, res.bench_equity),
         "hist": histogram([daily_returns(res.equity), daily_returns(res.bench_equity)]),
         "rolling": {"window": window, "sharpe": rolling_sharpe(res.equity, window, cfg.risk_free),
-                    "bench": rolling_sharpe(res.bench_equity, window, cfg.risk_free)},
+                    "bench": rolling_sharpe(res.bench_equity, window, cfg.risk_free),
+                    "vol_window": 63, "vol": rolling_vol(res.equity, 63), "bench_vol": rolling_vol(res.bench_equity, 63)},
+        "annual": [{"year": y, "strategy": a, "bench": b} for (y, a), (_, b) in
+                   zip(period_returns(res.dates, res.equity, "year"), period_returns(res.dates, res.bench_equity, "year"))],
         "logs": res.logs, "notes": res.notes, "config": cfg.as_dict(),
     }
-    if strat.signals is not None:
-        full = list(strat.signals(DataView(ds)))
-        out["lookahead"] = lookahead_check(strat, ds, full)
+    if res.signals is not None:
+        out["lookahead"] = lookahead_check(strat, ds, res.signals, budget=float(p.get("lookahead_budget", 4.0)))
     return out
 
 
@@ -1916,18 +2228,37 @@ def api_split(p):
     return out
 
 
+def api_subperiods(p):
+    ds, bench, cfg, strat = _prepare(p)
+    res = backtest(strat, ds, cfg, p.get("start"), p.get("end"), bench)
+    return subperiod_metrics(res, p.get("n", 5))
+
+
+def api_costs(p):
+    ds, bench, cfg, _ = _prepare(p)
+    return cost_sensitivity(lambda: Strategy.from_code(p["code"], p.get("params")), ds, cfg,
+                            p.get("levels") or [0, 2, 5, 10, 20, 50], p.get("start"), p.get("end"), bench)
+
+
+def api_permutation(p):
+    ds, bench, cfg, strat = _prepare(p)
+    res = backtest(strat, ds, cfg, p.get("start"), p.get("end"), bench)
+    return permutation_test(res, p.get("n_perm", 500), p.get("seed", 7))
+
+
 def api_analytics(p):
     sets = [_get(t) for t in p["tickers"] if t in DATA]
     return instrument_stats(sets, p.get("start"), p.get("end"), float(p.get("rf", 0.0)))
 
 
 def api_metric_list(p):
-    return [{"key": k, "label": lab, "group": g, "fmt": f, "desc": d} for k, lab, g, f, d in METRICS]
+    return [{"key": k, "label": lab, "group": g, "fmt": f, "tier": t, "desc": d} for k, lab, g, f, t, d in METRICS]
 
 
 API = {
     "load_data": api_load_data, "inspect": api_inspect, "run": api_run, "metrics": api_metrics,
     "montecarlo": api_montecarlo, "split": api_split, "analytics": api_analytics,
+    "subperiods": api_subperiods, "costs": api_costs, "permutation": api_permutation,
     "metric_list": api_metric_list,
 }
 

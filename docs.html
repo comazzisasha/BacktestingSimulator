@@ -96,6 +96,7 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#ctx">The ctx Object</a></li>
       <li><a href="#indicators">Indicators</a></li>
       <li><a href="#signals">Vectorized Signals</a></li>
+      <li><a href="#ml">Machine Learning</a></li>
       <li><a href="#execution">Execution & Costs</a></li>
       <li><a href="#statistics">Statistics</a></li>
       <li><a href="#strategies">Built-In Strategies</a></li>
@@ -239,6 +240,43 @@ def on_bar(ctx):
     return [1.0 if f &gt; s else 0.0 for f, s in zip(fast, slow)]</code></pre>
     <p>The engine still applies weight <code>i</code> on bar <code>i + 1</code>. However, nothing stops <code>signals</code> from reading <code>data.close[i + 1]</code> by mistake. To catch that, QuantLab re-runs your function on histories cut off at several dates and compares the results. If any weight changes, the run is flagged <b>Look-ahead detected</b>, and its numbers are not achievable.</p>
 
+    <h2 id="ml">Machine Learning</h2>
+    <p>Strategies can <code>import numpy</code>, <code>pandas</code>, <code>scipy</code> and <code>sklearn</code> (scikit-learn). QuantLab loads what your code imports the first time you run it. NumPy (12&nbsp;MB) ships with the site. pandas, SciPy and scikit-learn download from the Pyodide CDN on first use: scikit-learn needs SciPy, about 75&nbsp;MB in all. The browser caches them afterwards.</p>
+    <p><b>PyTorch and TensorFlow don’t run in browsers</b>: they have no WebAssembly build. There are three ways around that:</p>
+    <ul>
+      <li>Write the network in NumPy. The <i>Neural Network (NumPy)</i> template is a two-layer network trained with Adam: the same forward pass, backward pass and optimizer step PyTorch runs for you.</li>
+      <li>Use scikit-learn’s models, including <code>MLPClassifier</code> / <code>MLPRegressor</code> neural networks, random forests and gradient boosting.</li>
+      <li>Run the engine in regular Python (see <a href="#running">Running It Yourself</a>). Strategy code is plain Python there, so <code>import torch</code> works like any other package.</li>
+    </ul>
+    <h3>Training Without Look-Ahead</h3>
+    <p>The easy mistake in ML backtests is training on labels from the future. A label such as “the next day’s return” for bar <i>i</i> is only known at bar <i>i</i> + 1. <code>walk_forward</code> (available in every strategy) handles this. It retrains on a fixed schedule, gives each model only the rows whose labels were already known, and returns one out-of-sample prediction per bar:</p>
+<pre><code>import numpy as np
+from sklearn.linear_model import LogisticRegression
+
+def fit_predict(X_train, y_train, X_new):
+    model = LogisticRegression().fit(X_train, y_train &gt; 0)
+    return model.predict_proba(X_new)[:, 1]          # probability the next day is up
+
+def signals(data):
+    c = data.close
+    X = np.column_stack([qt.roc(c, 5), qt.roc(c, 20), qt.rsi(c, 14)])
+    y = np.array([c[i + 1] / c[i] - 1 if i + 1 &lt; len(c) else NAN for i in range(len(c))])
+    prob = walk_forward(X, y, fit_predict, min_train=504, retrain_every=63, horizon=1)
+    return [1.0 if p &gt; 0.55 else 0.0 for p in prob]</code></pre>
+    <div class="scroll"><table>
+      <thead><tr><th>Argument</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>X</code></td><td>One row of features per bar: a list of lists or a 2-D NumPy array. Rows containing NaN (indicator warm-up) are skipped.</td></tr>
+        <tr><td><code>y</code></td><td>One label per bar describing what happens <i>after</i> it. Use NaN where the future isn’t available yet.</td></tr>
+        <tr><td><code>fit_predict</code></td><td>Your function <code>(X_train, y_train, X_new) → predictions</code>. It gets NumPy arrays when <code>X</code> is one.</td></tr>
+        <tr><td><code>min_train</code></td><td>Labelled rows needed before the first model (default 252).</td></tr>
+        <tr><td><code>retrain_every</code></td><td>Bars between retrainings (default 21). Each model predicts the bars until the next one.</td></tr>
+        <tr><td><code>horizon</code></td><td>Bars until a label is known (default 1). Use 5 for a label built from the next 5 days.</td></tr>
+        <tr><td><code>window</code></td><td>Train on only the most recent <i>n</i> rows (a rolling window) instead of all past rows.</td></tr>
+      </tbody>
+    </table></div>
+    <p>Fit any scaling (means, standard deviations) inside <code>fit_predict</code> from the training rows, as the templates do. Scaling with statistics from the whole history leaks the future. Seed anything random (<code>random_state=0</code>, <code>np.random.default_rng(0)</code>) so results repeat; the look-ahead check also needs this. For slow models the look-ahead check samples fewer dates, marked <b>(partial)</b>. Training happens on every run, so retrain monthly or quarterly rather than daily to keep runs fast.</p>
+
     <h2 id="execution">Execution & Costs</h2>
     <div class="timeline">
       <div><b>Day t, at the close</b>on_bar sees prices up to day t and returns a weight or places orders.</div>
@@ -267,65 +305,99 @@ def on_bar(ctx):
 
     <h2 id="statistics">Statistics</h2>
     <p>All statistics come from the daily equity curve, marked at each close, and from the list of trades. Annualization assumes 252 trading days. Years are measured in calendar days divided by 365.25.</p>
-<div class="scroll"><table><thead><tr><th>Statistic</th><th>Key</th><th>Meaning</th></tr></thead><tbody>
-<tr class="group"><td colspan="3">Returns</td></tr>
-<tr><td>Total return</td><td><code>total_return</code></td><td>Final equity / starting equity - 1.</td></tr>
-<tr><td>CAGR</td><td><code>cagr</code></td><td>Compound annual growth rate: (final / start) ^ (1 / years) - 1.</td></tr>
-<tr><td>Final equity</td><td><code>final_equity</code></td><td>Account value on the last bar.</td></tr>
-<tr><td>Best day</td><td><code>best_day</code></td><td>Largest one-day return.</td></tr>
-<tr><td>Worst day</td><td><code>worst_day</code></td><td>Largest one-day loss.</td></tr>
-<tr><td>Best month</td><td><code>best_month</code></td><td>Largest calendar-month return.</td></tr>
-<tr><td>Worst month</td><td><code>worst_month</code></td><td>Largest calendar-month loss.</td></tr>
-<tr><td>Best year</td><td><code>best_year</code></td><td>Largest calendar-year return (first and last years may be partial).</td></tr>
-<tr><td>Worst year</td><td><code>worst_year</code></td><td>Worst calendar-year return.</td></tr>
-<tr><td>Positive days</td><td><code>pct_pos_days</code></td><td>Share of days with a gain.</td></tr>
-<tr><td>Positive months</td><td><code>pct_pos_months</code></td><td>Share of months with a gain.</td></tr>
-<tr class="group"><td colspan="3">Risk</td></tr>
-<tr><td>Volatility (ann.)</td><td><code>volatility</code></td><td>Standard deviation of daily returns x sqrt(252).</td></tr>
-<tr><td>Downside deviation</td><td><code>downside_dev</code></td><td>Root-mean-square of returns below the risk-free rate, annualized.</td></tr>
-<tr><td>Max drawdown</td><td><code>max_drawdown</code></td><td>Largest peak-to-trough fall in equity.</td></tr>
-<tr><td>Longest drawdown</td><td><code>max_dd_days</code></td><td>Most trading days spent below a previous equity high.</td></tr>
-<tr><td>Average drawdown</td><td><code>avg_drawdown</code></td><td>Mean depth of all drawdown episodes.</td></tr>
-<tr><td>Ulcer index</td><td><code>ulcer_index</code></td><td>sqrt(mean(drawdown^2)): punishes deep and long drawdowns.</td></tr>
-<tr><td>VaR 95% (1 day)</td><td><code>var_95</code></td><td>Historical 1-day Value at Risk: the loss exceeded on 5% of days.</td></tr>
-<tr><td>CVaR 95% (1 day)</td><td><code>cvar_95</code></td><td>Expected shortfall: the average loss on the worst 5% of days.</td></tr>
-<tr><td>Skew</td><td><code>skew</code></td><td>Asymmetry of daily returns. Negative = fat left tail.</td></tr>
-<tr><td>Excess kurtosis</td><td><code>kurtosis</code></td><td>Tail heaviness vs. a normal distribution (0 = normal).</td></tr>
-<tr class="group"><td colspan="3">Risk-adjusted</td></tr>
-<tr><td>Sharpe ratio</td><td><code>sharpe</code></td><td>(mean daily return - rf) / std x sqrt(252).</td></tr>
-<tr><td>Sortino ratio</td><td><code>sortino</code></td><td>Like Sharpe but only penalizes downside volatility.</td></tr>
-<tr><td>Calmar ratio</td><td><code>calmar</code></td><td>CAGR / |max drawdown|.</td></tr>
-<tr><td>Omega ratio</td><td><code>omega</code></td><td>Sum of daily gains / sum of daily losses (threshold 0).</td></tr>
-<tr><td>Tail ratio</td><td><code>tail_ratio</code></td><td>|95th percentile| / |5th percentile| of daily returns.</td></tr>
-<tr class="group"><td colspan="3">Vs benchmark</td></tr>
-<tr><td>Beta</td><td><code>beta</code></td><td>Sensitivity to the benchmark: cov(r, rb) / var(rb).</td></tr>
-<tr><td>Alpha (ann.)</td><td><code>alpha</code></td><td>Jensen&#x27;s alpha: return not explained by beta x benchmark, annualized.</td></tr>
-<tr><td>Correlation</td><td><code>correlation</code></td><td>Correlation of daily returns with the benchmark.</td></tr>
-<tr><td>R-squared</td><td><code>r_squared</code></td><td>Share of return variance explained by the benchmark.</td></tr>
-<tr><td>Tracking error</td><td><code>tracking_error</code></td><td>Annualized std of (strategy - benchmark) daily returns.</td></tr>
-<tr><td>Information ratio</td><td><code>information_ratio</code></td><td>Annualized excess return / tracking error.</td></tr>
-<tr><td>Up capture</td><td><code>up_capture</code></td><td>Average strategy return on benchmark up days / benchmark&#x27;s.</td></tr>
-<tr><td>Down capture</td><td><code>down_capture</code></td><td>Average strategy return on benchmark down days / benchmark&#x27;s. Lower is better.</td></tr>
-<tr><td>Excess CAGR</td><td><code>excess_cagr</code></td><td>Strategy CAGR - benchmark CAGR.</td></tr>
-<tr class="group"><td colspan="3">Trading</td></tr>
-<tr><td>Trades</td><td><code>n_trades</code></td><td>Closed round trips (flat -&gt; position -&gt; flat).</td></tr>
-<tr><td>Win rate</td><td><code>win_rate</code></td><td>Share of closed trades with a profit.</td></tr>
-<tr><td>Average trade</td><td><code>avg_trade</code></td><td>Mean return per closed trade.</td></tr>
-<tr><td>Average win</td><td><code>avg_win</code></td><td>Mean return of winning trades.</td></tr>
-<tr><td>Average loss</td><td><code>avg_loss</code></td><td>Mean return of losing trades.</td></tr>
-<tr><td>Best trade</td><td><code>best_trade</code></td><td>Largest single-trade return.</td></tr>
-<tr><td>Worst trade</td><td><code>worst_trade</code></td><td>Largest single-trade loss.</td></tr>
-<tr><td>Profit factor</td><td><code>profit_factor</code></td><td>Gross profit / gross loss over closed trades.</td></tr>
-<tr><td>Expectancy</td><td><code>expectancy</code></td><td>Average dollar profit per closed trade.</td></tr>
-<tr><td>Avg. bars held</td><td><code>avg_bars</code></td><td>Mean length of a closed trade in bars.</td></tr>
-<tr><td>Max win streak</td><td><code>max_consec_wins</code></td><td>Most winning trades in a row.</td></tr>
-<tr><td>Max loss streak</td><td><code>max_consec_losses</code></td><td>Most losing trades in a row.</td></tr>
-<tr><td>Time in market</td><td><code>exposure</code></td><td>Share of bars with an open position.</td></tr>
-<tr><td>Avg. exposure</td><td><code>avg_leverage</code></td><td>Mean |position value| / equity.</td></tr>
-<tr><td>Turnover (ann.)</td><td><code>turnover</code></td><td>Traded value / average equity per year (2.0 = account traded twice a year).</td></tr>
-<tr><td>Fills</td><td><code>n_fills</code></td><td>Number of executed orders.</td></tr>
-<tr><td>Costs paid</td><td><code>total_costs</code></td><td>Commissions plus slippage.</td></tr>
-<tr><td>Orders reduced</td><td><code>orders_clipped</code></td><td>Share orders cut down for lack of cash or the no-short rule.</td></tr>
+    <p>The <b>Shown</b> column says what the Backtest tab displays. <i>Always</i> statistics can’t be hidden; <i>By default</i> ones are on until you hide them; <i>Optional</i> ones are off until you turn them on with <b>Choose Statistics</b>. Your choice is remembered in the browser. The same applies to the chart panels (<b>Customize Panels</b>) and to the Research Tools (<b>Optional Tools</b>). Every statistic is always computed and returned by <code>engine.summarize</code>, whatever the page shows.</p>
+<div class="scroll"><table><thead><tr><th>Statistic</th><th>Key</th><th>Shown</th><th>Meaning</th></tr></thead><tbody>
+<tr class="group"><td colspan="4">Returns</td></tr>
+<tr><td>Total return</td><td><code>total_return</code></td><td>Always</td><td>Final equity / starting equity - 1.</td></tr>
+<tr><td>CAGR</td><td><code>cagr</code></td><td>Always</td><td>Compound annual growth rate: (final / start) ^ (1 / years) - 1.</td></tr>
+<tr><td>Final equity</td><td><code>final_equity</code></td><td>Always</td><td>Account value on the last bar.</td></tr>
+<tr><td>Last 12 months</td><td><code>ret_1y</code></td><td>Optional</td><td>Return over the final 365 calendar days of the backtest.</td></tr>
+<tr><td>Average month</td><td><code>avg_month</code></td><td>Optional</td><td>Mean calendar-month return.</td></tr>
+<tr><td>Best day</td><td><code>best_day</code></td><td>By default</td><td>Largest one-day return.</td></tr>
+<tr><td>Worst day</td><td><code>worst_day</code></td><td>By default</td><td>Largest one-day loss.</td></tr>
+<tr><td>Best month</td><td><code>best_month</code></td><td>By default</td><td>Largest calendar-month return.</td></tr>
+<tr><td>Worst month</td><td><code>worst_month</code></td><td>By default</td><td>Largest calendar-month loss.</td></tr>
+<tr><td>Best year</td><td><code>best_year</code></td><td>By default</td><td>Largest calendar-year return (first and last years may be partial).</td></tr>
+<tr><td>Worst year</td><td><code>worst_year</code></td><td>By default</td><td>Worst calendar-year return.</td></tr>
+<tr><td>Positive days</td><td><code>pct_pos_days</code></td><td>By default</td><td>Share of days with a gain.</td></tr>
+<tr><td>Positive months</td><td><code>pct_pos_months</code></td><td>By default</td><td>Share of months with a gain.</td></tr>
+<tr><td>Positive years</td><td><code>pct_pos_years</code></td><td>Optional</td><td>Share of calendar years with a gain.</td></tr>
+<tr class="group"><td colspan="4">Risk</td></tr>
+<tr><td>Volatility (ann.)</td><td><code>volatility</code></td><td>Always</td><td>Standard deviation of daily returns x sqrt(252).</td></tr>
+<tr><td>Downside deviation</td><td><code>downside_dev</code></td><td>By default</td><td>Root-mean-square of returns below the risk-free rate, annualized.</td></tr>
+<tr><td>Max drawdown</td><td><code>max_drawdown</code></td><td>Always</td><td>Largest peak-to-trough fall in equity.</td></tr>
+<tr><td>Longest drawdown</td><td><code>max_dd_days</code></td><td>Always</td><td>Most trading days spent below a previous equity high.</td></tr>
+<tr><td>Average drawdown</td><td><code>avg_drawdown</code></td><td>By default</td><td>Mean depth of all drawdown episodes.</td></tr>
+<tr><td>Pain index</td><td><code>pain_index</code></td><td>Optional</td><td>Mean depth below the running equity high, over every day (0 on new highs).</td></tr>
+<tr><td>Ulcer index</td><td><code>ulcer_index</code></td><td>By default</td><td>sqrt(mean(drawdown^2)): punishes deep and long drawdowns.</td></tr>
+<tr><td>VaR 95% (1 day)</td><td><code>var_95</code></td><td>By default</td><td>Historical 1-day Value at Risk: the loss exceeded on 5% of days.</td></tr>
+<tr><td>CVaR 95% (1 day)</td><td><code>cvar_95</code></td><td>By default</td><td>Expected shortfall: the average loss on the worst 5% of days.</td></tr>
+<tr><td>VaR 99% (1 day)</td><td><code>var_99</code></td><td>Optional</td><td>Historical 1-day Value at Risk: the loss exceeded on 1% of days.</td></tr>
+<tr><td>CVaR 99% (1 day)</td><td><code>cvar_99</code></td><td>Optional</td><td>Expected shortfall: the average loss on the worst 1% of days.</td></tr>
+<tr><td>Skew</td><td><code>skew</code></td><td>By default</td><td>Asymmetry of daily returns. Negative = fat left tail.</td></tr>
+<tr><td>Excess kurtosis</td><td><code>kurtosis</code></td><td>By default</td><td>Tail heaviness vs. a normal distribution (0 = normal).</td></tr>
+<tr class="group"><td colspan="4">Risk-adjusted</td></tr>
+<tr><td>Sharpe ratio</td><td><code>sharpe</code></td><td>Always</td><td>(mean daily return - rf) / std x sqrt(252).</td></tr>
+<tr><td>Sortino ratio</td><td><code>sortino</code></td><td>Always</td><td>Like Sharpe but only penalizes downside volatility.</td></tr>
+<tr><td>Calmar ratio</td><td><code>calmar</code></td><td>Always</td><td>CAGR / |max drawdown|.</td></tr>
+<tr><td>Omega ratio</td><td><code>omega</code></td><td>By default</td><td>Sum of daily gains / sum of daily losses (threshold 0).</td></tr>
+<tr><td>Tail ratio</td><td><code>tail_ratio</code></td><td>By default</td><td>|95th percentile| / |5th percentile| of daily returns.</td></tr>
+<tr><td>Martin ratio</td><td><code>martin</code></td><td>Optional</td><td>(CAGR - rf) / ulcer index. Rewards returns earned with shallow, short drawdowns.</td></tr>
+<tr><td>Pain ratio</td><td><code>pain_ratio</code></td><td>Optional</td><td>(CAGR - rf) / pain index.</td></tr>
+<tr><td>Recovery factor</td><td><code>recovery_factor</code></td><td>Optional</td><td>Total return / |max drawdown|: how many times the worst loss was earned back.</td></tr>
+<tr><td>Gain-to-pain ratio</td><td><code>gain_to_pain</code></td><td>Optional</td><td>Sum of monthly returns / |sum of losing months| (Schwager). Above 1 is good.</td></tr>
+<tr><td>Kelly fraction</td><td><code>kelly</code></td><td>Optional</td><td>(mean daily return - rf) / variance: the growth-optimal leverage if returns repeat. Most traders use half or less.</td></tr>
+<tr><td>Stability (R²)</td><td><code>stability</code></td><td>Optional</td><td>R-squared of a straight-line fit to log equity. 1 = perfectly steady growth.</td></tr>
+<tr class="group"><td colspan="4">Vs benchmark</td></tr>
+<tr><td>Beta</td><td><code>beta</code></td><td>Always</td><td>Sensitivity to the benchmark: cov(r, rb) / var(rb).</td></tr>
+<tr><td>Alpha (ann.)</td><td><code>alpha</code></td><td>Always</td><td>Jensen&#x27;s alpha: return not explained by beta x benchmark, annualized.</td></tr>
+<tr><td>Correlation</td><td><code>correlation</code></td><td>Always</td><td>Correlation of daily returns with the benchmark.</td></tr>
+<tr><td>R-squared</td><td><code>r_squared</code></td><td>By default</td><td>Share of return variance explained by the benchmark.</td></tr>
+<tr><td>Tracking error</td><td><code>tracking_error</code></td><td>By default</td><td>Annualized std of (strategy - benchmark) daily returns.</td></tr>
+<tr><td>Information ratio</td><td><code>information_ratio</code></td><td>By default</td><td>Annualized excess return / tracking error.</td></tr>
+<tr><td>Treynor ratio</td><td><code>treynor</code></td><td>Optional</td><td>(CAGR - rf) / beta: return per unit of market risk.</td></tr>
+<tr><td>Up capture</td><td><code>up_capture</code></td><td>By default</td><td>Average strategy return on benchmark up days / benchmark&#x27;s.</td></tr>
+<tr><td>Down capture</td><td><code>down_capture</code></td><td>By default</td><td>Average strategy return on benchmark down days / benchmark&#x27;s. Lower is better.</td></tr>
+<tr><td>Days beating benchmark</td><td><code>beat_days</code></td><td>Optional</td><td>Share of days the strategy returned more than the benchmark.</td></tr>
+<tr><td>Months beating benchmark</td><td><code>beat_months</code></td><td>Optional</td><td>Share of calendar months the strategy returned more than the benchmark.</td></tr>
+<tr><td>Excess CAGR</td><td><code>excess_cagr</code></td><td>Always</td><td>Strategy CAGR - benchmark CAGR.</td></tr>
+<tr class="group"><td colspan="4">Trading</td></tr>
+<tr><td>Trades</td><td><code>n_trades</code></td><td>Always</td><td>Closed round trips (flat -&gt; position -&gt; flat).</td></tr>
+<tr><td>Trades per year</td><td><code>trades_per_year</code></td><td>Optional</td><td>Closed trades / years in the backtest.</td></tr>
+<tr><td>Win rate</td><td><code>win_rate</code></td><td>Always</td><td>Share of closed trades with a profit.</td></tr>
+<tr><td>Average trade</td><td><code>avg_trade</code></td><td>Always</td><td>Mean return per closed trade.</td></tr>
+<tr><td>Average win</td><td><code>avg_win</code></td><td>By default</td><td>Mean return of winning trades.</td></tr>
+<tr><td>Average loss</td><td><code>avg_loss</code></td><td>By default</td><td>Mean return of losing trades.</td></tr>
+<tr><td>Payoff ratio</td><td><code>payoff_ratio</code></td><td>Optional</td><td>Average win / |average loss|. A low win rate needs a high payoff ratio.</td></tr>
+<tr><td>Best trade</td><td><code>best_trade</code></td><td>By default</td><td>Largest single-trade return.</td></tr>
+<tr><td>Worst trade</td><td><code>worst_trade</code></td><td>By default</td><td>Largest single-trade loss.</td></tr>
+<tr><td>Profit factor</td><td><code>profit_factor</code></td><td>Always</td><td>Gross profit / gross loss over closed trades.</td></tr>
+<tr><td>Expectancy</td><td><code>expectancy</code></td><td>By default</td><td>Average dollar profit per closed trade.</td></tr>
+<tr><td>System quality (SQN)</td><td><code>sqn</code></td><td>Optional</td><td>sqrt(trades) x mean trade return / std of trade returns (Van Tharp). Above 2 is decent, above 3 good.</td></tr>
+<tr><td>Avg. bars held</td><td><code>avg_bars</code></td><td>By default</td><td>Mean length of a closed trade in bars.</td></tr>
+<tr><td>Avg. bars in winners</td><td><code>avg_bars_win</code></td><td>Optional</td><td>Mean length of winning trades in bars.</td></tr>
+<tr><td>Avg. bars in losers</td><td><code>avg_bars_loss</code></td><td>Optional</td><td>Mean length of losing trades in bars. Longer than winners can mean losers are held too long.</td></tr>
+<tr><td>Max win streak</td><td><code>max_consec_wins</code></td><td>By default</td><td>Most winning trades in a row.</td></tr>
+<tr><td>Max loss streak</td><td><code>max_consec_losses</code></td><td>By default</td><td>Most losing trades in a row.</td></tr>
+<tr><td>Time in market</td><td><code>exposure</code></td><td>Always</td><td>Share of bars with an open position.</td></tr>
+<tr><td>Avg. exposure</td><td><code>avg_leverage</code></td><td>By default</td><td>Mean |position value| / equity.</td></tr>
+<tr><td>Turnover (ann.)</td><td><code>turnover</code></td><td>By default</td><td>Traded value / average equity per year (2.0 = account traded twice a year).</td></tr>
+<tr><td>Fills</td><td><code>n_fills</code></td><td>By default</td><td>Number of executed orders.</td></tr>
+<tr><td>Costs paid</td><td><code>total_costs</code></td><td>Always</td><td>Commissions plus slippage.</td></tr>
+<tr><td>Orders reduced</td><td><code>orders_clipped</code></td><td>By default</td><td>Share orders cut down for lack of cash or the no-short rule.</td></tr>
+<tr class="group"><td colspan="4">Statistical tests</td></tr>
+<tr><td>t-statistic (mean return)</td><td><code>t_stat</code></td><td>Optional</td><td>Mean daily excess return / its standard error. Above 2 suggests the mean is not zero.</td></tr>
+<tr><td>p-value (mean return &gt; 0)</td><td><code>p_value</code></td><td>Optional</td><td>Chance of a t-statistic this high if the true mean return were zero (one-sided, normal approximation). Below 0.05 is the usual bar.</td></tr>
+<tr><td>Probabilistic Sharpe</td><td><code>psr</code></td><td>Optional</td><td>Probability that the true Sharpe ratio is above 0, allowing for skew, fat tails and track length (Bailey &amp; Lopez de Prado).</td></tr>
+<tr><td>Sharpe 95% CI low</td><td><code>sharpe_lo</code></td><td>Optional</td><td>Lower end of a 95% confidence interval for the annualized Sharpe ratio.</td></tr>
+<tr><td>Sharpe 95% CI high</td><td><code>sharpe_hi</code></td><td>Optional</td><td>Upper end of a 95% confidence interval for the annualized Sharpe ratio.</td></tr>
+<tr><td>Min. track record</td><td><code>min_trl</code></td><td>Optional</td><td>Years of data needed to be 95% sure the Sharpe ratio is above 0. Longer than the backtest = not proven yet.</td></tr>
+<tr><td>Alpha t-statistic</td><td><code>alpha_t</code></td><td>Optional</td><td>Alpha / its standard error from the regression on the benchmark. Above 2 suggests real alpha.</td></tr>
+<tr><td>Alpha p-value</td><td><code>alpha_p</code></td><td>Optional</td><td>Chance of an alpha t-statistic this high if true alpha were zero (one-sided, normal approximation).</td></tr>
+<tr><td>Win-rate p-value</td><td><code>win_rate_p</code></td><td>Optional</td><td>Chance of at least this many winning trades if each trade were a coin flip (one-sided binomial, normal approximation).</td></tr>
+<tr><td>Autocorrelation (1 day)</td><td><code>autocorr</code></td><td>Optional</td><td>Correlation of each day&#x27;s return with the previous day&#x27;s. Far from 0 means returns are not independent.</td></tr>
+<tr><td>Autocorrelation p-value</td><td><code>autocorr_p</code></td><td>Optional</td><td>Two-sided p-value that the 1-day autocorrelation is zero. Below 0.05 = significant serial correlation.</td></tr>
+<tr><td>Normality p-value</td><td><code>jb_p</code></td><td>Optional</td><td>Jarque-Bera test that daily returns are normally distributed. Below 0.05 = fat tails or skew; treat Sharpe and VaR with care.</td></tr>
 </tbody></table></div>
     <h3>How to Read Them Together</h3>
     <ul>
@@ -334,6 +406,7 @@ def on_bar(ctx):
       <li><b>Beta below 1 with positive alpha</b> means the strategy earned more than its market exposure explains. A low beta alone just means it held less of the asset.</li>
       <li><b>Win rate</b> means little alone. Trend followers often win 35% of trades and still profit because their average win is much larger than their average loss; check <b>profit factor</b>.</li>
       <li>Fewer than about 30 trades or 3 years of data is too little to tell skill from luck. Run the Monte Carlo tool.</li>
+      <li>The <b>statistical tests</b> answer “could this be luck?”. A p-value is the chance of a result at least this good if there were no real edge; below 0.05 is the usual bar. A <b>minimum track record</b> longer than your backtest means the data can’t yet show the Sharpe ratio is above zero. Test many variations and some will pass by chance, so treat one passing test as a hint, not proof.</li>
     </ul>
 
     <h2 id="strategies">Built-In Strategies</h2>
@@ -367,6 +440,10 @@ def on_bar(ctx):
 <tr><td>Buy Mon–Thu, Sell Friday</td><td>Your original idea with share orders: buy 1 share each Monday–Thursday &amp; sell everything on Friday.</td><td><code>{&quot;shares_per_day&quot;: 1}</code></td></tr>
 <tr class="group"><td colspan="3">Vectorized</td></tr>
 <tr><td>SMA Crossover (Vectorized)</td><td>The same golden cross written as signals(data), which builds every bar&#x27;s weight at once.</td><td><code>{&quot;fast&quot;: 50, &quot;slow&quot;: 200}</code></td></tr>
+<tr class="group"><td colspan="3">Machine Learning</td></tr>
+<tr><td>Logistic Regression (NumPy)</td><td>Predicts whether tomorrow is up from momentum, RSI, trend &amp; volatility; retrained every quarter on past data only. Uses NumPy.</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 63, &quot;threshold&quot;: 0.53, &quot;l2&quot;: 0.01}</code></td></tr>
+<tr><td>Neural Network (NumPy)</td><td>A small two-layer neural network trained with Adam in plain NumPy, retrained twice a year: the same training loop you would write in PyTorch.</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 126, &quot;hidden&quot;: 16, &quot;epochs&quot;: 100, &quot;lr&quot;: 0.02, &quot;threshold&quot;: 0.53}</code></td></tr>
+<tr><td>Random Forest (scikit-learn)</td><td>A random forest predicts whether the next week is up, retrained twice a year. The first run downloads scikit-learn (about 75 MB, cached afterwards).</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 126, &quot;horizon&quot;: 5, &quot;trees&quot;: 40, &quot;depth&quot;: 4, &quot;threshold&quot;: 0.55}</code></td></tr>
 </tbody></table></div>
 
     <h2 id="tools">Research Tools</h2>
@@ -377,6 +454,12 @@ def on_bar(ctx):
     <p>Takes the strategy’s daily returns and builds alternative histories by stitching together randomly chosen blocks of consecutive days (a circular block bootstrap). Blocks keep calm and volatile stretches together. The fan chart shows the range of paths, and the table shows percentiles of total return, CAGR and maximum drawdown. If the 5th percentile drawdown would be unbearable, size the strategy down.</p>
     <h3>In-Sample vs Out-of-Sample</h3>
     <p>Runs one continuous backtest and reports statistics separately before and after a split date. Indicator warm-up and open positions carry across the split. A strategy designed by looking at the whole chart will almost always look worse after the split, and that worse result is the realistic one.</p>
+    <h3>Sub-Period Consistency <span class="muted">(optional)</span></h3>
+    <p>Cuts one continuous backtest into 2–20 back-to-back periods with equal numbers of trading days and scores each against the benchmark. A strategy whose whole profit comes from one period depended on one market regime.</p>
+    <h3>Cost Sensitivity <span class="muted">(optional)</span></h3>
+    <p>Re-runs the backtest once per cost level. Each level is the cost of every fill in basis points of traded value and replaces both the commission percentage and the slippage; the flat fee per fill is kept. The summary reports, by linear interpolation between the levels you tested, the cost at which CAGR drops below the benchmark’s and below zero.</p>
+    <h3>Random-Timing Test <span class="muted">(optional)</span></h3>
+    <p>A permutation test of timing skill. It shuffles the strategy’s daily exposures, which keeps how often and how heavily it was invested but not when, and pairs them with the instrument’s actual close-to-close returns. Each ordering is scored by its Sharpe ratio before costs. The p-value is the share of shuffles that scored at least as well as the real ordering. Strategies that hold nearly the same position every day, like buy and hold, can’t be tested this way.</p>
     <h3>Instrument Analytics</h3>
     <p>Buy-and-hold statistics for each loaded instrument, a correlation matrix of daily returns on the dates all of them share, and a growth-of-100 chart. Assets with low correlation combine into portfolios with smaller drawdowns.</p>
 
@@ -396,7 +479,7 @@ def on_bar(ctx):
 python -m http.server 8000
 # then open http://localhost:8000</code></pre>
     <p>Opening <code>index.html</code> directly from disk doesn’t work, because browsers block pages loaded that way from reading <code>engine.py</code>. To publish the site, push the folder to a GitHub repository and turn on GitHub Pages.</p>
-    <p>The engine also works as a normal Python module, with no dependencies:</p>
+    <p>The engine also works as a normal Python module, with no dependencies of its own. Strategies may import anything installed, including PyTorch:</p>
 <pre><code>import engine
 ds = engine.load_csv("SPY.csv", "SPY")
 strat = engine.Strategy.from_code(open("my_strategy.py").read())
@@ -412,7 +495,8 @@ print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['ma
         <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, about 1900 lines.</td></tr>
         <tr><td><code>templates.py</code></td><td>The built-in strategies, separated by <code>#%% id:</code> markers. Add your own by following the same format.</td></tr>
         <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
-        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped.</td></tr>
+        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports.</td></tr>
+        <tr><td><code>pyodide/</code></td><td>The Python runtime and the NumPy wheel. Other package wheels from the Pyodide 0.26.4 release placed here are used instead of the CDN.</td></tr>
         <tr><td><code>data/</code></td><td>Bundled CSV files and <code>manifest.json</code>.</td></tr>
         <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics and the look-ahead detector.</td></tr>
         <tr><td><code>tools/build_docs.py</code></td><td>Regenerates this page's statistics and strategy tables from the code.</td></tr>
