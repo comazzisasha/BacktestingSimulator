@@ -1799,6 +1799,57 @@ def test_fundamentals_csv_and_point_in_time_access():
     assert out["ok"] and out["result"]["kind"] == "fundamentals"
 
 
+# ------------------------------------------------------------- currencies -----
+
+def test_foreign_currency_prices_convert_unhedged():
+    n = 300
+    dates = DEMO.dates[:n]
+    eur = engine.DataSet("SAP", dates, [100.0] * n)            # flat in euros
+    eur.currency = "EUR"
+    fx = engine.DataSet("EURUSD", dates, [1.0 + 0.001 * i for i in range(n)])   # the euro rises 0.1 cents a day
+    engine.DATA.update({"SAP": eur, "EURUSD": fx})
+    try:
+        conv = engine.in_base(eur, "USD")
+        assert conv.currency == "USD" and conv.close[10] == 100.0 * fx.close[10] and conv.ticker == "SAP"
+        assert engine.in_base(eur, "USD") is conv, "conversions are cached (sweeps reuse panels)"
+        out = json.loads(engine.handle("run", json.dumps({"ticker": "SAP", "code": "def on_bar(ctx):\n    return 1.0\n",
+                                                          "config": {"slippage_bps": 0}})))["result"]
+        assert any("converted from EUR to USD with EURUSD" in x for x in out["notes"])
+        held = out["equity"][-1] / out["equity"][2]
+        assert abs(held - fx.close[-1] / fx.close[2]) < 1e-9, "a flat euro price earns the currency's move"
+        # an inverted quote: USDEUR (euros per dollar)
+        del engine.DATA["EURUSD"]
+        engine.DATA["USDEUR"] = engine.DataSet("USDEUR", dates, [1 / (1.0 + 0.001 * i) for i in range(n)])
+        c2 = engine.in_base(eur, "USD")
+        assert abs(c2.close[50] - conv.close[50]) < 1e-9
+        # base currency EUR: a USD instrument converts the other way
+        usd = engine.DataSet("SPYX", dates, [100.0] * n)
+        usd.currency = "USD"
+        c3 = engine.in_base(usd, "EUR")
+        assert abs(c3.close[50] - 100.0 * engine.DATA["USDEUR"].close[50]) < 1e-12
+        del engine.DATA["USDEUR"]
+        try:
+            engine.in_base(eur, "USD")
+            raise AssertionError("missing FX accepted")
+        except ValueError as e:
+            assert "EURUSD" in str(e)
+        assert engine.in_base(DEMO, "USD") is DEMO, "no currency set: unchanged"
+    finally:
+        for t in ("SAP", "EURUSD", "USDEUR"):
+            engine.DATA.pop(t, None)
+
+
+def test_fx_for_intraday_bars_uses_the_previous_day():
+    ds = _intraday(days=5)
+    ds.currency = "EUR"
+    days = sorted({d[:10] for d in ds.dates})
+    fx = engine.DataSet("EURUSD", days, [1.1, 1.2, 1.3, 1.4, 1.5])
+    c = engine.to_base_currency(ds, fx, False, "USD")
+    i = c.dates.index(days[2] + "T12:00")
+    assert abs(c.close[i] / ds.close[ds.dates.index(days[2] + "T12:00")] - 1.2) < 1e-12
+    assert c.dates[0].startswith(days[1]), "bars before the first known FX rate are left out"
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

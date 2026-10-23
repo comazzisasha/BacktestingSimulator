@@ -882,6 +882,7 @@ class DataSet:
         self.price_basis = "price"       # 'price' or 'total_return' (only an adjusted close was given)
         self.calendar = None             # 'NYSE', 'weekdays' or '24/7'; None = judged from the dates
         self.fundamentals = {}           # field -> ([dates the value became known], [values]), point in time
+        self.currency = None             # e.g. 'EUR' for prices in euros; None = the base currency
         self.splits_applied = []
         self.kind = "price"
         self._cache = {}
@@ -2294,6 +2295,7 @@ class Config:
         "dd_resume": 0.5,         # full size again once the drawdown is back within dd_resume x dd_limit
         # data
         "delisting_return": 0.0,  # return on the last close when an instrument's data ends early (-0.3 = -30%)
+        "base_currency": "USD",   # the account's currency; instruments priced in others are converted (unhedged)
     }
 
     def __init__(self, **kw):
@@ -2337,6 +2339,9 @@ class Config:
             raise ValueError("position, gross and net limits must be non-negative and dd_limit from 0 to 1")
         if not 0 <= self.dd_scale <= 1 or not 0 <= self.dd_resume <= 1:
             raise ValueError("dd_scale and dd_resume must be from 0 to 1")
+        self.base_currency = self.base_currency.upper()
+        if len(self.base_currency) != 3 or not self.base_currency.isalpha():
+            raise ValueError("base_currency must be a 3-letter code such as USD")
         if not -1 <= self.delisting_return <= 1:
             raise ValueError("delisting_return must be from -1 to 1 (-0.3 = -30%)")
 
@@ -3544,6 +3549,9 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     if len(full_logs) > LOG_KEEP:
         full_logs = full_logs[:LOG_KEEP] + "\n... output stopped here: over %d MB ...\n" % (LOG_KEEP // 10 ** 6)
     logs = _log_preview(full_logs)
+    for ds_ in list(panel.sets) + ([bench] if bench is not None else []):
+        if getattr(ds_, "fx_note", None):
+            notes.append(ds_.fx_note)
     for d in delisted:
         notes.append("%s has no data after %s: its position (%s shares) was closed at its last close%s on %s. If the "
                      "instrument still trades, the file is out of date; download a newer one."
@@ -5647,6 +5655,69 @@ def _get(ticker):
     return DATA[ticker]
 
 
+_FX_CACHE = {}
+
+
+def fx_series(ccy, base):
+    """The loaded FX rate that converts `ccy` into `base`: (DataSet, invert). EURUSD (dollars
+    per euro) multiplies euro prices; USDEUR (euros per dollar) divides them. Yahoo-style
+    names such as EURUSD=X work too."""
+    ccy, base = ccy.upper(), base.upper()
+    for name, inv in ((ccy + base, False), (base + ccy, True), (ccy + base + "=X", False), (base + ccy + "=X", True)):
+        if name in DATA:
+            return DATA[name], inv
+    raise ValueError("Converting %s to %s needs an FX rate: load %s%s (or %s%s) prices on the Data tab."
+                     % (ccy, base, ccy, base, base, ccy))
+
+
+def to_base_currency(ds, fx, invert=False, base="USD"):
+    """A copy of ds with prices and dividends in the base currency, unhedged: each bar is
+    multiplied by the FX close known at that bar (the same day's for daily data; the
+    previous day's for intraday bars with a daily FX series). Bars before the FX history
+    starts are dropped. Volume stays in shares; fundamentals stay in their own currency."""
+    key = (ds.ticker, ds.fingerprint(), fx.ticker, fx.fingerprint(), invert, base, ds.calendar)
+    if key in _FX_CACHE:
+        return _FX_CACHE[key]
+    daily_fx = all(len(d) == 10 for d in fx.dates[:5])
+    rows, j, rate = [], -1, None
+    for i, d in enumerate(ds.dates):
+        intraday = len(d) > 10
+        while j + 1 < fx.n and (fx.dates[j + 1] < d[:10] if (intraday and daily_fx) else fx.dates[j + 1] <= d):
+            j += 1
+            rate = 1.0 / fx.close[j] if invert else fx.close[j]
+        if rate is not None:
+            rows.append((i, rate))
+    if len(rows) < 2:
+        raise ValueError("%s has no FX rates for %s's dates." % (fx.ticker, ds.ticker))
+    idx = [i for i, _ in rows]
+    r = [x for _, x in rows]
+    out = DataSet(ds.ticker, [ds.dates[i] for i in idx], [ds.close[i] * x for i, x in zip(idx, r)],
+                  [ds.open[i] * x for i, x in zip(idx, r)], [ds.high[i] * x for i, x in zip(idx, r)],
+                  [ds.low[i] * x for i, x in zip(idx, r)], [ds.volume[i] for i in idx])
+    out.dividends = [ds.dividends[i] * x for i, x in zip(idx, r)]
+    out.dividend_source, out.price_basis, out.calendar = ds.dividend_source, ds.price_basis, ds.calendar
+    out.fundamentals = dict(ds.fundamentals)
+    out.issues = ds.issues
+    out.currency = base
+    out.source_currency = ds.currency
+    out.fx_note = "%s prices converted from %s to %s with %s%s (unhedged: returns include the currency's moves)%s." % (
+        ds.ticker, ds.currency, base, fx.ticker, " (inverted)" if invert else "",
+        "" if idx[0] == 0 else "; bars before %s, the first FX rate, were left out" % fx.dates[0])
+    out._cache.clear()
+    if len(_FX_CACHE) > 32:
+        _FX_CACHE.pop(next(iter(_FX_CACHE)))
+    _FX_CACHE[key] = out
+    return out
+
+
+def in_base(ds, base):
+    """ds converted to the base currency if it is priced in another one."""
+    if ds is None or not ds.currency or ds.currency.upper() == base.upper():
+        return ds
+    fx, inv = fx_series(ds.currency, base)
+    return to_base_currency(ds, fx, inv, base)
+
+
 def _prepare(p):
     """Payload -> (datasets, benchmark, config, strategy, portfolio, rates).
 
@@ -5664,6 +5735,8 @@ def _prepare(p):
     b = p.get("benchmark") or ""
     bench = _get(b) if b and not (not portfolio and b == tickers[0]) else None
     cfg = Config(**(p.get("config") or {}))
+    sets = [in_base(ds, cfg.base_currency) for ds in sets]
+    bench = in_base(bench, cfg.base_currency)
     rates = None
     if cfg.rate_ticker:
         if cfg.rate_ticker not in RATES:
@@ -5704,6 +5777,11 @@ def _downsample(n, limit=600):
 def api_load_data(p):
     """Load prices (and optionally 'dividends' / 'splits' as [[date, value], ...])."""
     ds = DataSet.from_dict(p["ticker"], p["data"])
+    if p.get("currency"):
+        c = str(p["currency"]).upper()
+        if len(c) != 3 or not c.isalpha():
+            raise ValueError("Currency must be a 3-letter code such as EUR, not %r." % p["currency"])
+        ds.currency = c
     if p.get("calendar"):
         if p["calendar"] not in CALENDARS:
             raise ValueError("Unknown calendar %r; use one of %s." % (p["calendar"], ", ".join(CALENDARS)))
@@ -5722,7 +5800,7 @@ def _data_info(ds):
     return {"ticker": ds.ticker, "bars": ds.n, "start": ds.dates[0], "end": ds.dates[-1],
             "dividends": ds.dividend_source, "dividend_count": sum(1 for d in ds.dividends if d),
             "dividend_total": sum(ds.dividends), "price_basis": ds.price_basis,
-            "splits": ds.splits_applied, "fingerprint": ds.fingerprint(),
+            "splits": ds.splits_applied, "fingerprint": ds.fingerprint(), "currency": ds.currency,
             "fundamentals": {f: {"count": len(v[0]), "first": v[0][0], "last": v[0][-1]} for f, v in ds.fundamentals.items()}}
 
 

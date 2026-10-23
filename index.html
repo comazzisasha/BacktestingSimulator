@@ -593,6 +593,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
                 <div class="field"><label for="cfgLev">Max Leverage (×)</label><input type="text" inputmode="decimal" id="cfgLev" name="leverage" value="1" autocomplete="off" aria-describedby="cfgLev-err"><p class="ferr" id="cfgLev-err" hidden></p></div>
                 <div class="field"><label for="cfgBand">Rebalance Band (%)</label><input type="text" inputmode="decimal" id="cfgBand" name="band" value="2" autocomplete="off" aria-describedby="cfgBand-err"><p class="ferr" id="cfgBand-err" hidden></p></div>
                 <div class="field"><label for="cfgRf">Risk-Free (%/yr)</label><input type="text" inputmode="decimal" id="cfgRf" name="risk-free" value="0" autocomplete="off" aria-describedby="cfgRf-err"><p class="ferr" id="cfgRf-err" hidden></p></div>
+                <div class="field"><label for="cfgBase">Base Currency</label><select id="cfgBase" name="base-currency"></select></div>
                 <div class="field"><label for="cfgSeed">Random Seed</label><input type="text" inputmode="numeric" id="cfgSeed" name="seed" value="42" autocomplete="off" aria-describedby="cfgSeed-err"><p class="ferr" id="cfgSeed-err" hidden></p></div>
               </div>
               <div class="row" style="gap:4px 18px">
@@ -1418,7 +1419,7 @@ const py = {
       const rec = instruments.get(t);
       if (!rec) throw new Error(`No data is loaded for ${t}. Add it on the Data tab.`);
       const ev = rec.events || {};
-      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, fundamentals: ev.fundamentals || null, calendar: store.get('calendars', {})[t] || null });
+      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, fundamentals: ev.fundamentals || null, calendar: store.get('calendars', {})[t] || null, currency: store.get('currencies', {})[t] || null });
       dataInfo.set(t, info); this.loaded.add(t);
     }
   },
@@ -2237,7 +2238,8 @@ function readConfig() {
     total_return: $('#cfgTR').checked, cash_rate: $('#cfgCashRate').value.trim() === '' ? null : n('cfgCashRate', 0) / 100,
     rate_ticker: $('#cfgRateSeries').value, margin_spread: n('cfgSpread', 1) / 100, borrow_fee: n('cfgBorrow', 0.25) / 100,
     maintenance_margin: n('cfgMaint', 25) / 100, borrow_fees: parseHtb($('#cfgHtb').value) || {},
-    spread_bps: n('cfgSpread2', 0), impact_coef: n('cfgImpact', 1), max_participation: n('cfgPart', 10) / 100, fill_model: $('#cfgFill').value, ...readLimits() };
+    spread_bps: n('cfgSpread2', 0), impact_coef: n('cfgImpact', 1), max_participation: n('cfgPart', 10) / 100, fill_model: $('#cfgFill').value, ...readLimits(),
+    ...($('#cfgBase').value && $('#cfgBase').value !== 'USD' ? { base_currency: $('#cfgBase').value } : {}) };   // sent only when not USD, so older runs match
 }
 function readLimits() {
   const n = (id, d) => { const v = parseNumber($('#' + id).value); return isFinite(v) ? v : d; };
@@ -2249,7 +2251,7 @@ function readLimits() {
   return Object.fromEntries(Object.entries(c).filter(([k, v]) => Math.abs((typeof v === 'number' ? v : 0) - (typeof LIMIT_DEFAULTS[k] === 'number' ? LIMIT_DEFAULTS[k] : 0)) > 1e-12 || (typeof v === 'string' && v !== LIMIT_DEFAULTS[k])));
 }
 function saveSettings() {
-  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill', 'cfgSizing', 'cfgVolT', 'cfgKelly', 'cfgLook', 'cfgMaxW', 'cfgMaxG', 'cfgMaxN', 'cfgDD', 'cfgDDScale'].forEach(id => { s[id] = $('#' + id).value.trim(); });
+  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill', 'cfgSizing', 'cfgVolT', 'cfgKelly', 'cfgLook', 'cfgMaxW', 'cfgMaxG', 'cfgMaxN', 'cfgDD', 'cfgDDScale', 'cfgBase'].forEach(id => { s[id] = $('#' + id).value.trim(); });
   s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked; s.cfgTR = $('#cfgTR').checked;
   s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.start = $('#start').value; s.end = $('#end').value;
   store.set('settings', s); summarizeSettings(); url.write();
@@ -2271,6 +2273,7 @@ function summarizeSettings() {
   if (c.sizing === 'vol_target') bits.push(`${fmt.num(c.vol_target * 100, 0)}% vol target`); else if (c.sizing === 'kelly') bits.push(`${fmt.num(c.kelly_fraction, 2)} Kelly`);
   if (c.max_weight || c.max_gross || c.max_net) bits.push('limits');
   if (c.dd_limit) bits.push(`de-risk at ${fmt.num(c.dd_limit * 100, 0)}% DD`);
+  if (c.base_currency) bits.push(`in ${c.base_currency}`);
   $('#settingsSummary').textContent = bits.join(' · ');
 }
 function payloadBase() {
@@ -2282,7 +2285,7 @@ function payloadBase() {
 async function freshPayload() { if (codeInfo.for !== strategyCode()) await refreshParams(); return payloadBase(); }
 const payloadTickers = p => (p.tickers ? [...p.tickers] : [p.ticker]).filter(Boolean);
 // Load what a payload needs into Python: its instruments, benchmark & rate series.
-async function ensurePayload(p, client = py) { await client.ensure([...payloadTickers(p), p.benchmark]); await client.ensureRate(p.config.rate_ticker); }
+async function ensurePayload(p, client = py) { await client.ensure([...payloadTickers(p), p.benchmark, ...fxTickers(p)]); await client.ensureRate(p.config.rate_ticker); }
 
 /* ---------------------------------------------------------- universe ---- */
 // A strategy that defines UNIVERSE = [...] is a portfolio strategy. The Market panel then
@@ -3335,14 +3338,14 @@ function renderInstTable() {
   const list = sortedTickers();
   if (!qualityChecking) $('#instCount').textContent = `${fmt.int(list.length)} instrument${list.length === 1 ? '' : 's'}`;
   if (!list.length) { $('#instTable').innerHTML = '<tbody><tr><td class="muted">No instruments yet. Drop a CSV file above to add one.</td></tr></tbody>'; return; }
-  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Last Close</th><th scope="col">Calendar</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
+  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Last Close</th><th scope="col">Calendar</th><th scope="col">Currency</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
   for (const t of list) {
     const r = instruments.get(t);
     const src = r.synthetic ? '<span class="chip">Synthetic demo</span>' : r.base === 'bundled' ? '<span class="chip">Bundled + your files</span>' : r.source === 'upload' ? '<span class="chip">Your file</span>' : '<span class="chip">Bundled</span>';
     const fd = (dataInfo.get(t) || {}).fundamentals || {}, fk = Object.keys(fd);
     const fchip = fk.length ? ` <span class="chip" title="Point-in-time fundamentals: ${esc(fk.map(k => `${k} (${fd[k].count}, ${fd[k].first} to ${fd[k].last})`).join('; '))}">${fk.length <= 3 ? esc(fk.join(', ')) : fmt.int(fk.length) + ' fundamentals'}</span>` : '';
     h += `<tr><th scope="row" translate="no">${esc(t)}</th><td>${esc(r.name || '')}${fchip}</td><td>${src}</td><td class="tnum">${fmt.date(r.start)}</td><td class="tnum">${fmt.date(r.end)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.price(r.last)}</td>` +
-      `<td>${calendarSelect(t)}</td><td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
+      `<td>${calendarSelect(t)}</td><td>${currencySelect(t)}</td><td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
       `<td>${r.source === 'upload' ? `<button class="btn small danger" type="button" data-remove="${esc(t)}" aria-label="Remove ${esc(t)}">${r.base === 'bundled' ? 'Reset' : 'Remove'}</button>` : ''}</td></tr>`;
     if (openQuality.has(t) && dataInfo.has(t)) h += qualityDetail(t);
   }
@@ -3355,6 +3358,27 @@ function calendarSelect(t) {
   const auto = q ? `Auto: ${q.calendar === 'weekdays' ? 'weekdays' : q.calendar}${q.bars_per_day > 1 ? ` × ${fmt.int(q.bars_per_day)} bars/day` : ''} (${fmt.int(q.periods_per_year)}/yr)` : 'Auto';
   return `<select class="small" data-calendar="${esc(t)}" aria-label="Calendar for ${esc(t)}"><option value=""${cur ? '' : ' selected'}>${esc(auto)}</option>` +
     Object.entries(CAL_NAMES).map(([k, v]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${v}</option>`).join('') + '</select>';
+}
+const CURRENCIES = ['USD', 'EUR', 'GBP', 'JPY', 'CHF', 'CAD', 'AUD', 'NZD', 'HKD', 'CNY', 'SEK', 'NOK', 'DKK', 'SGD', 'KRW', 'INR', 'BRL', 'MXN', 'ZAR'];
+function currencySelect(t) {
+  const cur = store.get('currencies', {})[t] || '';
+  return `<select class="small" data-currency="${esc(t)}" aria-label="Currency of ${esc(t)}’s prices"><option value=""${cur ? '' : ' selected'}>Base</option>` +
+    CURRENCIES.map(c => `<option${cur === c ? ' selected' : ''}>${c}</option>`).join('') + '</select>';
+}
+function setCurrency(t, ccy) {
+  const c = store.get('currencies', {}); if (ccy) c[t] = ccy; else delete c[t]; store.set('currencies', c);
+  py.forget(t); dataInfo.delete(t); checkAllData();
+  const base = $('#cfgBase').value || 'USD';
+  toast(ccy && ccy !== base ? `${t} is priced in ${ccy}: runs convert it to ${base} with ${ccy}${base} or ${base}${ccy} prices, which must be loaded.` : `${t} is priced in the base currency.`);
+}
+// FX series a payload needs: for each instrument in another currency, the loaded ccy+base (or base+ccy) prices.
+function fxTickers(p) {
+  const base = (p.config && p.config.base_currency) || 'USD', cur = store.get('currencies', {}), out = [];
+  for (const t of [...payloadTickers(p), p.benchmark].filter(Boolean)) {
+    const c = cur[t]; if (!c || c === base) continue;
+    const hit = [c + base, base + c, c + base + '=X', base + c + '=X'].find(x => instruments.has(x)); if (hit) out.push(hit);
+  }
+  return out;
 }
 function setCalendar(t, cal) {
   const c = store.get('calendars', {}); if (cal) c[t] = cal; else delete c[t]; store.set('calendars', c);
@@ -3433,6 +3457,7 @@ function applyConfig(c) {
   set('cfgSpread2', c.spread_bps); set('cfgImpact', c.impact_coef); set('cfgPart', pct(c.max_participation)); set('cfgFill', c.fill_model);
   const L = { ...LIMIT_DEFAULTS, ...c }, opt = v => (v ? pct(v) : '');   // older runs have no sizing keys: the defaults
   set('cfgSizing', L.sizing); set('cfgVolT', pct(L.vol_target)); set('cfgKelly', L.kelly_fraction); set('cfgLook', L.sizing_lookback);
+  $('#cfgBase').value = c.base_currency || 'USD';
   $('#cfgMaxW').value = opt(L.max_weight); $('#cfgMaxG').value = opt(L.max_gross); $('#cfgMaxN').value = opt(L.max_net); $('#cfgDD').value = opt(L.dd_limit); set('cfgDDScale', pct(L.dd_scale));
 }
 async function restoreRun(x) {
@@ -3917,7 +3942,10 @@ function wire() {
     const btn = e.target.closest('button[data-act="skip"]'); if (!btn) return;
     const p = pendingFiles.find(x => x.id === btn.closest('form').dataset.id); if (p) { pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); toast(`Skipped ${p.file}.`); }
   });
-  $('#instTable').addEventListener('change', e => { const sel = e.target.closest('select[data-calendar]'); if (sel) setCalendar(sel.dataset.calendar, sel.value); });
+  $('#instTable').addEventListener('change', e => {
+    const sel = e.target.closest('select[data-calendar]'); if (sel) setCalendar(sel.dataset.calendar, sel.value);
+    const cs = e.target.closest('select[data-currency]'); if (cs) setCurrency(cs.dataset.currency, cs.value);
+  });
   $('#instTable').addEventListener('click', e => {
     const q = e.target.closest('button[data-quality]');
     if (q) { const t = q.dataset.quality; if (openQuality.has(t)) openQuality.delete(t); else openQuality.add(t); renderInstTable(); $(`button[data-quality="${t}"]`).focus(); return; }
@@ -3951,6 +3979,7 @@ function ensureChartLib() {
 }
 
 async function boot() {
+  $('#cfgBase').innerHTML = CURRENCIES.map(c => `<option>${c}</option>`).join('');
   setThemeColor(); renderKpiSkeleton(); renderPanelChecks(); applyPanels(); renderToolChecks(); applyTools(); editor.init(); wire();
   setEditorSize(store.get('editorSize', 's')); route();
   const settings = restoreSettings(); const q = url.read();
