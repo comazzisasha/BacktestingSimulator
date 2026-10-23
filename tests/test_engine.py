@@ -2132,6 +2132,60 @@ def test_blend_and_extra_benchmarks_in_runs():
     assert abs(rel[0] - 1) < 1e-12 and abs(rel[-1] - (r["equity"][-1] / r["bench_equity"][-1]) / (r["equity"][0] / r["bench_equity"][0])) < 1e-12
 
 
+# --------------------------------------------------------------- audit log -----
+
+def _chain(entries):
+    prev, out = engine.AUDIT_GENESIS, []
+    for i, e in enumerate(entries):
+        e = dict(e, seq=i, prev_hash=prev)
+        e["hash"] = engine.audit_hash(e)
+        prev = e["hash"]
+        out.append(e)
+    return out
+
+
+AUDIT_SAMPLE = [
+    {"at": "2026-10-23T09:00:00.000Z", "run_id": "abc", "run_digest": "d" * 64, "decision": "approved", "reviewer": "Zoë Ångström", "comment": "ok — \"quoted\"\nnew line"},
+    {"at": "2026-10-23T10:00:00.000Z", "run_id": "def", "run_digest": "e" * 64, "decision": "rejected", "reviewer": "李", "comment": ""},
+]
+
+
+def test_audit_log_chain_detects_tampering():
+    log = _chain(AUDIT_SAMPLE)
+    assert engine.verify_audit_log(log)["ok"] and engine.verify_audit_log([])["ok"]
+    edited = [dict(log[0], comment="changed")] + log[1:]
+    v = engine.verify_audit_log(edited)
+    assert not v["ok"] and v["at"] == 0 and "changed after" in v["error"]
+    assert engine.verify_audit_log(log[1:])["at"] == 0, "removing an entry breaks the chain"
+    assert not engine.verify_audit_log([log[1], log[0]])["ok"], "so does reordering"
+    rehashed = [dict(log[0], comment="x")]
+    rehashed[0]["hash"] = engine.audit_hash(rehashed[0])
+    assert not engine.verify_audit_log(rehashed + log[1:])["ok"], "re-hashing one entry still breaks the next link"
+    out = json.loads(engine.handle("verify_audit", json.dumps({"entries": log})))
+    assert out["ok"] and out["result"]["ok"]
+
+
+def test_audit_hashes_match_the_page():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        print("skip  audit hash parity (needs node)")
+        return
+    page = open(os.path.join(ROOT, "index.html"), encoding="utf-8").read()
+    a = page.index("const AUDIT_FIELDS = [")
+    b = page.index("const audit = {")
+    js = page[a:b] + "\nconst entries = JSON.parse(require('fs').readFileSync(0, 'utf8'));\n" \
+        "(async () => { const out = []; for (const e of entries) out.push(await auditHash(e)); " \
+        "out.push(JSON.stringify(await verifyAudit(entries))); process.stdout.write(JSON.stringify(out)); })();\n"
+    log = _chain(AUDIT_SAMPLE)
+    res = subprocess.run([node, "-e", js], input=json.dumps(log), capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    assert out[:2] == [e["hash"] for e in log], "the page and the engine hash entries identically"
+    assert json.loads(out[2])["ok"]
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

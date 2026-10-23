@@ -283,6 +283,9 @@ tr.detail ul { margin: 4px 0; padding-left: 18px; }
 .con-in textarea { flex: 1; border: 0; outline: none; background: none; resize: none; font: inherit; line-height: 20px; padding: 0; color: var(--fg); min-height: 20px; max-height: 120px; }
 #conHelp { margin: 0; }
 .linkbtn { border: 0; background: none; padding: 0; font: inherit; color: var(--link); cursor: pointer; text-decoration: underline; }
+.comments { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.comments li { padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--r); background: var(--sunk); font-size: 13.5px; white-space: pre-wrap; }
+.comments .who { font-weight: 600; } .comments .when { color: var(--fg-3); font-size: 12px; margin-left: 6px; }
 .tests { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
 .tests li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; }
 .tests .ok { color: var(--gain); font-weight: 600; }
@@ -646,6 +649,11 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       </div>
 
       <div class="readout">
+        <section class="panel" id="shareBanner" hidden aria-labelledby="h-share">
+          <div class="panel-h"><h2 id="h-share">Shared Setup</h2></div>
+          <div class="panel-b"><p id="shareWhat" style="margin:0"></p>
+            <div class="row"><button class="btn small primary" id="shareLoad" type="button">Load & Run It</button><button class="btn small" id="shareDismiss" type="button">Dismiss</button></div></div>
+        </section>
         <section class="panel errbox" id="errBox" hidden aria-labelledby="h-err" tabindex="-1">
           <div class="panel-h"><h2 id="h-err">Your Strategy Raised an Error</h2></div>
           <div class="panel-b">
@@ -1018,6 +1026,31 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
         <button class="btn small" id="runCompare" type="button" disabled>Compare Selected</button><button class="btn small danger" id="runDelete" type="button" disabled>Delete Selected</button></div>
       <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Saved runs" style="max-height:520px"><table id="runTable"></table></div>
         <div class="row"><p class="help" style="flex:1">Keeps the newest 500 runs. Tick two to compare. Labels are yours to edit (click one).</p><button class="btn small danger" id="runClear" type="button">Clear History</button></div></div>
+    </section>
+    <section class="panel" id="runDetail" hidden aria-labelledby="h-rd" tabindex="-1">
+      <div class="panel-h"><h2 id="h-rd"></h2><span class="muted" id="rdMeta"></span><span class="spacer"></span>
+        <button class="btn small" id="rdShare" type="button">Copy Share Link</button><button class="btn small" id="rdCard" type="button">Model Card</button><button class="btn small" id="rdCardMd" type="button">Model Card (Markdown)</button><button class="btn small" id="rdClose" type="button">Close</button></div>
+      <div class="panel-b stack">
+        <div class="grid2">
+          <div class="field"><label for="rdPurpose">Purpose &amp; Intended Use</label><textarea id="rdPurpose" rows="3" name="card-purpose" placeholder="What the strategy is for, who uses it, in what size…"></textarea></div>
+          <div class="field"><label for="rdLimits">Known Limitations</label><textarea id="rdLimits" rows="3" name="card-limits" placeholder="Regimes where it fails, data caveats, capacity…"></textarea></div>
+        </div>
+        <p class="help" style="margin:0">These go on the model card with what QuantLab knows about the run: data, assumptions, results, overfitting checks & provenance. Saved with the run.</p>
+        <h3 class="subhead">Comments</h3>
+        <ul class="comments" id="rdComments"></ul>
+        <form class="row" id="rdCommentForm" novalidate><input type="text" id="rdComment" name="comment" placeholder="Add a comment…" maxlength="2000" autocomplete="off" aria-label="Comment" style="flex:1 1 260px"><button class="btn small" type="submit">Comment</button></form>
+        <h3 class="subhead">Review</h3>
+        <div id="rdAudit"></div>
+        <form class="row" id="rdReviewForm" novalidate><input type="text" id="rdReviewNote" name="review-note" placeholder="Review note (optional)" maxlength="500" autocomplete="off" aria-label="Review note" style="flex:1 1 260px">
+          <button class="btn small primary" type="button" data-decision="approved">Approve</button><button class="btn small danger" type="button" data-decision="rejected">Reject</button></form>
+        <p class="help" style="margin:0">Decisions go into the audit log below, where each entry is chained to the previous one by SHA-256: editing, removing or reordering any entry breaks the chain, and the log says so.</p>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="h-audit">
+      <div class="panel-h"><h2 id="h-audit">Audit Log</h2><span class="muted" id="auditStatus"></span><span class="spacer"></span>
+        <label class="field" style="display:flex;flex-direction:row;align-items:center;gap:6px;margin:0"><span class="label" style="margin:0">Your Name</span><input type="text" id="meName" name="your-name" placeholder="Jane Doe" maxlength="60" autocomplete="name" style="width:160px"></label>
+        <button class="btn small" id="auditExport" type="button">Export Log</button><label class="btn small" for="auditFile">Verify a Log File…</label><input type="file" id="auditFile" name="audit-file" accept=".json,application/json" class="sr"></div>
+      <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Audit log" style="max-height:360px"><table id="auditTable"></table></div></div>
     </section>
     <section class="panel" id="cmpPanel" hidden aria-labelledby="h-cmp" tabindex="-1">
       <div class="panel-h"><h2 id="h-cmp">Comparison</h2><span class="spacer"></span><button class="btn small" id="cmpClose" type="button">Close</button></div>
@@ -3673,7 +3706,7 @@ async function renderRuns() {
     h += `<tr data-run="${x.id}"><td><input type="checkbox" aria-label="Select run of ${esc(x.strategy.name)} from ${esc(dt.format(new Date(x.ts)))}"${runSel.has(x.id) ? ' checked' : ''}></td><td class="tnum">${esc(dt.format(new Date(x.ts)))}</td><td>${esc(x.strategy.name)}</td><td translate="no">${esc(marketLabel(x.market))}</td>` +
       `<td class="tnum">${fmt.date(x.provenance.start)} – ${fmt.date(x.provenance.end)}</td><td class="n ${sign(m.cagr)}">${fmt.pct(m.cagr, 2, true)}</td><td class="n">${fmt.num(m.sharpe)}</td><td class="n">${fmt.pct(m.max_drawdown, 1)}</td><td class="n">${fmt.int(m.n_trades)}</td>` +
       `<td><button class="badge" type="button" data-act="label" title="Edit label">${x.label ? esc(x.label) : '+ label'}</button></td>` +
-      `<td><div class="row" style="flex-wrap:nowrap"><button class="btn small" type="button" data-act="restore">Restore</button><button class="btn small" type="button" data-act="reproduce" title="Restore & re-run, then check the numbers match">Re-run</button></div></td></tr>`;
+      `<td><div class="row" style="flex-wrap:nowrap"><button class="btn small" type="button" data-act="restore">Restore</button><button class="btn small" type="button" data-act="reproduce" title="Restore & re-run, then check the numbers match">Re-run</button><button class="btn small" type="button" data-act="detail" title="Comments, share link, model card & review">Details${(x.comments || []).length ? ` (${x.comments.length})` : ''}${auditState(x.id) ? ' · ' + auditState(x.id) : ''}</button></div></td></tr>`;
   }
   $('#runTable').innerHTML = h + '</tbody>';
 }
@@ -3869,6 +3902,181 @@ ${r.notes.length ? `<p><b>Notes.</b> ${r.notes.map(esc).join(' ')}</p>` : ''}
   w.document.open(); w.document.write(html); w.document.close(); setTimeout(() => { try { w.focus(); w.print(); } catch (e) { /* closed */ } }, 400);
 }
 
+/* ------------------------------------------------------ collaboration -- */
+// Audit log: append-only, each entry chained to the one before by SHA-256 (engine.verify_audit_log
+// checks an exported log the same way). Strings & integers only, so the page & Python hash alike.
+const AUDIT_FIELDS = ['seq', 'at', 'run_id', 'run_digest', 'decision', 'reviewer', 'comment', 'prev_hash'];
+const AUDIT_GENESIS = '0'.repeat(64);
+function canonicalJSON(o) {
+  if (Array.isArray(o)) return '[' + o.map(canonicalJSON).join(',') + ']';
+  if (o && typeof o === 'object') return '{' + Object.keys(o).sort().map(k => JSON.stringify(k) + ':' + canonicalJSON(o[k])).join(',') + '}';
+  return JSON.stringify(o);
+}
+async function sha256hex(text) { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); }
+async function auditHash(e) { const body = {}; for (const k of AUDIT_FIELDS) body[k] = e[k]; return sha256hex(canonicalJSON(body)); }
+async function verifyAudit(log) {
+  let prev = AUDIT_GENESIS;
+  for (let i = 0; i < log.length; i++) {
+    const e = log[i];
+    if (e.seq !== i) return { ok: false, at: i, error: `entry ${i} has sequence number ${e.seq}` };
+    if (e.prev_hash !== prev) return { ok: false, at: i, error: `entry ${i} doesn’t link to the one before it` };
+    if (await auditHash(e) !== e.hash) return { ok: false, at: i, error: `entry ${i} was changed after it was written` };
+    prev = e.hash;
+  }
+  return { ok: true, at: null, head: prev };
+}
+const audit = {
+  all() { return store.get('audit', []); },
+  async append(fields) {
+    const log = this.all(), prev = log.length ? log[log.length - 1].hash : AUDIT_GENESIS;
+    const e = { seq: log.length, at: new Date().toISOString(), comment: '', ...fields, prev_hash: prev };
+    for (const k of AUDIT_FIELDS) if (typeof e[k] !== 'string' && k !== 'seq') e[k] = String(e[k] == null ? '' : e[k]);
+    e.hash = await auditHash(e); log.push(e); store.set('audit', log); return e;
+  },
+};
+function auditState(runId) { const l = audit.all().filter(e => e.run_id === runId); return l.length ? l[l.length - 1].decision : ''; }
+// What a decision is about: the run's code, data, settings, market & headline results.
+function runDigest(x) {
+  const p = x.provenance, m = x.metrics;
+  return sha256hex(canonicalJSON({ id: x.id, code_sha256: p.code_sha256, data: p.data, modules: p.modules || {}, config: p.config, market: x.market,
+    engine: p.engine_version, results: { final_equity: m.final_equity, sharpe: m.sharpe, max_drawdown: m.max_drawdown, n_trades: m.n_trades } }));
+}
+async function renderAudit() {
+  const log = audit.all(), v = await verifyAudit(log);
+  $('#auditStatus').innerHTML = !log.length ? 'No reviews yet.' : v.ok ? `<span class="badge ok">Chain intact</span> ${fmt.int(log.length)} entr${log.length === 1 ? 'y' : 'ies'}` : `<span class="badge bad">Broken at entry ${v.at}</span> ${esc(v.error)}`;
+  $('#auditTable').innerHTML = !log.length ? '<tbody><tr><td class="muted">Approve or reject a run from its Details to start the log.</td></tr></tbody>'
+    : '<thead><tr><th scope="col" class="n">#</th><th scope="col">When</th><th scope="col">Decision</th><th scope="col">Reviewer</th><th scope="col">Run</th><th scope="col">Note</th><th scope="col">Hash</th></tr></thead><tbody>' +
+      log.slice().reverse().map(e => `<tr${v.ok || e.seq < v.at ? '' : ' class="bad"'}><td class="n">${e.seq}</td><td class="tnum">${esc(new Date(e.at).toLocaleString(LOCALE))}</td><td><span class="badge ${e.decision === 'approved' ? 'ok' : 'bad'}">${esc(e.decision)}</span></td><td>${esc(e.reviewer)}</td><td><button class="linkbtn" type="button" data-audit-run="${esc(e.run_id)}">${esc(e.run_id)}</button></td><td>${esc(e.comment)}</td><td><code translate="no" title="${esc(e.hash)}">${esc(e.hash.slice(0, 12))}</code></td></tr>`).join('') + '</tbody>';
+}
+async function verifyAuditFile(file) {
+  try {
+    const data = JSON.parse(await file.text()), log = Array.isArray(data) ? data : data.entries;
+    if (!Array.isArray(log)) throw new Error('not an audit log');
+    const v = await verifyAudit(log); let py2 = null;
+    try { await py.ready; py2 = await py.call('verify_audit', { entries: log }); } catch (e) { /* the page's check stands */ }
+    toast(v.ok && (!py2 || py2.ok) ? `${file.name}: chain intact, ${fmt.int(log.length)} entries (checked here & by the Python engine).` : `${file.name}: ${v.ok ? py2.error : v.error}.`);
+  } catch (e) { toast(`${file.name}: ${e.message}`); }
+}
+function meName() { return store.get('me', '') || ''; }
+
+let runOpen = null;
+async function openRunDetail(id) {
+  const x = await getRun(id); if (!x) return; runOpen = x;
+  $('#runDetail').hidden = false; $('#h-rd').textContent = `${x.strategy.name} on ${marketLabel(x.market)}`;
+  $('#rdMeta').textContent = `${new Date(x.ts).toLocaleString(LOCALE)} · Sharpe ${fmt.num(x.metrics.sharpe)} · CAGR ${fmt.pct(x.metrics.cagr, 2, true)}`;
+  $('#rdPurpose').value = (x.card || {}).purpose || ''; $('#rdLimits').value = (x.card || {}).limits || '';
+  renderRunDetail(); $('#runDetail').scrollIntoView({ block: 'nearest' }); $('#runDetail').focus({ preventScroll: true });
+}
+function renderRunDetail() {
+  const x = runOpen; if (!x) return;
+  const c = x.comments || [];
+  $('#rdComments').innerHTML = c.length ? c.map(k => `<li><span class="who">${esc(k.author || 'Anonymous')}</span><span class="when">${esc(new Date(k.at).toLocaleString(LOCALE))}</span><br>${esc(k.text)}</li>`).join('') : '<li class="muted">No comments yet.</li>';
+  const mine = audit.all().filter(e => e.run_id === x.id);
+  $('#rdAudit').innerHTML = mine.length ? `<ul class="comments">${mine.map(e => `<li><span class="badge ${e.decision === 'approved' ? 'ok' : 'bad'}">${esc(e.decision)}</span> by <span class="who">${esc(e.reviewer)}</span><span class="when">${esc(new Date(e.at).toLocaleString(LOCALE))} · entry ${e.seq}</span>${e.comment ? '<br>' + esc(e.comment) : ''}</li>`).join('')}</ul>` : '<p class="muted" style="margin:0">Not reviewed yet.</p>';
+}
+async function saveRunEdit() { if (runOpen) { await idb.put(runOpen, 'runs'); } }
+let cardTimer = null;
+function cardChanged() { if (!runOpen) return; runOpen.card = { purpose: $('#rdPurpose').value, limits: $('#rdLimits').value }; clearTimeout(cardTimer); cardTimer = setTimeout(saveRunEdit, 400); }
+async function addComment(ev) {
+  ev.preventDefault(); const t = $('#rdComment').value.trim(); if (!t || !runOpen) return;
+  if (!meName()) { toast('Enter your name next to the audit log first, so comments say who wrote them.'); $('#meName').focus(); return; }
+  runOpen.comments = [...(runOpen.comments || []), { at: new Date().toISOString(), author: meName(), text: t }];
+  await saveRunEdit(); $('#rdComment').value = ''; renderRunDetail(); renderRuns();
+}
+async function review(decision) {
+  if (!runOpen) return;
+  if (!meName()) { toast('Enter your name next to the audit log first: a review needs a reviewer.'); $('#meName').focus(); return; }
+  const e = await audit.append({ run_id: runOpen.id, run_digest: await runDigest(runOpen), decision, reviewer: meName(), comment: $('#rdReviewNote').value.trim() });
+  $('#rdReviewNote').value = ''; renderRunDetail(); renderAudit(); renderRuns();
+  toast(`${decision === 'approved' ? 'Approved' : 'Rejected'}: audit entry ${e.seq}, hash ${e.hash.slice(0, 12)}.`);
+}
+
+// Share links: the run's setup & results, compressed into the URL's fragment (never sent to a server).
+async function b64url(bytes) { let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000)); return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function unb64url(s) { const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(bin, c => c.charCodeAt(0)); }
+async function pack(obj) {
+  const raw = new TextEncoder().encode(JSON.stringify(obj));
+  if (typeof CompressionStream === 'undefined') return 'j.' + await b64url(raw);
+  const buf = await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('deflate-raw'))).arrayBuffer();
+  return 'z.' + await b64url(new Uint8Array(buf));
+}
+async function unpack(s) {
+  const [kind, body] = [s.slice(0, 2), s.slice(2)], bytes = unb64url(body);
+  const raw = kind === 'z.' ? new Uint8Array(await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer()) : bytes;
+  return JSON.parse(new TextDecoder().decode(raw));
+}
+async function shareLink(x) {
+  const share = { v: 1, from: meName(), run: { id: x.id, ts: x.ts, strategy: x.strategy, code: x.code, modules: x.modules || {}, market: x.market, provenance: x.provenance, metrics: x.metrics, notes: x.notes, comments: x.comments || [], card: x.card || null } };
+  return `${location.origin}${location.pathname}#share=${await pack(share)}`;
+}
+let sharePending = null;
+async function readShare(hash) {
+  try {
+    const s = await unpack(hash.slice('#share='.length)); if (!s || !s.run || !s.run.code) throw new Error('not a QuantLab share link');
+    sharePending = s; const r = s.run, m = r.market;
+    $('#shareWhat').innerHTML = `<b>${esc(r.strategy.name)}</b> on <span translate="no">${esc(marketLabel(m))}</span>, ${fmt.date(r.provenance.start)} – ${fmt.date(r.provenance.end)}${s.from ? `, shared by ${esc(s.from)}` : ''}: Sharpe ${fmt.num(r.metrics.sharpe)}, CAGR ${fmt.pct(r.metrics.cagr, 2, true)}. Loading it saves the code as a strategy in this browser, applies its settings & market, runs it, and checks whether it reproduces with your data.` +
+      ((m.tickers || [m.ticker]).filter(t => t && !instruments.has(t)).length ? ` <span class="badge warn">Missing here: ${esc((m.tickers || [m.ticker]).filter(t => t && !instruments.has(t)).join(', '))}</span>` : '');
+    $('#shareBanner').hidden = false; history.replaceState(null, '', location.pathname + '#backtest'); route();
+  } catch (e) { toast(`This share link can’t be read: ${e.message}`); }
+}
+async function loadShare() {
+  const s = sharePending; if (!s) return; const r = s.run;
+  const mine = myStrategies(); let name = `Shared: ${r.strategy.name}`, k = 2; while (name in mine && mine[name] !== r.code) name = `Shared: ${r.strategy.name} (${k++})`;
+  mine[name] = r.code; store.set('mine', mine); fillTemplateSelect('mine:' + name);
+  const x = { ...r, strategy: { ...r.strategy, kind: 'mine', name, template: 'mine:' + name } };
+  if (r.comments && r.comments.length) toast(`${fmt.int(r.comments.length)} comment${r.comments.length === 1 ? '' : 's'} came with it; they are kept with the run in History.`);
+  $('#shareBanner').hidden = true; sharePending = null;
+  await reproduceRun(x);
+  const runs = (await idb.all('runs')).sort((a, b) => (a.ts < b.ts ? 1 : -1));
+  if (runs[0] && (r.comments || r.card)) { runs[0].comments = [...(r.comments || []), ...(runs[0].comments || [])]; runs[0].card = runs[0].card || r.card; await idb.put(runs[0], 'runs'); }
+}
+
+// Model card: everything QuantLab knows about a run, plus the owner's purpose & limitations.
+function modelCard(x, markdown) {
+  const p = x.provenance, m = x.metrics, b = x.bench_metrics || {}, c = x.config || p.config, card = x.card || {};
+  const decisions = audit.all().filter(e => e.run_id === x.id);
+  const cost = `commission ${fmt.num(c.commission_bps, 1)} bps + $${fmt.num(c.commission_fixed, 2)} per fill, slippage ${fmt.num(c.slippage_bps, 1)} bps, spread ${fmt.num(c.spread_bps || 0, 1)} bps, impact coefficient ${fmt.num(c.impact_coef || 0, 2)}, ${c.max_participation ? fmt.pct(c.max_participation, 0) + ' of volume at most' : 'no volume limit'}`;
+  const rows = [
+    ['Strategy', `${x.strategy.name}${x.strategy.kind === 'tpl' ? ' (built-in template)' : ''}`],
+    ['Market', `${marketLabel(x.market)} vs ${!x.market.benchmark || x.market.benchmark === x.market.ticker ? 'buy & hold' : x.market.benchmark}`],
+    ['Period', `${fmt.date(p.start)} – ${fmt.date(p.end)} (${fmt.int(p.bars)} bars${p.periods_per_year ? `, ${fmt.int(p.periods_per_year)} a year` : ''})`],
+    ['Execution', `${c.execution === 'close' ? 'next bar’s close' : 'next bar’s open'}; ${cost}`],
+    ['Capital & financing', `${fmt.money(c.cash)} starting cash, max leverage ${fmt.num(c.max_leverage, 1)}×, ${c.allow_short ? 'shorting allowed' : 'long only'}, cash ${c.rate_ticker ? 'at ' + c.rate_ticker : c.cash_rate == null ? 'at the risk-free rate' : 'at ' + fmt.pct(c.cash_rate, 2)}, ${c.total_return === false ? 'price return only' : 'dividends paid'}`],
+    ['Results', `CAGR ${fmt.pct(m.cagr, 2, true)} (benchmark ${fmt.pct(b.cagr, 2, true)}), Sharpe ${fmt.num(m.sharpe)}, max drawdown ${fmt.pct(m.max_drawdown, 1)}, volatility ${fmt.pct(m.volatility, 1)}, ${fmt.int(m.n_trades)} trades`],
+    ['Significance', `t-statistic ${fmt.num(m.t_stat)} (Newey-West ${fmt.num(m.t_stat_hac)}), PSR ${fmt.pct(m.psr, 0)}, Deflated Sharpe ${fmt.pct(m.dsr, 0)} after ${fmt.int(m.trials || 1)} trial${(m.trials || 1) === 1 ? '' : 's'}`],
+    ['Data', Object.entries(p.data).map(([t, f]) => `${t} (${f}${(p.calendars || {})[t] ? ', ' + p.calendars[t] : ''})`).join('; ')],
+    ['Code', `SHA-256 ${p.code_sha256}${Object.keys(p.modules || {}).length ? '; modules ' + Object.entries(p.modules).map(([n, h]) => `${n} ${h.slice(0, 12)}`).join(', ') : ''}`],
+    ['Engine', `QuantLab engine ${p.engine_version}, Python ${p.python}`],
+  ];
+  const notes = x.notes || [];
+  const revs = decisions.map(e => `${e.decision} by ${e.reviewer} on ${new Date(e.at).toLocaleString(LOCALE)}${e.comment ? ' (' + e.comment + ')' : ''}, audit entry ${e.seq} ${e.hash.slice(0, 12)}`);
+  if (markdown) {
+    return `# Model Card: ${x.strategy.name}\n\n_Generated by QuantLab on ${new Date().toLocaleString(LOCALE)} from run ${x.id}._\n\n## Purpose & intended use\n\n${card.purpose || '_Not stated._'}\n\n## Known limitations\n\n${card.limits || '_Not stated._'}\n\n` +
+      `## Facts\n\n| | |\n|---|---|\n${rows.map(([k, v]) => `| ${k} | ${String(v).replace(/\|/g, '\\|')} |`).join('\n')}\n\n` +
+      `## Notes from the run\n\n${notes.length ? notes.map(n => '- ' + n).join('\n') : '_None._'}\n\n## Reviews\n\n${revs.length ? revs.map(n => '- ' + n).join('\n') : '_Not reviewed._'}\n\n## Comments\n\n${(x.comments || []).map(k => `- **${k.author}** (${new Date(k.at).toLocaleString(LOCALE)}): ${k.text}`).join('\n') || '_None._'}\n\n## Code\n\n\`\`\`python\n${x.code}\n\`\`\`\n`;
+  }
+  const eq = x.curve ? chartImage(P => { const o = baseOptions(x.curve.dates, P, v => fmt.money(v)); o.plugins.legend = { display: true, labels: { color: P.fg2, boxWidth: 10 } };
+    return { data: { datasets: [line('Strategy', x.curve.equity, P.strat, { borderWidth: 2 }), line('Benchmark', x.curve.bench, P.bench, { borderDash: [5, 3] })] }, options: o }; }, 1000, 260) : '';
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><title>${esc(x.strategy.name)} · Model Card</title>
+<style>body{font:12.5px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;color:#171717;margin:28px;max-width:900px}h1{font-size:20px;margin:0 0 2px}h2{font-size:14px;margin:20px 0 6px;border-bottom:1px solid #ddd;padding-bottom:3px}
+.meta{color:#555}table{border-collapse:collapse;width:100%}td{padding:5px 6px;border-bottom:1px solid #eee;vertical-align:top}td:first-child{width:160px;color:#555}img{width:100%}p.box{white-space:pre-wrap;border:1px solid #ddd;border-radius:6px;padding:8px;margin:0}
+pre{white-space:pre-wrap;font:10.5px/1.4 ui-monospace,Menlo,monospace;background:#f6f6f6;padding:10px;border-radius:6px}code{font:11px ui-monospace,Menlo,monospace;word-break:break-all}@media print{body{margin:12mm}.page{break-before:page}}</style>
+<h1>Model Card: ${esc(x.strategy.name)}</h1><div class="meta">Run ${esc(x.id)} of ${esc(new Date(x.ts).toLocaleString(LOCALE))} · generated ${esc(new Date().toLocaleString(LOCALE))}</div>
+<h2>Purpose &amp; Intended Use</h2><p class="box">${esc(card.purpose || 'Not stated.')}</p>
+<h2>Known Limitations</h2><p class="box">${esc(card.limits || 'Not stated.')}</p>
+<h2>Facts</h2><table><tbody>${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${k === 'Code' || k === 'Data' ? `<code>${esc(v)}</code>` : esc(v)}</td></tr>`).join('')}</tbody></table>
+${eq ? `<h2>Equity</h2><img src="${eq}" alt="Equity curve">` : ''}
+<h2>Notes from the Run</h2>${notes.length ? `<ul>${notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '<p>None.</p>'}
+<h2>Reviews</h2>${revs.length ? `<ul>${revs.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '<p>Not reviewed.</p>'}
+<h2>Comments</h2>${(x.comments || []).length ? `<ul>${x.comments.map(k => `<li><b>${esc(k.author)}</b> (${esc(new Date(k.at).toLocaleString(LOCALE))}): ${esc(k.text)}</li>`).join('')}</ul>` : '<p>None.</p>'}
+<h2 class="page">Code</h2><pre>${esc(x.code)}</pre></html>`;
+}
+function openDoc(html, filename) {
+  const w = window.open('', '_blank');
+  if (!w) { downloadFile(filename, html, 'text/html'); toast('Pop-ups are blocked, so it was downloaded instead.'); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
 /* ----------------------------------------------------------- workspace -- */
 async function exportWorkspace() {
   const local = {}; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('ql.') && k !== 'ql.ghToken') local[k.slice(3)] = JSON.parse(localStorage.getItem(k)); } } catch (e) { /* storage unavailable */ }
@@ -3894,6 +4102,12 @@ async function applyWorkspace() {
   const local = ws.local || {};
   for (const [k, v] of Object.entries(local)) {
     if (k === 'ghToken') continue;
+    if (k === 'me' && meName()) continue;
+    if (k === 'audit') {   // never replace a log with one that isn't its continuation
+      const cur = audit.all(), ok = Array.isArray(v) && cur.every((e, i) => v[i] && v[i].hash === e.hash);
+      if (ok) store.set('audit', v); else if (cur.length) toast('The imported audit log doesn’t continue this browser’s, so this browser’s log was kept. Verify the file with “Verify a Log File…”.');
+      continue;
+    }
     if (k === 'mine') store.set('mine', { ...myStrategies(), ...v });
     else if (k === 'modules') store.set('modules', { ...files.library(), ...v });
     else if (k === 'trials') store.set('trials', { ...trials.all(), ...v });
@@ -4113,8 +4327,10 @@ function setEditorSize(size) {
   editor.sync();
 }
 let currentTab = null;
+let booted = false;
 function route() {
   const h = location.hash.slice(1);
+  if (h.startsWith('share=')) { if (booted) readShare('#' + h); else showTab(store.get('tab', 'backtest')); return; }
   const opt = TOOLS.find(t => t[0] === h);
   if (opt && !shown.is('tools', h, opt[2])) { shown.set('tools', { [h]: true }); renderToolChecks(); applyTools(); }
   if (TOOL_SECTIONS.includes(h)) { showTab('tools'); requestAnimationFrame(() => { const el = document.getElementById(h); if (el) el.scrollIntoView(); }); return; }
@@ -4131,7 +4347,7 @@ function showTab(name) {
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
   if (name === 'data') { renderFutList(); renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
-  if (name === 'history') renderRuns();
+  if (name === 'history') { renderRuns(); renderAudit(); }
   if (name === 'paper') { renderPaperList(); const b = store.get('bridge', {}); $('#bridgeUrl').value = b.url || ''; $('#bridgeSecret').value = bridgeConfig().secret; }
   document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
   store.set('tab', name);
@@ -4232,12 +4448,25 @@ function wire() {
     const b = e.target.closest('button[data-act]'); if (!b) return; const x = await getRun(b.closest('tr').dataset.run); if (!x) return;
     if (b.dataset.act === 'restore') { await restoreRun(x); toast('Restored the code, settings & market of that run. Run it to see the result again.'); }
     else if (b.dataset.act === 'reproduce') reproduceRun(x);
+    else if (b.dataset.act === 'detail') openRunDetail(x.id);
     else if (b.dataset.act === 'label') { const v = prompt('Label for this run (e.g. “candidate for review”):', x.label || ''); if (v != null) { x.label = v.trim().slice(0, 60); await idb.put(x, 'runs'); renderRuns(); } }
   });
   $('#runCompare').onclick = () => { const [a, b] = [...runSel]; compareRuns(a, b); };
   $('#runDelete').onclick = () => armConfirm($('#runDelete'), `Delete ${fmt.int(runSel.size)}`, async () => { for (const id of runSel) await idb.del(id, 'runs'); runSel.clear(); renderRuns(); });
   $('#runClear').onclick = () => armConfirm($('#runClear'), 'Confirm Clear', async () => { await idb.clear('runs'); runSel.clear(); renderRuns(); $('#cmpPanel').hidden = true; toast('Run history cleared.'); });
   $('#cmpClose').onclick = () => { $('#cmpPanel').hidden = true; kill('cmp'); };
+  $('#rdClose').onclick = () => { $('#runDetail').hidden = true; runOpen = null; };
+  $('#rdPurpose').addEventListener('input', cardChanged); $('#rdLimits').addEventListener('input', cardChanged);
+  $('#rdCommentForm').addEventListener('submit', addComment);
+  $('#rdReviewForm').addEventListener('click', e => { const b = e.target.closest('[data-decision]'); if (b) review(b.dataset.decision); });
+  $('#rdShare').onclick = async () => { if (runOpen) copyText(await shareLink(runOpen), 'a share link (it holds the code & results, not the price data)'); };
+  $('#rdCard').onclick = () => { if (runOpen) openDoc(modelCard(runOpen, false), `model-card-${runOpen.id}.html`); };
+  $('#rdCardMd').onclick = () => { if (runOpen) downloadFile(`model-card-${runOpen.id}.md`, modelCard(runOpen, true), 'text/markdown'); };
+  $('#meName').value = meName(); $('#meName').addEventListener('change', () => store.set('me', $('#meName').value.trim()));
+  $('#auditExport').onclick = () => downloadFile(`quantlab-audit-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ format: 'quantlab-audit', entries: audit.all() }, null, 2), 'application/json');
+  $('#auditFile').addEventListener('change', async e => { for (const f of e.target.files) await verifyAuditFile(f); e.target.value = ''; });
+  $('#auditTable').addEventListener('click', e => { const b = e.target.closest('[data-audit-run]'); if (b) openRunDetail(b.dataset.auditRun); });
+  $('#shareLoad').onclick = loadShare; $('#shareDismiss').onclick = () => { $('#shareBanner').hidden = true; sharePending = null; };
   $('#wsExport').onclick = exportWorkspace;
   $('#nextCsv').onclick = () => { if (lastRun && lastRun.result.next) downloadFile(exportStem(lastRun.result) + '_next_orders.csv', ordersCSV(lastRun.result.next, lastRun.result.strategyName), 'text/csv'); };
   $('#nextJson').onclick = () => { if (lastRun && lastRun.result.next) copyText(ordersJSON(lastRun.result.next, lastRun.result.strategyName), 'the orders as JSON'); };
@@ -4370,6 +4599,7 @@ function ensureChartLib() {
   return new Promise((res, rej) => { const s = document.createElement('script'); s.src = CHART_CDN; s.onload = res; s.onerror = () => rej(new Error('Chart library failed to load')); document.head.appendChild(s); });
 }
 
+const shareHash = location.hash.startsWith('#share=') ? location.hash : null;   // read once the data is loaded
 async function boot() {
   $('#cfgBase').innerHTML = CURRENCIES.map(c => `<option>${c}</option>`).join('');
   setThemeColor(); renderKpiSkeleton(); renderPanelChecks(); applyPanels(); renderToolChecks(); applyTools(); editor.init(); wire();
@@ -4418,6 +4648,7 @@ async function boot() {
       .map(k => METRICS.find(m => m.key === k)).filter(Boolean).map(m => `<option value="${m.key}">${esc(m.label)}</option>`).join('');
     await refreshParams();
     if (instruments.size) runBacktest();
+    booted = true; if (shareHash) readShare(shareHash);
     if (currentTab === 'data') checkAllData();
   } catch (e) {
     console.error(e); setStatus('error', 'Python couldn’t start');

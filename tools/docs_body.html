@@ -104,6 +104,7 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#tools">Research Tools</a></li>
       <li><a href="#audit">Saving, Exporting &amp; Auditing</a></li>
       <li><a href="#paper">Paper Trading</a></li>
+      <li><a href="#collab">Sharing &amp; Reviews</a></li>
       <li><a href="#pitfalls">Pitfalls</a></li>
       <li><a href="#running">Running It Yourself</a></li>
       <li><a href="#layout">How the Code Is Organized</a></li>
@@ -497,6 +498,11 @@ for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5):
     <p><b>Broker bridge</b> (optional, needs a server). The page never talks to a broker. <code>tools/bridge/broker_bridge.py</code> is a small standard-library server you run yourself; <b>Send to Bridge</b> POSTs the next orders to it as JSON with a shared secret, after you confirm. It checks the secret, logs every request to <code>bridge-log.jsonl</code>, and by default only answers with the orders it would place (dry run). With <code>--alpaca</code> it places them in an Alpaca paper account (keys from <code>APCA_API_KEY_ID</code> and <code>APCA_API_SECRET_KEY</code>); <code>--alpaca --live</code> uses the live account. Orders filled at the next open become market-on-open orders (<i>opg</i>), at the close <i>cls</i>; fractional quantities go as day orders. Use it with care: a backtest is not a trading system, and nothing here checks your broker's positions before sending.</p>
 <pre><code>python tools/bridge/broker_bridge.py --secret my-secret              # dry run on localhost:8787
 python tools/bridge/broker_bridge.py --secret my-secret --alpaca     # Alpaca paper account</code></pre>
+
+    <h2 id="collab">Sharing, Reviews &amp; Model Cards</h2>
+    <p><b>Share links.</b> In the History tab, a run's <b>Details</b> has <b>Copy Share Link</b>: a link to this page with the run's code, modules, settings, market, results, comments and model-card text compressed into the part after <code>#</code>, which browsers never send to the server. Whoever opens it sees what it is and can <b>Load &amp; Run It</b>: the code is saved as a strategy, the settings and market applied, and the run checked against the shared numbers (it reproduces exactly when they have the same data; the price data itself isn't in the link).</p>
+    <p><b>Comments &amp; model cards.</b> Each run can carry a comment thread and a purpose and limitations text. <b>Model Card</b> turns them into a printable document (or Markdown) with what QuantLab knows about the run: market and period, execution and cost assumptions, financing, results, significance and the number of trials, data fingerprints and calendars, code hash, engine version, the run's notes, reviews and comments, and the code.</p>
+    <p><b>Audit log.</b> <b>Approve</b> or <b>Reject</b> on a run (enter your name first) appends an entry to the audit log: time, run, a SHA-256 digest of the run's code, data, settings, market and results, the decision, the reviewer and a note. Each entry also stores the previous entry's hash and its own, so changing, removing or reordering an entry breaks the chain, which the log shows. <b>Export Log</b> saves it; <b>Verify a Log File</b> checks one in the page and in Python, and <code>engine.verify_audit_log(entries)</code> does it anywhere. It lives in this browser (and in workspace exports): tamper-evident, not tamper-proof, so keep exported copies where others can see them.</p>
 
     <h2 id="pitfalls">Pitfalls</h2>
     <ul>

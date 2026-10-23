@@ -5903,6 +5903,43 @@ def capacity_curve(strategy, sets, cfg, levels=None, start=None, end=None, bench
             "impact_forced": not base.get("impact_coef"), "max_participation": base.get("max_participation")}
 
 
+# ---- audit log of approved runs ------------------------------------------------
+# Each entry is chained to the one before by SHA-256, so editing, removing or reordering
+# any entry breaks every hash after it. The page writes the log; this verifies it.
+AUDIT_FIELDS = ("seq", "at", "run_id", "run_digest", "decision", "reviewer", "comment", "prev_hash")
+AUDIT_GENESIS = "0" * 64
+
+
+def canonical_json(obj):
+    """Deterministic JSON (sorted keys, no spaces, UTF-8): the same text the page hashes."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def audit_hash(entry):
+    """SHA-256 of an entry's fields (strings and integers only), chained via prev_hash."""
+    import hashlib
+    body = {k: entry[k] for k in AUDIT_FIELDS}
+    return hashlib.sha256(canonical_json(body).encode("utf-8")).hexdigest()
+
+
+def verify_audit_log(entries):
+    """Check an exported audit log: sequence numbers, the chain of prev_hash links and each
+    entry's own hash. Returns {'ok', 'entries', 'error', 'at'}; 'at' is the first bad index."""
+    prev = AUDIT_GENESIS
+    for i, e in enumerate(entries):
+        missing = [k for k in AUDIT_FIELDS + ("hash",) if k not in e]
+        if missing:
+            return {"ok": False, "entries": len(entries), "at": i, "error": "entry %d lacks %s" % (i, ", ".join(missing))}
+        if e["seq"] != i:
+            return {"ok": False, "entries": len(entries), "at": i, "error": "entry %d has sequence number %r" % (i, e["seq"])}
+        if e["prev_hash"] != prev:
+            return {"ok": False, "entries": len(entries), "at": i, "error": "entry %d doesn't link to the one before it" % i}
+        if audit_hash(e) != e["hash"]:
+            return {"ok": False, "entries": len(entries), "at": i, "error": "entry %d was changed after it was written" % i}
+        prev = e["hash"]
+    return {"ok": True, "entries": len(entries), "at": None, "error": None, "head": prev}
+
+
 # =============================================================================
 # 8. JSON API for the web page
 # =============================================================================
@@ -6541,6 +6578,10 @@ def api_read_parquet(p):
     return {"text": parquet_to_csv(base64.b64decode(p["data"]))}
 
 
+def api_verify_audit(p):
+    return verify_audit_log(p["entries"])
+
+
 def api_check_module(p):
     return {"problem": module_name_problem(p.get("name"))}
 
@@ -6548,7 +6589,7 @@ def api_check_module(p):
 API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
-    "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "risk": api_risk, "capacity": api_capacity,
+    "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

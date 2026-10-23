@@ -70,6 +70,12 @@ strategy and start date and runs it forward as new data arrives, logging each up
 change to past results. Routing orders to a broker is a separate, optional server you run yourself:
 `tools/bridge/broker_bridge.py` (dry run by default; Alpaca paper or live with flags).
 
+## Sharing and review
+
+Runs can be shared as a link (code, settings, results and comments in the URL fragment; the receiver
+re-runs and checks it reproduces), carry comment threads and an auto-generated model card, and be
+approved or rejected into a SHA-256 hash-chained audit log that `engine.verify_audit_log` can check.
+
 ## Modules, editor and tests
 
 Shared code lives in **modules**: Python files in the browser's module library that any strategy
