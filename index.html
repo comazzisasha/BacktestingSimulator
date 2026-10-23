@@ -1120,7 +1120,7 @@ const instruments = new Map();
 const rates = new Map();       // interest-rate series (e.g. FRED DTB3): name -> {ticker, dates, values}
 const dataInfo = new Map();    // what Python reported on load: dividends, data-quality findings ...
 function addInstrument(rec) {
-  if (rec.kind === 'rate') { rates.set(rec.ticker, rec); py.loadedRates.delete(rec.ticker); return; }
+  if (rec.kind === 'rate') { rates.set(rec.ticker, rec); py.forgetRate(rec.ticker); return; }
   const d = rec.data;
   instruments.set(rec.ticker, { ...rec, start: d.dates[0], end: d.dates[d.dates.length - 1], n: d.dates.length, last: d.close[d.close.length - 1] });
   py.forget(rec.ticker); dataInfo.delete(rec.ticker);
@@ -1182,7 +1182,9 @@ const py = {
     if (!out.ok) throw new PyError(out.error);
     return out.result;
   },
-  forget(ticker) { this.loaded.delete(ticker); },
+  // Data changed: reload it before the next use, here & in the helpers, and drop cached results.
+  forget(ticker) { this.loaded.delete(ticker); pool.forget(ticker); resultCache.clear(); },
+  forgetRate(name) { this.loadedRates.delete(name); pool.forgetRate(name); resultCache.clear(); },
   async ensure(tickers) {
     for (const t of new Set(tickers.filter(Boolean))) {
       if (this.loaded.has(t)) continue;
@@ -1202,10 +1204,84 @@ const py = {
   canStop() { return this.mode === 'worker'; },
   async restart() {
     for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
-    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear();
+    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear(); pool.stop();
     this.ready = (async () => { this._spawn(); await this._post(this.initMsg(), 180000); })();
     return this.ready;
   },
+};
+
+/* Helper workers for tools that run many independent backtests (parameter sweeps,
+   walk-forward grids). Each helper is its own Python with its own copy of the data, started
+   on first use; the main worker starts on the queue straight away and helpers join as they
+   come up, so a pool is never slower than running one after another. */
+class Helper {
+  constructor() {
+    this.worker = new Worker('worker.js'); this.seq = 0; this.waiting = new Map();
+    this.loaded = new Set(); this.loadedRates = new Set();
+    this.worker.onmessage = e => { if (e.data.progress) return; const w = this.waiting.get(e.data.id); if (w) { this.waiting.delete(e.data.id); e.data.ok ? w.resolve(e.data.result) : w.reject(new Error(e.data.error)); } };
+    this.worker.onerror = e => { if (e.preventDefault) e.preventDefault(); this.fail(new Error(e.message || 'helper worker error')); };
+    this.ready = this._post(py.initMsg()); this.ready.catch(() => {});   // a failed start is handled where it's awaited
+  }
+  _post(msg) { return new Promise((resolve, reject) => { const id = ++this.seq; this.waiting.set(id, { resolve, reject }); this.worker.postMessage({ ...msg, id }); }); }
+  async call(method, payload) {
+    await this.ready;
+    const out = JSON.parse(await this._post({ type: 'call', method, payload: JSON.stringify(payload) }));
+    if (!out.ok) throw new PyError(out.error);
+    return out.result;
+  }
+  fail(err) { for (const w of this.waiting.values()) w.reject(err); this.waiting.clear(); }
+  kill() { this.fail(new Error('Stopped')); this.worker.terminate(); }
+}
+Helper.prototype.ensure = py.ensure; Helper.prototype.ensureRate = py.ensureRate;
+
+const pool = {
+  helpers: [], idle: null,
+  // Leave a core for the page; the main worker counts as one runner.
+  size() { return py.mode === 'worker' && typeof Worker !== 'undefined' ? Math.max(0, Math.min(3, (navigator.hardwareConcurrency || 2) - 2)) : 0; },
+  forget(t) { for (const h of this.helpers) h.loaded.delete(t); },
+  forgetRate(n) { for (const h of this.helpers) h.loadedRates.delete(n); },
+  stop() { clearTimeout(this.idle); for (const h of this.helpers) h.kill(); this.helpers = []; },
+  // Starting a Python takes a few seconds, so start the helpers when the Tools tab opens.
+  warm() { while (this.helpers.length < this.size()) this.helpers.push(new Helper()); this._sleepLater(); },
+  _sleepLater() { clearTimeout(this.idle); this.idle = setTimeout(() => this.stop(), 5 * 60 * 1000); },
+  // Runs task(client, item) for every item on the main worker plus up to size() helpers.
+  // Results come back in item order. prepare(client) loads what the task needs; cancelled()
+  // stops handing out items; onDone(count) reports progress. A strategy error stops the whole
+  // map; a helper that breaks is dropped & its item goes back on the queue.
+  async map(items, task, { prepare, cancelled = () => false, onDone = () => {} } = {}) {
+    clearTimeout(this.idle);
+    const want = items.length >= 4 ? Math.min(this.size(), items.length - 1) : 0;
+    while (this.helpers.length < want) this.helpers.push(new Helper());
+    const out = new Array(items.length), queue = items.map((_, i) => i);
+    let done = 0, failed = null;
+    const runner = async (client, isHelper) => {
+      try { await client.ready; if (prepare) await prepare(client); }
+      catch (e) { if (isHelper && !(e instanceof PyError)) this._drop(client); else failed = failed || e; return; }
+      while (queue.length && !failed && !cancelled()) {
+        const i = queue.shift();
+        try { out[i] = await task(client, items[i]); onDone(++done); }
+        catch (e) {
+          if (isHelper && !(e instanceof PyError)) { queue.unshift(i); this._drop(client); return; }
+          failed = failed || e; return;
+        }
+      }
+    };
+    await Promise.all([runner(py, false), ...this.helpers.slice(0, want).map(h => runner(h, true))]);
+    this._sleepLater();   // keep helpers warm for the next sweep, but give the memory back after a while
+    if (failed) throw failed;
+    return out;
+  },
+  _drop(h) { h.kill(); this.helpers = this.helpers.filter(x => x !== h); },
+};
+
+/* Re-running exactly the same setup (code, settings, dates, data & trial count) shows the
+   saved result instead of running again. Cleared whenever data changes. */
+const resultCache = {
+  max: 6, map: new Map(),
+  key(p) { return hash53(JSON.stringify(p)); },
+  get(k) { const r = this.map.get(k); if (r) { this.map.delete(k); this.map.set(k, r); } return r; },
+  set(k, r) { this.map.set(k, r); while (this.map.size > this.max) this.map.delete(this.map.keys().next().value); },
+  clear() { this.map.clear(); },
 };
 
 /* --------------------------------------------- status, loading & toasts -- */
@@ -1533,7 +1609,7 @@ function payloadBase() {
 async function freshPayload() { if (codeInfo.for !== editor.value) await refreshParams(); return payloadBase(); }
 const payloadTickers = p => (p.tickers ? [...p.tickers] : [p.ticker]).filter(Boolean);
 // Load what a payload needs into Python: its instruments, benchmark & rate series.
-async function ensurePayload(p) { await py.ensure([...payloadTickers(p), p.benchmark]); await py.ensureRate(p.config.rate_ticker); }
+async function ensurePayload(p, client = py) { await client.ensure([...payloadTickers(p), p.benchmark]); await client.ensureRate(p.config.rate_ticker); }
 
 /* ---------------------------------------------------------- universe ---- */
 // A strategy that defines UNIVERSE = [...] is a portfolio strategy. The Market panel then
@@ -1581,7 +1657,8 @@ function validInputs() {
 // Resolves when no backtest is running (the Run button is enabled again).
 function whenRunIdle() { return new Promise(res => { const tick = () => ($('#runBtn').disabled ? setTimeout(tick, 50) : res()); tick(); }); }
 // Returns the result it produced, or null if it didn't run (busy, invalid inputs, or an error).
-async function runBacktest() {
+// fresh: run even if this exact setup has a cached result (Reproduce must really re-run).
+async function runBacktest({ fresh = false } = {}) {
   if (!py.ready) return null;
   const btn = $('#runBtn'); if (btn.disabled) return null;
   if (codeInfo.for !== editor.value) await refreshParams();
@@ -1593,13 +1670,19 @@ async function runBacktest() {
   const t0 = performance.now(); let done = null, produced = null;
   setStatus('busy', 'Running backtest…');
   try {
-    await ensurePayload(p);
     const fam = trials.family(p), tk = trials.key(p);
-    const r = await py.call('run', { ...p, trials: trials.stats(fam, tk) });
-    trials.add(fam, [[tk, r.metrics.sharpe]]); r.trialFamily = fam;
+    const call = { ...p, trials: trials.stats(fam, tk) };
+    const ck = resultCache.key(call); let r = fresh ? null : resultCache.get(ck);
+    if (r) r = { ...r, cached: true };
+    else {
+      await ensurePayload(p);
+      r = await py.call('run', call);
+      trials.add(fam, [[tk, r.metrics.sharpe]]); r.trialFamily = fam;
+      resultCache.set(ck, r);
+    }
     r.elapsed = performance.now() - t0; r.strategyName = currentSource().name;
     lastRun = { payload: p, result: r }; hideError(); renderResults(r);
-    $('#exportBtn').disabled = false; saveRun(p, r); produced = r;
+    $('#exportBtn').disabled = false; if (!r.cached) saveRun(p, r); produced = r;
     done = `Backtest finished: total return ${fmt.pct(r.metrics.total_return, 1, true)}, Sharpe ${fmt.num(r.metrics.sharpe)}`;
   } catch (e) { showError(e); }
   finally { $('#results').setAttribute('aria-busy', 'false'); busy(false); await loadingOff(btn); }
@@ -1638,7 +1721,7 @@ function renderResults(r) {
   const onWhat = r.portfolio ? `a ${fmt.int(r.tickers.length)}-instrument portfolio` : r.ticker;
   $('#resTitle').textContent = `${r.strategyName} on ${onWhat}`;
   if (currentTab === 'backtest' || currentTab === 'edit') document.title = `${r.strategyName} on ${r.portfolio ? 'portfolio' : r.ticker} · QuantLab`;
-  $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${fmt.num(r.elapsed / 1000, 2)} s`;
+  $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${r.cached ? 'unchanged setup, result reused' : fmt.num(r.elapsed / 1000, 2) + ' s'}`;
   const chips = [`<span class="chip">${r.mode === 'signals' ? 'signals(data)' : 'on_bar(ctx)'}</span>`];
   if (r.portfolio) chips.push(`<span class="chip" translate="no" title="${esc(r.tickers.join(', '))}">${esc(r.tickers.length <= 6 ? r.tickers.join(' · ') : r.tickers.slice(0, 5).join(' · ') + ` +${r.tickers.length - 5}`)}</span>`);
   const priceOnly = Object.values(r.data || {}).filter(d => !d.dividends && d.price_basis === 'price').length;
@@ -1924,6 +2007,7 @@ function gridFromForm(pre) {
   return { p1, p2, v1, v2, combos, params: ([a, b]) => (p2 ? { [p1]: a, [p2]: b } : { [p1]: a }), label: ([a, b]) => (p2 ? `${p1}=${a}, ${p2}=${b}` : `${p1}=${a}`) };
 }
 let sweepCancel = false, sweepRunning = false;
+function progress(bar, f) { bar.firstElementChild.style.transform = `scaleX(${f})`; bar.setAttribute('aria-valuenow', String(Math.round(f * 100))); }
 async function runSweep(ev) {
   ev.preventDefault();
   const p1 = $('#swP1').value, p2 = $('#swP2').value;
@@ -1940,13 +2024,11 @@ async function runSweep(ev) {
   sweepCancel = false; sweepRunning = true; loadingOn(btn); $('#swStop').hidden = false; bar.hidden = false; bar.firstElementChild.style.transform = 'scaleX(0)';
   busy(true, 'Sweeping parameters…'); const results = [];
   try {
-    await ensurePayload(base);
-    for (let i = 0; i < combos.length && !sweepCancel; i++) {
-      const [a, b] = combos[i]; const params = { [p1]: a }; if (p2) params[p2] = b;
-      results.push({ a, b, r: await py.call('metrics', { ...base, params, split, blocks: PBO_BLOCKS }) });
-      const f = (i + 1) / combos.length; bar.firstElementChild.style.transform = `scaleX(${f})`; bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
-      $('#swCount').textContent = `${fmt.int(i + 1)} of ${fmt.int(combos.length)}`;
-    }
+    const rs = await pool.map(combos, (client, [a, b]) => { const params = { [p1]: a }; if (p2) params[p2] = b; return client.call('metrics', { ...base, params, split, blocks: PBO_BLOCKS }); }, {
+      prepare: client => ensurePayload(base, client), cancelled: () => sweepCancel,
+      onDone: n => { progress(bar, n / combos.length); $('#swCount').textContent = `${fmt.int(n)} of ${fmt.int(combos.length)}`; },
+    });
+    combos.forEach(([a, b], i) => { if (rs[i]) results.push({ a, b, r: rs[i] }); });
     renderSweep({ p1, p2, v1, v2, metric, split, results, cancelled: sweepCancel });
     const fam = trials.family(base);
     trials.add(fam, results.map(x => [trials.key(base, p2 ? { [p1]: x.a, [p2]: x.b } : { [p1]: x.a }), x.r.full.sharpe]));
@@ -2021,12 +2103,10 @@ async function runWFO(ev) {
   wfCancel = false; sweepRunning = true; loadingOn(btn); $('#wfStop').hidden = false; bar.hidden = false; bar.firstElementChild.style.transform = 'scaleX(0)';
   busy(true, 'Walk-forward…'); const runs = [];
   try {
-    await ensurePayload(base);
-    for (let i = 0; i < g.combos.length && !wfCancel; i++) {
-      runs.push(await py.call('metrics', { ...base, params: g.params(g.combos[i]), returns: true }));
-      const f = (i + 1) / g.combos.length; bar.firstElementChild.style.transform = `scaleX(${f})`; bar.setAttribute('aria-valuenow', String(Math.round(f * 100)));
-      $('#wfCount').textContent = `${fmt.int(i + 1)} of ${fmt.int(g.combos.length)}`;
-    }
+    runs.push(...await pool.map(g.combos, (client, c) => client.call('metrics', { ...base, params: g.params(c), returns: true }), {
+      prepare: client => ensurePayload(base, client), cancelled: () => wfCancel,
+      onDone: n => { progress(bar, n / g.combos.length); $('#wfCount').textContent = `${fmt.int(n)} of ${fmt.int(g.combos.length)}`; },
+    }));
     if (wfCancel) { out.innerHTML = '<p class="out-empty">Cancelled.</p>'; return; }
     const labels = g.combos.map(g.label);
     trials.add(trials.family(base), runs.map((x, i) => [trials.key(base, g.params(g.combos[i])), x.full.sharpe]));
@@ -2470,7 +2550,7 @@ async function restoreRun(x) {
 async function reproduceRun(x) {
   await py.ready; await whenRunIdle();
   await restoreRun(x); await whenRunIdle();
-  const now = await runBacktest();
+  const now = await runBacktest({ fresh: true });
   if (!now) { toast('The re-run didn’t finish; see the Backtest tab.'); return; }
   const was = x.provenance, diffs = [];
   if (now.provenance.code_sha256 !== was.code_sha256) diffs.push('the code');
@@ -2680,7 +2760,7 @@ function showTab(name) {
   dockEditor(name === 'edit');
   if (name === 'edit' && changed) requestAnimationFrame(() => editor.ta.focus({ preventScroll: true }));
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); }
+  if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
   if (name === 'data') { renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
   if (name === 'history') renderRuns();
   document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
@@ -2813,7 +2893,7 @@ function wire() {
   });
   $('#rateTable').addEventListener('click', e => {
     const b = e.target.closest('button[data-remove-rate]'); if (!b) return; const t = b.dataset.removeRate;
-    armConfirm(b, 'Confirm Remove', async () => { rates.delete(t); py.loadedRates.delete(t); await idb.del(t); renderRateTable(); fillRateSelect(); saveSettings(); toast(`Removed ${t}.`); });
+    armConfirm(b, 'Confirm Remove', async () => { rates.delete(t); py.forgetRate(t); await idb.del(t); renderRateTable(); fillRateSelect(); saveSettings(); toast(`Removed ${t}.`); });
   });
   $('#univBtn').onclick = () => { togglePicker($('#univBtn'), $('#univPick')); if (!$('#univPick').hidden) $('#univSearch').focus(); };
   $('#univList').addEventListener('change', e => { const u = universeState(); const set = new Set(u.picked); if (e.target.checked) set.add(e.target.value); else set.delete(e.target.value); setPicked([...set]); });
