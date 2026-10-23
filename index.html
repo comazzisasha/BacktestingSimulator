@@ -981,6 +981,20 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       <div class="panel-b scroll"><table id="instTable"></table></div>
     </section>
 
+    <section class="panel" aria-labelledby="h-fut">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-fut">Continuous Futures</h2><p>Stitch single-contract files (e.g. <code translate="no">ESH24.csv</code>, <code translate="no">ESM24.csv</code> …) into one back-adjusted series. Futures take no cash: the account’s cash stays as collateral & earns interest, shorts pay no borrow fee. Mark any instrument as a future with its <b>Type</b> above.</p></div></div>
+      <form class="panel-b" id="futForm" novalidate>
+        <fieldset><legend class="label">Contracts (oldest expiry first)</legend><div class="checks wide" id="futList" translate="no"></div><p class="ferr" id="futList-err" hidden></p></fieldset>
+        <div class="grid3">
+          <div class="field"><label for="futName">New Ticker</label><input type="text" id="futName" name="future-ticker" placeholder="ES" autocomplete="off" spellcheck="false" translate="no" aria-describedby="futName-err"><p class="ferr" id="futName-err" hidden></p></div>
+          <div class="field"><label for="futRoll">Roll</label><select id="futRoll" name="roll"><option value="days">A few days before expiry</option><option value="volume">When the next contract trades more</option></select></div>
+          <div class="field"><label for="futDays">Days Before Last Bar</label><input type="text" inputmode="numeric" id="futDays" name="roll-days" value="5" autocomplete="off" aria-describedby="futDays-err"><p class="ferr" id="futDays-err" hidden></p></div>
+          <div class="field"><label for="futAdj">Back-Adjustment</label><select id="futAdj" name="adjust"><option value="ratio">Ratio (returns exact)</option><option value="difference">Difference (point moves exact)</option><option value="none">None (raw prices; roll gaps stay)</option></select></div>
+        </div>
+        <div class="row"><button class="btn primary small" id="futBuild" type="submit">Build Continuous Future</button><span class="muted" id="futOut" aria-live="polite"></span></div>
+      </form>
+    </section>
+
     <section class="panel" aria-labelledby="h-rates">
       <div class="panel-h"><h2 id="h-rates">Interest-Rate Series</h2><span class="muted">Pick one under Account &amp; Execution to pay cash interest at that rate</span></div>
       <div class="panel-b scroll"><table id="rateTable"></table></div>
@@ -1419,7 +1433,7 @@ const py = {
       const rec = instruments.get(t);
       if (!rec) throw new Error(`No data is loaded for ${t}. Add it on the Data tab.`);
       const ev = rec.events || {};
-      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, fundamentals: ev.fundamentals || null, calendar: store.get('calendars', {})[t] || null, currency: store.get('currencies', {})[t] || null });
+      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, fundamentals: ev.fundamentals || null, calendar: store.get('calendars', {})[t] || null, currency: store.get('currencies', {})[t] || null, asset_kind: store.get('kinds', {})[t] || null });
       dataInfo.set(t, info); this.loaded.add(t);
     }
   },
@@ -3338,14 +3352,14 @@ function renderInstTable() {
   const list = sortedTickers();
   if (!qualityChecking) $('#instCount').textContent = `${fmt.int(list.length)} instrument${list.length === 1 ? '' : 's'}`;
   if (!list.length) { $('#instTable').innerHTML = '<tbody><tr><td class="muted">No instruments yet. Drop a CSV file above to add one.</td></tr></tbody>'; return; }
-  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Last Close</th><th scope="col">Calendar</th><th scope="col">Currency</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
+  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Last Close</th><th scope="col">Type</th><th scope="col">Calendar</th><th scope="col">Currency</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
   for (const t of list) {
     const r = instruments.get(t);
     const src = r.synthetic ? '<span class="chip">Synthetic demo</span>' : r.base === 'bundled' ? '<span class="chip">Bundled + your files</span>' : r.source === 'upload' ? '<span class="chip">Your file</span>' : '<span class="chip">Bundled</span>';
     const fd = (dataInfo.get(t) || {}).fundamentals || {}, fk = Object.keys(fd);
     const fchip = fk.length ? ` <span class="chip" title="Point-in-time fundamentals: ${esc(fk.map(k => `${k} (${fd[k].count}, ${fd[k].first} to ${fd[k].last})`).join('; '))}">${fk.length <= 3 ? esc(fk.join(', ')) : fmt.int(fk.length) + ' fundamentals'}</span>` : '';
     h += `<tr><th scope="row" translate="no">${esc(t)}</th><td>${esc(r.name || '')}${fchip}</td><td>${src}</td><td class="tnum">${fmt.date(r.start)}</td><td class="tnum">${fmt.date(r.end)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.price(r.last)}</td>` +
-      `<td>${calendarSelect(t)}</td><td>${currencySelect(t)}</td><td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
+      `<td>${kindSelect(t)}</td><td>${calendarSelect(t)}</td><td>${currencySelect(t)}</td><td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
       `<td>${r.source === 'upload' ? `<button class="btn small danger" type="button" data-remove="${esc(t)}" aria-label="Remove ${esc(t)}">${r.base === 'bundled' ? 'Reset' : 'Remove'}</button>` : ''}</td></tr>`;
     if (openQuality.has(t) && dataInfo.has(t)) h += qualityDetail(t);
   }
@@ -3364,6 +3378,38 @@ function currencySelect(t) {
   const cur = store.get('currencies', {})[t] || '';
   return `<select class="small" data-currency="${esc(t)}" aria-label="Currency of ${esc(t)}’s prices"><option value=""${cur ? '' : ' selected'}>Base</option>` +
     CURRENCIES.map(c => `<option${cur === c ? ' selected' : ''}>${c}</option>`).join('') + '</select>';
+}
+function kindSelect(t) {
+  const k = store.get('kinds', {})[t] || '';
+  return `<select class="small" data-kind="${esc(t)}" aria-label="Type of ${esc(t)}"><option value=""${k ? '' : ' selected'}>Cash</option><option value="future"${k === 'future' ? ' selected' : ''}>Future</option></select>`;
+}
+function setKind(t, kind) {
+  const c = store.get('kinds', {}); if (kind) c[t] = kind; else delete c[t]; store.set('kinds', c);
+  py.forget(t); dataInfo.delete(t); checkAllData();
+  toast(kind === 'future' ? `${t} is a future: positions take no cash, cash earns interest as collateral & shorts pay no borrow fee.` : `${t} is a cash instrument again.`);
+}
+function renderFutList() {
+  const box = $('#futList'); if (!box) return;
+  const list = sortedTickers().filter(t => !instruments.get(t).synthetic).sort((a, b) => (instruments.get(a).end < instruments.get(b).end ? -1 : 1));
+  box.innerHTML = list.map(t => `<label class="check"><input type="checkbox" value="${esc(t)}"> ${esc(t)} <span class="muted">to ${fmt.date(instruments.get(t).end)}</span></label>`).join('');
+}
+async function buildFuture(ev) {
+  ev.preventDefault();
+  const picked = $$('#futList input:checked').map(x => x.value).sort((a, b) => (instruments.get(a).end < instruments.get(b).end ? -1 : 1));
+  const name = $('#futName').value.trim().toUpperCase();
+  if (!validate([['futName', () => (/^[A-Z0-9.^=\-]{1,15}$/.test(name) ? (instruments.has(name) ? `${name} already exists; pick another name.` : null) : 'Enter a ticker such as ES.')],
+    ['futDays', between(0, 60, 'bars', true, 5)]])) return;
+  if (!setFieldError('futList', picked.length < 2 ? 'Tick two or more contracts.' : null)) return;
+  const btn = $('#futBuild'); loadingOn(btn);
+  try {
+    await py.ready; await py.ensure(picked);
+    const r = await py.call('build_futures', { contracts: picked, ticker: name, roll: $('#futRoll').value, days_before: parseNumber($('#futDays').value), adjust: $('#futAdj').value });
+    const k = store.get('kinds', {}); k[name] = 'future'; store.set('kinds', k);
+    await saveUpload(name, `${name} continuous (${picked.length} contracts)`, r.data, 'built from ' + picked.join(', '), true);
+    $('#futOut').textContent = `Built ${name}: ${fmt.int(r.data.dates.length)} bars, ${fmt.int(r.rolls.length)} roll${r.rolls.length === 1 ? '' : 's'} (${r.rolls.slice(0, 4).map(x => `${x.from}→${x.to} on ${fmt.date(x.date)}, gap ${fmt.num(x.gap, 2)}`).join('; ')}${r.rolls.length > 4 ? '; …' : ''}).`;
+    renderFutList();
+  } catch (e) { $('#futOut').textContent = (e.info && e.info.message) || e.message; }
+  finally { await loadingOff(btn); }
 }
 function setCurrency(t, ccy) {
   const c = store.get('currencies', {}); if (ccy) c[t] = ccy; else delete c[t]; store.set('currencies', c);
@@ -3766,7 +3812,7 @@ function showTab(name) {
   if (name === 'edit' && changed) requestAnimationFrame(() => editor.ta.focus({ preventScroll: true }));
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
-  if (name === 'data') { renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
+  if (name === 'data') { renderFutList(); renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
   if (name === 'history') renderRuns();
   document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
   store.set('tab', name);
@@ -3870,6 +3916,7 @@ function wire() {
   $('#runClear').onclick = () => armConfirm($('#runClear'), 'Confirm Clear', async () => { await idb.clear('runs'); runSel.clear(); renderRuns(); $('#cmpPanel').hidden = true; toast('Run history cleared.'); });
   $('#cmpClose').onclick = () => { $('#cmpPanel').hidden = true; kill('cmp'); };
   $('#wsExport').onclick = exportWorkspace;
+  $('#futForm').addEventListener('submit', buildFuture);
   $('#ghPush').onclick = ghPush; $('#ghPull').onclick = ghPull; $('#ghForm').addEventListener('submit', e => e.preventDefault());
   $('#ghRemember').onchange = () => { if (!$('#ghRemember').checked) store.del('ghToken'); };
   $('#wsFile').onchange = e => { if (e.target.files[0]) readWorkspace(e.target.files[0]); e.target.value = ''; };
@@ -3945,6 +3992,7 @@ function wire() {
   $('#instTable').addEventListener('change', e => {
     const sel = e.target.closest('select[data-calendar]'); if (sel) setCalendar(sel.dataset.calendar, sel.value);
     const cs = e.target.closest('select[data-currency]'); if (cs) setCurrency(cs.dataset.currency, cs.value);
+    const ks = e.target.closest('select[data-kind]'); if (ks) setKind(ks.dataset.kind, ks.value);
   });
   $('#instTable').addEventListener('click', e => {
     const q = e.target.closest('button[data-quality]');

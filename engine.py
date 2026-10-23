@@ -1031,6 +1031,8 @@ class DataSet:
             h = hashlib.sha256("\n".join(self.dates).encode())
             for col in (self.open, self.high, self.low, self.close, self.volume, self.dividends):
                 h.update(struct.pack("<%dd" % len(col), *col))
+            if self.kind == "future":                       # changes the accounting, so a different data fingerprint
+                h.update(b"\0future")
             for field in sorted(self.fundamentals):          # only when there are any: older hashes stay the same
                 dates, vals = self.fundamentals[field]
                 h.update(("\0%s\0%s" % (field, "\n".join(dates))).encode())
@@ -2362,6 +2364,7 @@ class Account:
         self.cfg = cfg
         self.panel = panel
         self.k = k = panel.k
+        self._futures = {a for a, ds in enumerate(panel.sets) if getattr(ds, "kind", "price") == "future"}
         self.rates = rates
         self.cash = cfg.cash
         self.shares = [0.0] * k
@@ -2464,15 +2467,17 @@ class Account:
         if days <= 0:
             return
         rate = self.rate_on(p.dates[t_prev])
-        if self.cash > 0:
-            x = self.cash * rate * days / 360.0
+        # Futures take no cash: the cash "spent" on them is still collateral and earns interest.
+        bal = self.cash + sum(self.shares[a] * p.mark(a, t_prev) for a in self._futures if self.shares[a])
+        if bal > 0:
+            x = bal * rate * days / 360.0
             self.carry["interest_earned"] += x
         else:
-            x = self.cash * (rate + cfg.margin_spread) * days / 360.0
+            x = bal * (rate + cfg.margin_spread) * days / 360.0
             self.carry["interest_paid"] -= x
         fee_total = 0.0
         for a, sh in enumerate(self.shares if min(self.shares) < 0 else ()):
-            if sh < 0:
+            if sh < 0 and a not in self._futures:    # shorting a future borrows nothing
                 fee = cfg.borrow_fees.get(p.tickers[a], cfg.borrow_fee)
                 if fee:
                     f = -sh * p.mark(a, t_prev) * fee * days / 360.0
@@ -5718,6 +5723,81 @@ def in_base(ds, base):
     return to_base_currency(ds, fx, inv, base)
 
 
+def continuous_futures(contracts, ticker="CONT", roll="days", days_before=5, adjust="ratio"):
+    """Stitch single-contract histories (oldest expiry first) into one continuous series.
+
+    roll='days' moves to the next contract `days_before` bars before the current one's last
+    bar; roll='volume' moves on the first day the next contract trades more (and never back).
+    adjust='ratio' multiplies all earlier prices by next/current at each roll (keeps returns
+    exact and prices positive), 'difference' adds the gap (keeps price changes exact; long
+    histories can go negative), 'none' splices raw prices (the roll gaps become fake
+    returns). Returns a DataSet of kind 'future' (no cash outlay, see Account.accrue) with
+    a .rolls list [{date, from, to, gap}]."""
+    if len(contracts) < 1:
+        raise ValueError("Give at least one contract.")
+    if adjust not in ("ratio", "difference", "none") or roll not in ("days", "volume"):
+        raise ValueError("adjust must be ratio, difference or none, and roll days or volume")
+    segs, rolls = [], []                      # (contract index, [dates]) pieces in order
+    cur, start = 0, None
+    for i, ds in enumerate(contracts):
+        if i and ds.dates[-1] <= contracts[i - 1].dates[-1]:
+            raise ValueError("Contracts must be in order of expiry: %s ends before %s." % (ds.ticker, contracts[i - 1].ticker))
+    for i, ds in enumerate(contracts):
+        nxt = contracts[i + 1] if i + 1 < len(contracts) else None
+        lo = 0 if start is None else _bisect_left(ds.dates, start)
+        if nxt is None:
+            hi = ds.n
+        elif roll == "days":
+            hi = max(lo + 1, ds.n - int(days_before))
+            while hi < ds.n and ds.dates[hi] not in nxt.index:
+                hi += 1                        # roll on a day both contracts trade
+        else:
+            hi = ds.n
+            for j in range(lo + 1, ds.n):
+                d = ds.dates[j]
+                k = nxt.index.get(d)
+                if k is not None and nxt.volume[k] > ds.volume[j]:
+                    hi = j
+                    break
+        if hi <= lo:
+            continue
+        segs.append((i, lo, hi))
+        if nxt is not None and hi < ds.n:
+            start = ds.dates[hi]
+        elif nxt is not None:
+            start = ds.dates[-1]
+    dates, o, h, l, c, v = [], [], [], [], [], []
+    for n_seg, (i, lo, hi) in enumerate(segs):
+        ds = contracts[i]
+        if n_seg:                              # a roll: adjust everything before it
+            d = ds.dates[lo]
+            prev = contracts[segs[n_seg - 1][0]]
+            pj = prev.index.get(d)
+            old = prev.close[pj] if pj is not None else c[-1]
+            new = ds.close[lo]
+            gap = new - old
+            rolls.append({"date": d, "from": prev.ticker, "to": ds.ticker, "gap": gap, "ratio": new / old if old else NAN})
+            if adjust == "ratio" and old > 0:
+                f = new / old
+                o, h, l, c = [x * f for x in o], [x * f for x in h], [x * f for x in l], [x * f for x in c]
+            elif adjust == "difference":
+                o, h, l, c = [x + gap for x in o], [x + gap for x in h], [x + gap for x in l], [x + gap for x in c]
+        for j in range(lo, hi):
+            dates.append(ds.dates[j]); o.append(ds.open[j]); h.append(ds.high[j]); l.append(ds.low[j])
+            c.append(ds.close[j]); v.append(ds.volume[j])
+    bad = sum(1 for x in c if x <= 0)
+    keep = [j for j in range(len(c)) if c[j] > 0]
+    out = DataSet(ticker, [dates[j] for j in keep], [c[j] for j in keep], [o[j] for j in keep],
+                  [h[j] for j in keep], [l[j] for j in keep], [v[j] for j in keep])
+    out.kind = "future"
+    out._cache.clear()
+    out.rolls = rolls
+    if bad:
+        out._issue("dropped", dates[0], "%d bars went to zero or below with difference adjustment and were left out; "
+                   "use ratio adjustment" % bad)
+    return out
+
+
 def _prepare(p):
     """Payload -> (datasets, benchmark, config, strategy, portfolio, rates).
 
@@ -5777,6 +5857,9 @@ def _downsample(n, limit=600):
 def api_load_data(p):
     """Load prices (and optionally 'dividends' / 'splits' as [[date, value], ...])."""
     ds = DataSet.from_dict(p["ticker"], p["data"])
+    if p.get("asset_kind") == "future":
+        ds.kind = "future"
+        ds._cache.clear()
     if p.get("currency"):
         c = str(p["currency"]).upper()
         if len(c) != 3 or not c.isalpha():
@@ -5800,7 +5883,7 @@ def _data_info(ds):
     return {"ticker": ds.ticker, "bars": ds.n, "start": ds.dates[0], "end": ds.dates[-1],
             "dividends": ds.dividend_source, "dividend_count": sum(1 for d in ds.dividends if d),
             "dividend_total": sum(ds.dividends), "price_basis": ds.price_basis,
-            "splits": ds.splits_applied, "fingerprint": ds.fingerprint(), "currency": ds.currency,
+            "splits": ds.splits_applied, "fingerprint": ds.fingerprint(), "currency": ds.currency, "asset_kind": ds.kind,
             "fundamentals": {f: {"count": len(v[0]), "first": v[0][0], "last": v[0][-1]} for f, v in ds.fundamentals.items()}}
 
 
@@ -6062,13 +6145,21 @@ def api_completions(p):
     return completions()
 
 
+def api_build_futures(p):
+    """Build a continuous contract from loaded single-contract instruments (oldest first)."""
+    sets = [_get(t) for t in p["contracts"]]
+    ds = continuous_futures(sets, p.get("ticker") or "CONT", p.get("roll", "days"), int(p.get("days_before", 5)), p.get("adjust", "ratio"))
+    return {"data": {"dates": ds.dates, "open": ds.open, "high": ds.high, "low": ds.low, "close": ds.close, "volume": ds.volume},
+            "rolls": ds.rolls, "issues": ds.issues}
+
+
 def api_check_module(p):
     return {"problem": module_name_problem(p.get("name"))}
 
 
 API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
-    "check_module": api_check_module, "risk": api_risk, "capacity": api_capacity,
+    "check_module": api_check_module, "build_futures": api_build_futures, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

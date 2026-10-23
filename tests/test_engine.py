@@ -1850,6 +1850,67 @@ def test_fx_for_intraday_bars_uses_the_previous_day():
     assert c.dates[0].startswith(days[1]), "bars before the first known FX rate are left out"
 
 
+# ----------------------------------------------------------------- futures -----
+
+def _contracts():
+    d = DEMO.dates
+    c1 = engine.DataSet("ESH", d[0:100], [100 + 0.5 * t for t in range(100)], volume=[1000 - 5 * t for t in range(100)])
+    c2 = engine.DataSet("ESM", d[50:200], [105 + 0.5 * (t + 50) for t in range(150)], volume=[20 * t for t in range(150)])
+    return c1, c2
+
+
+def test_continuous_futures_roll_and_adjust():
+    c1, c2 = _contracts()
+    d = DEMO.dates
+    for adjust in ("ratio", "difference", "none"):
+        f = engine.continuous_futures([c1, c2], "ES", roll="days", days_before=5, adjust=adjust)
+        assert f.kind == "future" and f.dates == d[:200] and len(f.rolls) == 1
+        r = f.rolls[0]
+        assert r["date"] == d[95] and r["from"] == "ESH" and r["to"] == "ESM" and abs(r["gap"] - 5) < 1e-12
+        k = 95
+        assert f.close[k:] == c2.close[45:], "after the roll: the new contract's own prices"
+        if adjust == "ratio":
+            # rolled at the roll day's close: that day's return is the old contract's, the next one's the new contract's
+            assert abs(f.close[k] / f.close[k - 1] - c1.close[95] / c1.close[94]) < 1e-12
+            assert abs(f.close[k + 1] / f.close[k] - c2.close[46] / c2.close[45]) < 1e-12
+            assert abs(f.close[10] / f.close[9] - c1.close[10] / c1.close[9]) < 1e-12, "returns before the roll unchanged"
+        elif adjust == "difference":
+            assert abs((f.close[k] - f.close[k - 1]) - (c1.close[95] - c1.close[94])) < 1e-12
+            assert abs(f.close[0] - (c1.close[0] + 5)) < 1e-12
+        else:
+            assert abs(f.close[k] - f.close[k - 1] - (c2.close[45] - c1.close[94])) < 1e-12, "raw splice keeps the gap"
+    vol = engine.continuous_futures([c1, c2], "ES", roll="volume")
+    j = next(t for t in range(50, 100) if c2.volume[t - 50] > c1.volume[t])
+    assert vol.rolls[0]["date"] == d[j]
+    try:
+        engine.continuous_futures([c2, c1])
+        raise AssertionError("out-of-order contracts accepted")
+    except ValueError:
+        pass
+
+
+def test_futures_take_no_cash_and_pay_no_borrow():
+    d = DEMO.dates[:300]
+    flat = [100.0] * 300
+    fut = engine.DataSet("FUT", d, flat)
+    fut.kind = "future"
+    stock = engine.DataSet("STK", d, flat)
+    cfg = engine.Config(slippage_bps=0, cash_rate=0.05, allow_short=True, borrow_fee=0.02, margin_spread=0.01)
+    long_code = "def on_bar(ctx):\n    return 1.0\n"
+    rf = engine.backtest(engine.Strategy.from_code(long_code), fut, cfg)
+    rs = engine.backtest(engine.Strategy.from_code(long_code), stock, cfg)
+    days = (engine._dt.date.fromisoformat(d[-1]) - engine._dt.date.fromisoformat(d[0])).days
+    assert rf.carry["interest_earned"] > 0.9 * 10000 * 0.05 * (days - 5) / 360, "a flat future earns interest on its collateral"
+    assert rs.carry["interest_earned"] < 10, "a fully invested stock position has no cash left (only the first day's)"
+    short_code = "def on_bar(ctx):\n    return -1.0\n"
+    sf = engine.backtest(engine.Strategy.from_code(short_code), fut, cfg)
+    ss = engine.backtest(engine.Strategy.from_code(short_code), stock, cfg)
+    assert sf.carry["borrow_paid"] == 0 and ss.carry["borrow_paid"] > 0
+    lev = engine.backtest(engine.Strategy.from_code("def on_bar(ctx):\n    return 2.0\n"), fut, engine.Config(slippage_bps=0, cash_rate=0.05, max_leverage=3, margin_spread=0.01))
+    assert lev.carry["interest_paid"] == 0, "2x futures exposure borrows no cash"
+    assert fut.fingerprint() != stock.fingerprint()
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
