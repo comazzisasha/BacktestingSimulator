@@ -103,6 +103,7 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#strategies">Built-In Strategies</a></li>
       <li><a href="#tools">Research Tools</a></li>
       <li><a href="#audit">Saving, Exporting &amp; Auditing</a></li>
+      <li><a href="#paper">Paper Trading</a></li>
       <li><a href="#pitfalls">Pitfalls</a></li>
       <li><a href="#running">Running It Yourself</a></li>
       <li><a href="#layout">How the Code Is Organized</a></li>
@@ -487,6 +488,13 @@ for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5):
     <h3 id="github">GitHub Sync <span class="muted">(optional)</span></h3>
     <p>On the Data tab, GitHub Sync keeps your saved strategies and modules in a GitHub repository as <code>.py</code> files: <code>&lt;folder&gt;/strategies/&lt;name&gt;.py</code>, <code>&lt;folder&gt;/modules/&lt;name&gt;.py</code> and a <code>quantlab.json</code> with the strategy names. <b>Push</b> makes one commit with all of them (unchanged files make no commit; files you deleted in QuantLab stay in the repository). <b>Pull</b> lists what would be added or replaced before changing anything, and can be undone. It needs a fine-grained personal access token with <b>Contents: read &amp; write</b> on that repository. The page sends it only to api.github.com, keeps it for the tab unless you tick Remember, and leaves it out of workspace exports. The code for this is in <code>github-sync.js</code>, which loads only when you use it.</p>
 
+    <h2 id="paper">Paper Trading &amp; the Broker Bridge</h2>
+    <p><b>Next Session.</b> Every backtest also asks the strategy for its decision at the last close and shows the orders it would send for the next bar, sized at that close (inside the rebalance band: none), plus resting limit and stop orders. Download them as CSV or copy them as JSON. In Python: <code>engine.backtest(..., decide_last=True).next</code>.</p>
+    <p><b>Paper accounts</b> (Paper tab) freeze the strategy code, modules, settings, market and a start date. <b>Update with Latest Data</b> re-runs the frozen setup from its start date on the data loaded now (add the newest prices on the Data tab first) and shows the account's equity, positions and next orders. Each update is logged with the code hash and data fingerprints, and if equity on a day recorded earlier comes out different (revised prices, a different engine), the account says so and keeps both. Nothing is sent anywhere.</p>
+    <p><b>Broker bridge</b> (optional, needs a server). The page never talks to a broker. <code>tools/bridge/broker_bridge.py</code> is a small standard-library server you run yourself; <b>Send to Bridge</b> POSTs the next orders to it as JSON with a shared secret, after you confirm. It checks the secret, logs every request to <code>bridge-log.jsonl</code>, and by default only answers with the orders it would place (dry run). With <code>--alpaca</code> it places them in an Alpaca paper account (keys from <code>APCA_API_KEY_ID</code> and <code>APCA_API_SECRET_KEY</code>); <code>--alpaca --live</code> uses the live account. Orders filled at the next open become market-on-open orders (<i>opg</i>), at the close <i>cls</i>; fractional quantities go as day orders. Use it with care: a backtest is not a trading system, and nothing here checks your broker's positions before sending.</p>
+<pre><code>python tools/bridge/broker_bridge.py --secret my-secret              # dry run on localhost:8787
+python tools/bridge/broker_bridge.py --secret my-secret --alpaca     # Alpaca paper account</code></pre>
+
     <h2 id="pitfalls">Pitfalls</h2>
     <ul>
       <li><b>Overfitting.</b> With enough parameters, any rule fits the past. Prefer few parameters and round numbers, and always check out of sample.</li>
@@ -521,6 +529,7 @@ print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['ma
         <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
         <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports. Sweeps and walk-forward grids start helper workers too.</td></tr>
         <tr><td><code>github-sync.js</code></td><td>Optional GitHub Sync; loaded only when used.</td></tr>
+        <tr><td><code>tools/bridge/</code></td><td>Optional broker bridge server (dry run, Alpaca paper or live); not part of the web app. Tests: <code>tests/test_bridge.py</code>.</td></tr>
         <tr><td><code>vendor/</code></td><td>Chart.js and the pyflakes wheel (MIT licence) used for the editor's Problems.</td></tr>
         <tr><td><code>pyodide/</code></td><td>The Python runtime and the NumPy wheel. Other package wheels from the Pyodide 0.26.4 release placed here are used instead of the CDN.</td></tr>
         <tr><td><code>data/</code></td><td>Bundled CSV files and <code>manifest.json</code>.</td></tr>

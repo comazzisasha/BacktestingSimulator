@@ -464,6 +464,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       <a href="#tools" data-tab="tools">Research Tools</a>
       <a href="#data" data-tab="data">Data</a>
       <a href="#history" data-tab="history">History</a>
+      <a href="#paper" data-tab="paper">Paper</a>
       <a href="docs.html">Docs</a>
     </nav>
     <div class="status" id="status" data-state="loading" role="status" aria-live="polite"><span class="dot" aria-hidden="true"></span><span id="statusText">Loading Python…</span></div>
@@ -689,6 +690,13 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <section class="panel" id="pxPanel" aria-labelledby="h-px">
             <div class="panel-h"><h3 id="h-px">Price &amp; Trades</h3><ul class="legend" id="pxLegend"></ul><span class="spacer"></span><span class="muted" id="pxInfo"></span></div>
             <div class="panel-b"><div class="chart"><canvas id="chPrice" role="img" aria-label="Price with buy and sell markers"></canvas><div class="chart-empty">Prices & fills appear after the first run.</div></div></div>
+          </section>
+
+          <section class="panel" id="nextPanel" aria-labelledby="h-next" hidden>
+            <div class="panel-h"><h3 id="h-next">Next Session</h3><span class="muted" id="nextInfo"></span><span class="spacer"></span>
+              <button class="btn small" id="nextCsv" type="button">Orders CSV</button><button class="btn small" id="nextJson" type="button">Copy as JSON</button><a class="btn small" href="#paper">Paper Trade</a></div>
+            <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Orders for the next session"><table id="nextTable"></table></div>
+              <p class="help">What the strategy decided at the last close, sized at that close: the orders it would send for the next bar (at its open, or its close with close execution). Nothing is sent anywhere.</p></div>
           </section>
 
           <section class="panel" id="attrPanel" aria-labelledby="h-attr" hidden>
@@ -946,6 +954,50 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
   </section>
 
   <!-- ================================================================ HISTORY -->
+  <section class="view stack" id="view-paper" aria-labelledby="h-paper" hidden>
+    <div class="viewhead"><h1 id="h-paper">Paper Trading</h1><p>Freeze a strategy, its settings & market on a start date, then update it as new prices arrive: the same engine runs it forward, every update is logged with the code & data fingerprints, and any change to past results (revised data, edited code) is flagged. Orders stay in this browser unless you set up the optional broker bridge below.</p></div>
+    <section class="panel" aria-labelledby="h-paccts">
+      <div class="panel-h"><h2 id="h-paccts">Paper Accounts</h2><span class="spacer"></span><button class="btn small primary" id="paperNew" type="button" aria-expanded="false" aria-controls="paperNewForm">Start Paper Trading…</button></div>
+      <div class="panel-b">
+        <form class="picker" id="paperNewForm" hidden novalidate>
+          <p class="help" id="paperNewWhat"></p>
+          <div class="grid3">
+            <div class="field"><label for="paperName">Name</label><input type="text" id="paperName" name="paper-name" maxlength="60" autocomplete="off" aria-describedby="paperName-err"><p class="ferr" id="paperName-err" hidden></p></div>
+            <div class="field"><label for="paperStart">Start Trading On</label><input type="date" id="paperStart" name="paper-start" aria-describedby="paperStart-help"><p class="help" id="paperStart-help">The first bar the account may trade. Today’s last close by default; an earlier date replays the days since.</p></div>
+          </div>
+          <div class="row"><button class="btn small primary" type="submit">Start</button><button class="btn small" id="paperCancel" type="button">Cancel</button></div>
+        </form>
+        <div class="tablebox" id="paperList"></div>
+      </div>
+    </section>
+    <section class="panel" id="paperView" hidden aria-labelledby="h-pview">
+      <div class="panel-h"><h2 id="h-pview"></h2><span class="muted" id="paperMeta"></span><span class="spacer"></span>
+        <button class="btn small primary" id="paperUpdate" type="button">Update with Latest Data</button><button class="btn small danger" id="paperDelete" type="button">Delete Account</button></div>
+      <div class="panel-b stack">
+        <div id="paperAlert"></div>
+        <dl class="kpis" id="paperKpis"></dl>
+        <div class="chart mid"><canvas id="chPaper" role="img" aria-label="Paper account equity since its start"></canvas></div>
+        <div class="two">
+          <section><h3 class="subhead">Positions</h3><div class="tablebox" tabindex="0" aria-label="Positions"><table id="paperPos"></table></div></section>
+          <section><h3 class="subhead">Orders for the Next Session</h3><div class="tablebox" tabindex="0" aria-label="Next orders"><table id="paperOrders"></table></div>
+            <div class="row" style="margin-top:8px"><button class="btn small" id="paperCsv" type="button">Orders CSV</button><button class="btn small" id="paperJson" type="button">Copy as JSON</button><button class="btn small" id="paperSend" type="button" disabled title="Set up the broker bridge below first">Send to Bridge</button></div></section>
+        </div>
+        <h3 class="subhead">Update Log</h3>
+        <div class="tablebox" tabindex="0" aria-label="Update log"><table id="paperLog"></table></div>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="h-bridge">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-bridge">Broker Bridge <span class="muted">(optional, needs a server)</span></h2><p>QuantLab never talks to a broker itself. To route orders, run the small bridge in <code translate="no">tools/bridge/</code> (or your own service) & give its address here: <b>Send to Bridge</b> then POSTs the orders as JSON with your shared secret, after you confirm. The bridge decides what to do with them; it starts in dry-run mode.</p></div></div>
+      <form class="panel-b" id="bridgeForm" novalidate>
+        <div class="grid3">
+          <div class="field"><label for="bridgeUrl">Bridge URL</label><input type="text" id="bridgeUrl" name="bridge-url" placeholder="http://localhost:8787/orders" autocomplete="off" spellcheck="false" translate="no" aria-describedby="bridgeUrl-err"><p class="ferr" id="bridgeUrl-err" hidden></p></div>
+          <div class="field"><label for="bridgeSecret">Shared Secret</label><input type="password" id="bridgeSecret" name="bridge-secret" autocomplete="off" aria-describedby="bridgeSecret-help"><p class="help" id="bridgeSecret-help">Kept for this tab only; sent as the X-QuantLab-Secret header.</p></div>
+        </div>
+        <div class="row"><button class="btn small" type="submit">Save Bridge</button><span class="muted" id="bridgeStatus" aria-live="polite"></span></div>
+      </form>
+    </section>
+  </section>
+
   <section class="view stack" id="view-history" aria-labelledby="h-history" hidden>
     <div class="viewhead"><h1 id="h-history">Run History</h1><p>Every backtest is saved in this browser with exactly what produced it: the code & its SHA-256, parameters, settings, market, data fingerprints & engine version. Compare two runs side by side, restore one, or re-run it to prove it reproduces.</p></div>
     <section class="panel" aria-labelledby="h-runs">
@@ -2419,7 +2471,7 @@ async function runBacktest({ fresh = false, modules = null } = {}) {
   setStatus('busy', 'Running backtest…');
   try {
     const fam = trials.family(p), tk = trials.key(p);
-    const call = { ...p, trials: trials.stats(fam, tk) };
+    const call = { ...p, trials: trials.stats(fam, tk), decide_last: true };
     const ck = resultCache.key(call); let r = fresh ? null : resultCache.get(ck);
     if (r) r = { ...r, cached: true, _origin: r };
     else {
@@ -2519,7 +2571,7 @@ function renderResults(r) {
   $('#rollInfo').textContent = `${r.rolling.window}-day window, annualized`;
   $('#volInfo').textContent = `${r.rolling.vol_window}-day window, annualized`;
   $('#logPanel').hidden = !r.logs; $('#logs').textContent = r.logs || '';
-  renderLimits(r.limits);
+  renderLimits(r.limits); renderNext(r);
   const more = (r.logs_total || 0) > (r.logs || '').length; $('#logMore').hidden = !more;
   if (more) $('#logMoreText').textContent = `Showing the start & end of ${fmt.int(r.logs_total)} characters.`;
 }
@@ -3801,6 +3853,133 @@ async function applyWorkspace() {
   toast(`Imported ${fmt.int(Object.keys(local.mine || {}).length)} strategies, ${fmt.int((ws.instruments || []).length)} files & ${fmt.int((ws.runs || []).length)} runs.`);
 }
 
+/* ------------------------------------------------------ next session -- */
+function ordersCSV(next, label) {
+  const head = `# ${label}: orders decided at the close of ${next.date}, sized at that close\n`;
+  return head + toCSV(['ticker', 'side', 'qty', 'target_shares', 'target_weight', 'ref_price', 'value', 'type', 'at'],
+    next.orders.map(o => [o.ticker, o.side, o.qty, o.target_shares, o.target_weight, o.ref_price, o.value, o.type, o.at]));
+}
+function ordersJSON(next, label) { return JSON.stringify({ source: 'QuantLab', label, decided: next.date, equity: next.equity, orders: next.orders, resting: next.resting }, null, 2); }
+function orderRows(next) {
+  if (!next.orders.length && !next.resting.length) return '<tbody><tr><td class="muted">No orders: the positions already match the targets.</td></tr></tbody>';
+  let h = '<thead><tr><th scope="col">Instrument</th><th scope="col">Side</th><th scope="col" class="n">Quantity</th><th scope="col" class="n">Target Weight</th><th scope="col" class="n">At Last Close</th><th scope="col" class="n">Value</th><th scope="col">When</th></tr></thead><tbody>';
+  for (const o of next.orders) h += `<tr><td translate="no">${esc(o.ticker)}</td><td class="${o.side === 'buy' ? 'pos' : 'neg'}">${o.side}</td><td class="n">${fmt.num(Math.abs(o.qty), Math.abs(o.qty) < 100 ? 4 : 2)}</td><td class="n">${o.target_weight == null ? '—' : fmt.pct(o.target_weight, 1)}</td><td class="n">${fmt.price(o.ref_price)}</td><td class="n">${fmt.money(Math.abs(o.value))}</td><td>next ${esc(o.at)}</td></tr>`;
+  for (const o of next.resting) h += `<tr><td translate="no">${esc(o.ticker)}</td><td>${esc(o.kind === 'delta' ? (o.delta > 0 ? 'buy' : 'sell') : 'target')}</td><td class="n">${fmt.num(Math.abs(o.delta != null ? o.delta : o.target || 0), 2)}</td><td class="n">—</td><td class="n">${o.limit != null ? 'limit ' + fmt.price(o.limit) : ''}${o.stop != null ? ' stop ' + fmt.price(o.stop) : ''}</td><td class="n">—</td><td>resting (${esc(o.tif)})</td></tr>`;
+  return h + '</tbody>';
+}
+function renderNext(r) {
+  const n = r.next; $('#nextPanel').hidden = !n; if (!n) return;
+  $('#nextInfo').textContent = `${n.decided ? 'Decided' : 'Still to fill'} at the close of ${fmt.date(n.date)} · equity ${fmt.money(n.equity)} · ${fmt.int(n.orders.length)} order${n.orders.length === 1 ? '' : 's'}${n.resting.length ? ` + ${fmt.int(n.resting.length)} resting` : ''}`;
+  $('#nextTable').innerHTML = orderRows(n);
+}
+async function copyText(text, what) {
+  try { await navigator.clipboard.writeText(text); toast(`Copied ${what}.`); } catch (e) { downloadFile('orders.json', text, 'application/json'); toast(`Couldn’t copy; downloaded ${what} instead.`); }
+}
+
+/* ------------------------------------------------------ paper trading -- */
+// A paper account freezes a payload (code, modules, settings, market) and a start date. Each
+// update re-runs it from that date on the latest data; the log keeps every update with its
+// fingerprints, and past equity that changes between updates is flagged.
+const paperStore = {
+  all() { return store.get('paper', []); },
+  save(list) { store.set('paper', list); },
+  get(id) { return this.all().find(a => a.id === id); },
+  put(acct) { const l = this.all(); const i = l.findIndex(a => a.id === acct.id); if (i >= 0) l[i] = acct; else l.push(acct); this.save(l); },
+};
+let paperSel = null;
+function paperOpenForm() {
+  const f = $('#paperNewForm'), open = f.hidden; togglePicker($('#paperNew'), f); if (!open) return;
+  const p = payloadBase(), r = marketRange();
+  $('#paperNewWhat').textContent = `${currentSource().name} on ${p.tickers ? p.tickers.join(', ') : p.ticker}, with the current Account & Execution settings${Object.keys(p.modules || {}).length ? ' and modules' : ''}. They are frozen: later edits don’t change this account.`;
+  $('#paperName').value = `${currentSource().name} · ${p.tickers ? `${p.tickers.length} instruments` : p.ticker}`;
+  $('#paperStart').value = r ? r.end : ''; if (r) { $('#paperStart').min = r.start; $('#paperStart').max = r.end; }
+  $('#paperName').focus();
+}
+async function paperCreate(ev) {
+  ev.preventDefault();
+  if (!setFieldError('paperName', $('#paperName').value.trim() ? null : 'Enter a name.')) return;
+  const p = await freshPayload(); if (!payloadTickers(p).length) { toast('Pick an instrument on the Backtest tab first.'); return; }
+  const acct = { id: Date.now().toString(36), name: $('#paperName').value.trim(), created: new Date().toISOString(), start: $('#paperStart').value || null,
+    strategy: currentSource().name, payload: { ...p, start: null, end: null }, marks: {}, log: [] };
+  paperStore.put(acct); togglePicker($('#paperNew'), $('#paperNewForm'));
+  paperSel = acct.id; renderPaperList(); await paperUpdate();
+}
+function renderPaperList() {
+  const list = paperStore.all();
+  if (!list.length) { $('#paperList').innerHTML = '<p class="muted" style="margin:0">No paper accounts yet. Set up a strategy on the Backtest tab, then press Start Paper Trading.</p>'; $('#paperView').hidden = true; return; }
+  $('#paperList').innerHTML = '<table><caption class="sr">Paper accounts</caption><thead><tr><th scope="col">Account</th><th scope="col">Started</th><th scope="col">Last Update</th><th scope="col" class="n">Equity</th><th scope="col" class="n">Since Start</th><th scope="col"><span class="sr">Open</span></th></tr></thead><tbody>' +
+    list.map(a => { const l = a.log[a.log.length - 1]; const ret = l ? l.equity / l.start_equity - 1 : null;
+      return `<tr${a.id === paperSel ? ' aria-current="true"' : ''}><td>${esc(a.name)}</td><td class="tnum">${a.start ? fmt.date(a.start) : '—'}</td><td class="tnum">${l ? fmt.date(l.last_date) : '—'}</td><td class="n">${l ? fmt.money(l.equity) : '—'}</td><td class="n ${sign(ret)}">${ret == null ? '—' : fmt.pct(ret, 2, true)}</td><td><button class="btn small" type="button" data-paper="${a.id}">Open</button></td></tr>`; }).join('') + '</tbody></table>';
+}
+async function paperUpdate() {
+  const acct = paperStore.get(paperSel); if (!acct) return;
+  const btn = $('#paperUpdate'); loadingOn(btn); busy(true, 'Updating paper account…');
+  try {
+    const p = { ...acct.payload, start: acct.start, end: null, decide_last: true };
+    await py.ready; await ensurePayload(p);
+    const r = await py.call('run', p);
+    const changed = [];
+    r.dates.forEach((d, i) => { const was = acct.marks[d]; if (was != null && Math.abs(r.equity[i] / was - 1) > 1e-9) changed.push({ d, was, now: r.equity[i] }); });
+    for (let i = 0; i < r.dates.length; i++) if (acct.marks[r.dates[i]] == null) acct.marks[r.dates[i]] = r.equity[i];
+    const last = r.dates[r.dates.length - 1], prev = acct.log[acct.log.length - 1];
+    const entry = { at: new Date().toISOString(), last_date: last, equity: r.equity[r.equity.length - 1], start_equity: r.equity[0], bars: r.dates.length,
+      code_sha256: r.provenance.code_sha256, data: r.provenance.data, modules: r.provenance.modules, engine: r.provenance.engine_version,
+      orders: r.next ? r.next.orders : [], revised: changed.length ? { days: changed.length, first: changed[0] } : null };
+    if (!prev || prev.last_date !== last || changed.length) acct.log.push(entry); else acct.log[acct.log.length - 1] = { ...entry, at: prev.at, checked: entry.at };
+    paperStore.put(acct); renderPaper(acct, r, changed);
+  } catch (e) { $('#paperAlert').innerHTML = `<p class="ferr">${esc((e.info && e.info.message) || e.message)}</p>`; }
+  finally { busy(false); await loadingOff(btn); renderPaperList(); }
+}
+function renderPaper(acct, r, changed) {
+  $('#paperView').hidden = false; $('#h-pview').textContent = acct.name;
+  $('#paperMeta').textContent = `${acct.strategy} · started ${acct.start ? fmt.date(acct.start) : 'at the first bar'} · data to ${fmt.date(r.dates[r.dates.length - 1])}`;
+  const m = r.metrics, eq = r.equity;
+  $('#paperAlert').innerHTML = changed.length
+    ? `<ul class="notes"><li><strong>Past results changed on ${fmt.int(changed.length)} day${changed.length === 1 ? '' : 's'}</strong> since earlier updates (first ${fmt.date(changed[0].d)}: ${fmt.money(changed[0].was)} then, ${fmt.money(changed[0].now)} now). The data was revised or the engine changed; the log keeps both.</li></ul>`
+    : (r.notes || []).length ? `<ul class="notes">${r.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : '';
+  $('#paperKpis').innerHTML = [['Equity', fmt.money(eq[eq.length - 1])], ['Since Start', fmt.pct(eq[eq.length - 1] / eq[0] - 1, 2, true)], ['Max Drawdown', fmt.pct(m.max_drawdown, 1)], ['Bars Traded', fmt.int(eq.length)]]
+    .map(([k, v]) => `<div class="kpi"><dt>${k}</dt><dd><span class="v">${v}</span></dd></div>`).join('');
+  const P = palette(); kill('paper');
+  if (window.Chart) { const o = baseOptions(r.dates, P, v => fmt.money(v)); o.plugins.legend = legendTop(P);
+    charts.paper = new Chart($('#chPaper'), { data: { datasets: [line('Paper account', eq, P.strat, { borderWidth: 2 }), line(r.benchmark || 'Benchmark', r.bench_equity, P.bench, { borderWidth: 1.2, borderDash: [4, 3] })] }, options: o }); }
+  const n = r.next || { positions: {}, orders: [], resting: [], equity: eq[eq.length - 1] };
+  const pos = Object.entries(n.positions);
+  $('#paperPos').innerHTML = pos.length ? '<thead><tr><th scope="col">Instrument</th><th scope="col" class="n">Shares</th><th scope="col" class="n">Weight</th></tr></thead><tbody>' +
+    pos.map(([t, sh]) => { const w = r.portfolio ? r.weights.full[t][r.weights.full[t].length - 1] : r.exposure[r.exposure.length - 1]; return `<tr><td translate="no">${esc(t)}</td><td class="n">${fmt.num(sh, 4)}</td><td class="n">${fmt.pct(w, 1)}</td></tr>`; }).join('') + `<tr><td>Cash</td><td class="n">${fmt.money(n.cash)}</td><td></td></tr></tbody>`
+    : '<tbody><tr><td class="muted">All cash.</td></tr></tbody>';
+  $('#paperOrders').innerHTML = orderRows(n);
+  $('#paperSend').disabled = !bridgeConfig().url || !n.orders.length;
+  $('#paperLog').innerHTML = '<thead><tr><th scope="col">Updated</th><th scope="col">Data To</th><th scope="col" class="n">Equity</th><th scope="col" class="n">Orders</th><th scope="col">Code</th><th scope="col">Notes</th></tr></thead><tbody>' +
+    acct.log.slice().reverse().map(l => `<tr><td class="tnum">${esc(new Date(l.at).toLocaleString(LOCALE))}</td><td class="tnum">${fmt.date(l.last_date)}</td><td class="n">${fmt.money(l.equity)}</td><td class="n">${fmt.int((l.orders || []).length)}</td><td><code translate="no">${esc((l.code_sha256 || '').slice(0, 10))}</code></td>` +
+      `<td>${l.revised ? `<span class="badge warn">past results changed on ${fmt.int(l.revised.days)} day${l.revised.days === 1 ? '' : 's'}</span>` : ''}${l.sent ? `<span class="badge ${l.sent.ok ? 'ok' : 'bad'}">sent to bridge: ${esc(String(l.sent.status))}</span>` : ''}</td></tr>`).join('') + '</tbody>';
+  paperLast = { acct, r };
+}
+let paperLast = null;
+function bridgeConfig() { let secret = ''; try { secret = sessionStorage.getItem('ql.bridgeSecret') || ''; } catch (e) { /* none */ } return { url: store.get('bridge', {}).url || '', secret }; }
+function saveBridge(ev) {
+  ev.preventDefault();
+  const url = $('#bridgeUrl').value.trim();
+  if (!setFieldError('bridgeUrl', !url || /^https?:\/\/[^\s]+$/i.test(url) ? null : 'Enter an http:// or https:// address.')) return;
+  store.set('bridge', { url }); try { sessionStorage.setItem('ql.bridgeSecret', $('#bridgeSecret').value); } catch (e) { /* this page only */ }
+  $('#bridgeStatus').textContent = url ? `Orders will go to ${url} when you press Send to Bridge & confirm.` : 'Bridge off.';
+  if (paperLast) $('#paperSend').disabled = !url || !(paperLast.r.next && paperLast.r.next.orders.length);
+}
+async function paperSend() {
+  const btn = $('#paperSend'); if (!paperLast) return;
+  const { acct, r } = paperLast, cfg = bridgeConfig();
+  armConfirm(btn, `Send ${fmt.int(r.next.orders.length)} Orders?`, async () => {
+    loadingOn(btn); let status, ok = false;
+    try {
+      const res = await fetch(cfg.url, { method: 'POST', headers: { 'Content-Type': 'application/json', ...(cfg.secret ? { 'X-QuantLab-Secret': cfg.secret } : {}) },
+        body: JSON.stringify({ source: 'QuantLab', account: acct.name, account_id: acct.id, decided: r.next.date, equity: r.next.equity, orders: r.next.orders, code_sha256: r.provenance.code_sha256 }) });
+      status = res.status; ok = res.ok; let body = ''; try { body = (await res.text()).slice(0, 300); } catch (e) { /* none */ }
+      toast(ok ? `The bridge accepted ${fmt.int(r.next.orders.length)} orders${body ? ': ' + body : '.'}` : `The bridge answered ${status}${body ? ': ' + body : ''}.`);
+    } catch (e) { status = 'unreachable'; toast(`Couldn’t reach the bridge at ${cfg.url}: ${e.message}`); }
+    finally { await loadingOff(btn); }
+    const a = paperStore.get(acct.id); const l = a.log[a.log.length - 1]; if (l) { l.sent = { at: new Date().toISOString(), status, ok }; paperStore.put(a); renderPaper(a, r, []); }
+  });
+}
+
 /* --------------------------------------------- GitHub sync (optional) -- */
 // github-sync.js does the talking to api.github.com; it loads the first time it is used.
 let ghLib = null;
@@ -3863,7 +4042,7 @@ async function ghPull() {
 }
 
 /* ---------------------------------------------------------------- tabs -- */
-const TAB_TITLES = { backtest: 'Backtest', edit: 'Strategy Editor', tools: 'Research Tools', data: 'Data', history: 'Run History' };
+const TAB_TITLES = { backtest: 'Backtest', edit: 'Strategy Editor', tools: 'Research Tools', data: 'Data', history: 'Run History', paper: 'Paper Trading' };
 // The Editor tab borrows these elements from the Backtest tab instead of copying them,
 // so there is one editor (one undo history) & one set of results. A comment marks each home.
 const EDIT_DOCK = [['strategyBody', 'editSlotCode'], ['errBox', 'editSlotSide'], ['notes', 'editSlotSide'], ['kpis', 'editSlotSide'], ['eqPanel', 'editSlotSide'], ['logPanel', 'editSlotSide']];
@@ -3901,6 +4080,7 @@ function showTab(name) {
   if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
   if (name === 'data') { renderFutList(); renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
   if (name === 'history') renderRuns();
+  if (name === 'paper') { renderPaperList(); const b = store.get('bridge', {}); $('#bridgeUrl').value = b.url || ''; $('#bridgeSecret').value = bridgeConfig().secret; }
   document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
   store.set('tab', name);
   if (changed && name !== 'edit') { const h1 = $(`#view-${name} h1`); if (h1) { h1.tabIndex = -1; h1.focus({ preventScroll: true }); } }
@@ -4003,6 +4183,17 @@ function wire() {
   $('#runClear').onclick = () => armConfirm($('#runClear'), 'Confirm Clear', async () => { await idb.clear('runs'); runSel.clear(); renderRuns(); $('#cmpPanel').hidden = true; toast('Run history cleared.'); });
   $('#cmpClose').onclick = () => { $('#cmpPanel').hidden = true; kill('cmp'); };
   $('#wsExport').onclick = exportWorkspace;
+  $('#nextCsv').onclick = () => { if (lastRun && lastRun.result.next) downloadFile(exportStem(lastRun.result) + '_next_orders.csv', ordersCSV(lastRun.result.next, lastRun.result.strategyName), 'text/csv'); };
+  $('#nextJson').onclick = () => { if (lastRun && lastRun.result.next) copyText(ordersJSON(lastRun.result.next, lastRun.result.strategyName), 'the orders as JSON'); };
+  $('#paperNew').onclick = paperOpenForm; $('#paperCancel').onclick = () => togglePicker($('#paperNew'), $('#paperNewForm'));
+  $('#paperNewForm').addEventListener('submit', paperCreate);
+  $('#paperList').addEventListener('click', e => { const b = e.target.closest('[data-paper]'); if (b) { paperSel = b.dataset.paper; renderPaperList(); paperUpdate(); } });
+  $('#paperUpdate').onclick = paperUpdate;
+  $('#paperDelete').onclick = () => armConfirm($('#paperDelete'), 'Confirm Delete', () => { const a = paperStore.get(paperSel); paperStore.save(paperStore.all().filter(x => x.id !== paperSel)); paperSel = null; $('#paperView').hidden = true; renderPaperList();
+    toast(`Deleted ${a.name}.`, { label: 'Undo', run: () => { paperStore.put(a); renderPaperList(); } }); });
+  $('#paperCsv').onclick = () => { if (paperLast) downloadFile(`quantlab_paper_${paperLast.acct.id}_orders.csv`, ordersCSV(paperLast.r.next, paperLast.acct.name), 'text/csv'); };
+  $('#paperJson').onclick = () => { if (paperLast) copyText(ordersJSON(paperLast.r.next, paperLast.acct.name), 'the orders as JSON'); };
+  $('#paperSend').onclick = paperSend; $('#bridgeForm').addEventListener('submit', saveBridge);
   $('#futForm').addEventListener('submit', buildFuture);
   $('#ghPush').onclick = ghPush; $('#ghPull').onclick = ghPull; $('#ghForm').addEventListener('submit', e => e.preventDefault());
   $('#ghRemember').onchange = () => { if (!$('#ghRemember').checked) store.del('ghToken'); };

@@ -3336,15 +3336,16 @@ def _remember(cache, key, value, limit=8):
 
 
 def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_output=True, rates=None,
-             signal_key=None):
+             signal_key=None, decide_last=False):
     """Run a single-instrument strategy over ds and return a Result.
 
     Timing: on every bar the strategy sees data up to and including that bar's
     close. Orders it places are filled on the NEXT bar (at the open, or at the
     close with execution='close'), so a strategy can never trade on information
-    it could not have had.
+    it could not have had. decide_last=True also asks the strategy on the final bar and
+    puts the orders it would send for the next session in Result.next (see next_orders).
     """
-    return _run_backtest(strategy, Panel([ds]), cfg, start, end, bench, False, capture_output, rates, signal_key)
+    return _run_backtest(strategy, Panel([ds]), cfg, start, end, bench, False, capture_output, rates, signal_key, decide_last)
 
 
 _PANELS = {}
@@ -3363,7 +3364,7 @@ def shared_panel(datasets):
 
 
 def backtest_portfolio(strategy, datasets, cfg=None, start=None, end=None, bench=None,
-                       capture_output=True, rates=None, signal_key=None):
+                       capture_output=True, rates=None, signal_key=None, decide_last=False):
     """Run a portfolio strategy over several instruments on their shared calendar.
 
     on_bar(ctx) returns {ticker: target weight}; signals(data) returns
@@ -3371,7 +3372,7 @@ def backtest_portfolio(strategy, datasets, cfg=None, start=None, end=None, bench
     per ticker. Without a benchmark, the benchmark is an equal-weight portfolio of
     the same instruments rebalanced daily.
     """
-    return _run_backtest(strategy, shared_panel(datasets), cfg, start, end, bench, True, capture_output, rates, signal_key)
+    return _run_backtest(strategy, shared_panel(datasets), cfg, start, end, bench, True, capture_output, rates, signal_key, decide_last)
 
 
 class _Limits:
@@ -3493,7 +3494,44 @@ class _Limits:
                 "avg_scale": mean(self.scales) if self.scales else NAN, "truncated": sum(self.counts.values()) > len(self.log)}
 
 
-def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_output, rates, signal_key=None):
+def next_orders(acct, run, panel, e, pending, cfg):
+    """The orders the strategy would send for the session after bar e, from its targets at
+    e's close (or what is still unfilled), sized at that close like the backtest would."""
+    marks = [panel.mark(a, e) for a in range(panel.k)]
+    eq = acct.equity_marked(e)
+    orders = []
+    if pending is not None and pending.get("weights") is not None and eq > 0:
+        for a in range(panel.k):
+            w = pending["weights"].get(a)
+            if w is None:
+                continue
+            m = marks[a]
+            if isnan(m) or m <= 0:
+                continue
+            cur = acct.shares[a]
+            if abs(w - cur * m / eq) < cfg.rebalance_band and w != 0:
+                continue                              # inside the rebalance band: no trade
+            target = w * eq / m
+            if not cfg.fractional:
+                target = float(int(target))
+            dq = target - cur
+            if abs(dq) > 1e-9:
+                orders.append({"ticker": panel.tickers[a], "side": "buy" if dq > 0 else "sell", "qty": dq,
+                               "target_shares": target, "target_weight": w, "ref_price": m, "value": dq * m,
+                               "type": "market", "at": pending.get("w_at", cfg.execution)})
+    if pending is not None:
+        for (a, at), (kind, value) in sorted(pending.get("orders", {}).items()):
+            dq = value - acct.shares[a] if kind == "target" else value
+            if abs(dq) > 1e-9:
+                orders.append({"ticker": panel.tickers[a], "side": "buy" if dq > 0 else "sell", "qty": dq,
+                               "target_shares": acct.shares[a] + dq, "target_weight": None, "ref_price": marks[a],
+                               "value": dq * marks[a] if not isnan(marks[a]) else NAN, "type": "market", "at": at})
+    return {"date": panel.dates[e], "decided": pending is not None and pending.get("t") == e, "equity": eq,
+            "cash": acct.cash, "positions": {tk: acct.shares[a] for a, tk in enumerate(panel.tickers) if acct.shares[a]},
+            "orders": orders, "resting": run.open_orders()}
+
+
+def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_output, rates, signal_key=None, decide_last=False):
     if cfg is None:
         cfg = Config()
     elif isinstance(cfg, dict):
@@ -3646,7 +3684,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
                 asset_pnl[0].append(acct.asset_cash[0] + (sh * c if sh else 0.0))
                 position.append(sh)
                 exposure.append(sh * c / eq if eq > 0 else 0.0)
-            if t == e or wiped:
+            if wiped or (t == e and not decide_last):
                 continue
 
             ctx._sync(t)
@@ -3687,6 +3725,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     finally:
         sys.stdout = old_stdout
 
+    nxt = next_orders(acct, run, panel, e, pending, cfg) if decide_last and not wiped else None
     if portfolio:
         weights, asset_pnl, gross_l, net_l, long_l, short_l = _portfolio_series(panel, s, shares_hist, cash_hist, equity)
         exposure = gross_l
@@ -3744,7 +3783,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         book_stats=dict(run.book_stats, open=len(run.book)),
         logs=logs, full_logs=full_logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
         signals=sig, signal_key=signal_key, limits=limits.summary(len(equity)) if limits.on else None, ann=panel_ann(panel),
-        delisted=delisted,
+        delisted=delisted, next=nxt,
     )
 
 
@@ -6073,10 +6112,11 @@ def _run_payload(p, strat=None, cfg=None):
     sets, bench, cfg0, strat0, portfolio, rates = _prepare(p)
     strat, cfg = strat or strat0, cfg or cfg0
     key = _signal_key(p, strat)
+    last = bool(p.get("decide_last"))
     if portfolio:
-        res = backtest_portfolio(strat, sets, cfg, p.get("start"), p.get("end"), bench, rates=rates, signal_key=key)
+        res = backtest_portfolio(strat, sets, cfg, p.get("start"), p.get("end"), bench, rates=rates, signal_key=key, decide_last=last)
     else:
-        res = backtest(strat, sets[0], cfg, p.get("start"), p.get("end"), bench, rates=rates, signal_key=key)
+        res = backtest(strat, sets[0], cfg, p.get("start"), p.get("end"), bench, rates=rates, signal_key=key, decide_last=last)
     return res, strat
 
 
@@ -6212,7 +6252,7 @@ def api_run(p):
         "gross": res.gross, "net": res.net, "long": res.long, "short": res.short,
         "fills": _fill_rows(res, res.fills[-ROW_LIMIT:]), "fills_total": len(res.fills),
         "trades": res.trades[-ROW_LIMIT:], "trades_total": len(res.trades), "metrics": m, "bench_metrics": b,
-        "carry": res.carry, "margin_calls": res.margin_calls[:50], "book": res.book_stats, "limits": res.limits,
+        "carry": res.carry, "margin_calls": res.margin_calls[:50], "book": res.book_stats, "limits": res.limits, "next": res.next,
         "monthly": monthly_table(res.dates, res.equity),
         "bench_monthly": monthly_table(res.dates, res.bench_equity),
         "hist": histogram([daily_returns(res.equity), daily_returns(res.bench_equity)]),

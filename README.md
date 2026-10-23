@@ -63,6 +63,13 @@ rolling beta; each holding's share of the risk; ten historical stress windows re
 holdings; historical, normal and Cornish-Fisher VaR with a Kupiec back-test) and a **Capacity** curve
 that re-runs the strategy at growing account sizes with square-root impact and participation limits.
 
+## Paper trading
+
+Every run shows the orders the strategy would send for the next session. The **Paper** tab freezes a
+strategy and start date and runs it forward as new data arrives, logging each update and flagging any
+change to past results. Routing orders to a broker is a separate, optional server you run yourself:
+`tools/bridge/broker_bridge.py` (dry run by default; Alpaca paper or live with flags).
+
 ## Modules, editor and tests
 
 Shared code lives in **modules**: Python files in the browser's module library that any strategy
@@ -111,3 +118,4 @@ print(engine.attribution(res)["rows"])
 | `pyodide/`, `vendor/` | Bundled Pyodide 0.26.4 runtime, Chart.js 4.4.1 and pyflakes 3.2.0 (MIT), so it works offline |
 | `data/` | Bundled Nasdaq CSVs for 23 instruments (10 years, daily); `tests/fixtures/` holds two synthetic series for tests |
 | `tests/test_engine.py` | Unit tests: `python tests/test_engine.py` |
+| `tools/bridge/` | Optional broker bridge (separate server); tests in `tests/test_bridge.py` |

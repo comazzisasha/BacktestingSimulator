@@ -2049,6 +2049,41 @@ def test_bootstrap_confidence_intervals():
     assert 0 <= mc["prob_sharpe_negative"] <= 1
 
 
+# ------------------------------------------------------------ next orders -----
+
+def test_next_orders_from_the_last_bar():
+    t = load_templates()
+    a = run(t["sma_cross"])
+    b = engine.backtest(engine.Strategy.from_code(t["sma_cross"]), DEMO, engine.Config(slippage_bps=0), decide_last=True)
+    assert a.equity == b.equity and len(a.fills) == len(b.fills), "deciding on the last bar changes nothing before it"
+    assert a.next is None and b.next["date"] == DEMO.dates[-1]
+    # a strategy that flips on the last bar: sell everything at the next open
+    n = DEMO.n
+    code = "def on_bar(ctx):\n    return 0.0 if ctx.i == %d else 1.0\n" % (n - 1)
+    r = engine.backtest(engine.Strategy.from_code(code), DEMO, engine.Config(slippage_bps=0), decide_last=True)
+    nx = r.next
+    held = r.position[-1]
+    assert nx["decided"] and len(nx["orders"]) == 1
+    o = nx["orders"][0]
+    assert o["side"] == "sell" and abs(o["qty"] + held) < 1e-9 and o["ref_price"] == DEMO.close[-1]
+    assert nx["positions"] == {"DEMO-STOCK": held}
+    # inside the band: nothing to do
+    hold = engine.backtest(engine.Strategy.from_code("def on_bar(ctx):\n    return 1.0\n"), DEMO, engine.Config(slippage_bps=0), decide_last=True)
+    assert hold.next["orders"] == []
+    # portfolio targets and share orders
+    pcode = ("def on_bar(ctx):\n    if ctx.bar == 0:\n        return {'DEMO-STOCK': 0.5}\n"
+             "    if ctx.i == %d:\n        return {'DEMO-STOCK': 0.2}\n    return None\n" % (n - 1))
+    pr = engine.backtest_portfolio(engine.Strategy.from_code(pcode), [DEMO, BOND], engine.Config(slippage_bps=0), decide_last=True)
+    o = pr.next["orders"][0]
+    assert abs(o["target_shares"] - 0.2 * pr.next["equity"] / DEMO.close[-1]) < 1e-9 and o["side"] == "sell" and o["ticker"] == "DEMO-STOCK"
+    scode = "def on_bar(ctx):\n    if ctx.i == %d:\n        ctx['DEMO-BOND'].order(10)\n    return None\n" % (n - 1)
+    sr = engine.backtest_portfolio(engine.Strategy.from_code(scode), [DEMO, BOND], engine.Config(slippage_bps=0), decide_last=True)
+    assert sr.next["orders"] == [dict(sr.next["orders"][0], ticker="DEMO-BOND", qty=10, side="buy")]
+    engine.DATA["DEMO-STOCK"] = DEMO
+    out = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code, "decide_last": True})))["result"]
+    assert out["next"]["orders"][0]["side"] == "sell"
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
