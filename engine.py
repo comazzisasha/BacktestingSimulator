@@ -4869,6 +4869,57 @@ def pbo_cscv(blocks, labels=None, ann=None):
     }
 
 
+RANK_LOWER_BETTER = {"volatility", "downside_dev", "var_95", "cvar_95", "var_99", "cvar_99", "ulcer_index", "pain_index",
+                     "max_dd_days", "tracking_error", "turnover", "costs_pct"}
+
+
+def rank_strategies(runs, stat="sharpe", rf=0.0):
+    """Rank finished runs by one statistic and say how much the winner owes to luck.
+
+    runs: [{id, name, group?, metrics, returns?, dates?, blocks?, ann?}] or {id, name, error}.
+    Ranks are 1 = best (ties share a rank; runs without the statistic come last, unranked).
+    selection: the top run's Deflated Sharpe with trials = the number of runs ranked and the
+    variance of their Sharpe ratios, and the PBO of picking by Sharpe among the runs on
+    identical dates (the largest such group)."""
+    lower = stat in RANK_LOWER_BETTER
+    ok = [r for r in runs if not r.get("error")]
+    failed = [{"id": r["id"], "name": r.get("name", r["id"]), "error": r["error"]} for r in runs if r.get("error")]
+    val = lambda r: r["metrics"].get(stat)
+    scored = [r for r in ok if val(r) is not None and not isnan(val(r))]
+    unscored = [r for r in ok if r not in scored]
+    scored.sort(key=lambda r: (val(r) if lower else -val(r), r["name"]))
+    rows, prev, rank = [], None, 0
+    for k, r in enumerate(scored):
+        if val(r) != prev:
+            rank, prev = k + 1, val(r)
+        rows.append({"id": r["id"], "name": r.get("name", r["id"]), "group": r.get("group"), "rank": rank, "value": val(r), "metrics": r["metrics"]})
+    rows += [{"id": r["id"], "name": r.get("name", r["id"]), "group": r.get("group"), "rank": None, "value": None, "metrics": r["metrics"]} for r in unscored]
+    sel = {"trials": len(scored)}
+    sharpes = [r["metrics"].get("sharpe") for r in scored]
+    sharpes = [s for s in sharpes if s is not None and not isnan(s)]
+    if scored and scored[0].get("returns") and len(sharpes) >= 2:
+        top = scored[0]
+        A = top.get("ann") or TRADING_DAYS
+        rfd = (1 + rf) ** (1 / A) - 1
+        d = deflated_sharpe(top["returns"], len(scored), stdev(sharpes) ** 2, rfd, A)
+        if d:
+            sel.update(best=top["id"], dsr=d["dsr"], sr_hurdle=d["sr_hurdle"], sharpe_variance=stdev(sharpes) ** 2)
+    groups = {}
+    for r in scored:
+        if r.get("blocks") and r.get("dates"):
+            groups.setdefault((r["dates"][0], r["dates"][-1], len(r["dates"])), []).append(r)
+    if groups:
+        same = max(groups.values(), key=len)
+        if len(same) >= 2:
+            try:
+                p = pbo_cscv([r["blocks"] for r in same], [r["id"] for r in same], same[0].get("ann"))
+                sel.update(pbo=p["pbo"], pbo_configs=p["configs"], pbo_oos_sharpe=p["oos_sharpe"], pbo_is_sharpe=p["is_sharpe"],
+                           pbo_ids=[r["id"] for r in same])
+            except ValueError:
+                pass
+    return {"stat": stat, "lower_better": lower, "rows": rows, "failed": failed, "selection": sel}
+
+
 def score_returns(r, metric="sharpe", days=None, ann=None):
     """A score for a slice of daily returns: sharpe, sortino, cagr, total_return or calmar."""
     if len(r) < 2:
@@ -6800,6 +6851,11 @@ def api_costs(p):
                             cfg, p.get("levels") or [0, 2, 5, 10, 20, 50], p.get("start"), p.get("end"), bench, rates)
 
 
+def api_rank(p):
+    """Rank finished strategy runs (see rank_strategies)."""
+    return rank_strategies(p["runs"], p.get("stat", "sharpe"), float(p.get("rf") or 0.0))
+
+
 def api_pbo(p):
     A = float(p.get("ann") or TRADING_DAYS)
     out = pbo_cscv(p["blocks"], p.get("labels"), ann=A)
@@ -6924,7 +6980,7 @@ API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
     "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit,
-    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "risk": api_risk, "capacity": api_capacity,
+    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "rank": api_rank, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

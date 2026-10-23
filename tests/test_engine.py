@@ -2449,6 +2449,86 @@ def test_surfaces_equal_separate_backtests_of_each_window():
     assert not bad["ok"] and "unknown statistic" in bad["error"]["message"]
 
 
+# --------------------------------------------------------- strategy ranking -----
+
+_TEMPLATE_RUNS = {}
+
+
+def _template_runs(ids=None, ds=DEMO):
+    key = (ds.ticker, tuple(ids) if ids else None)
+    if key not in _TEMPLATE_RUNS:
+        _TEMPLATE_RUNS[key] = _run_templates(ids, ds)
+    return [dict(r) for r in _TEMPLATE_RUNS[key]]
+
+
+def _run_templates(ids, ds):
+    engine.DATA[ds.ticker] = ds
+    tpls = {k: v for k, v in load_templates().items() if not k.startswith("pf_") and (ids is None or k in ids)}
+    runs = []
+    for tid, code in tpls.items():
+        out = json.loads(engine.handle("metrics", json.dumps({"ticker": ds.ticker, "code": code, "returns": True, "blocks": 10})))
+        if out["ok"]:
+            r = out["result"]
+            runs.append({"id": tid, "name": tid, "metrics": r["full"], "returns": r["returns"], "dates": r["dates"], "blocks": r["blocks"], "ann": r["ann"]})
+        else:
+            runs.append({"id": tid, "name": tid, "error": out["error"]["message"]})
+    return runs
+
+
+def test_every_single_instrument_template_runs_and_ranks():
+    runs = _template_runs()
+    assert len(runs) >= 20 and not [r for r in runs if r.get("error")], [r["error"] for r in runs if r.get("error")]
+    out = json.loads(engine.handle("rank", json.dumps({"runs": runs, "stat": "sharpe"})))
+    assert out["ok"], out
+    rows = out["result"]["rows"]
+    vals = [r["value"] for r in rows if r["rank"] is not None]
+    assert vals == sorted(vals, reverse=True) and rows[0]["rank"] == 1
+    by_id = {r["id"]: r for r in runs}
+    assert all(row["value"] == by_id[row["id"]]["metrics"]["sharpe"] for row in rows if row["rank"])
+    for k, row in enumerate(rows):
+        if row["rank"]:
+            assert row["rank"] == 1 + sum(1 for x in rows if x["rank"] and x["value"] > row["value"]), "competition ranking"
+
+
+def test_ranking_directions_ties_failures_and_missing_values():
+    m = lambda **kw: dict({"sharpe": 0.5, "volatility": 0.2, "cagr": 0.05}, **kw)
+    runs = [{"id": "a", "name": "A", "metrics": m(sharpe=1.0, volatility=0.30)},
+            {"id": "b", "name": "B", "metrics": m(sharpe=0.4, volatility=0.10)},
+            {"id": "c", "name": "C", "metrics": m(sharpe=1.0, volatility=0.20)},
+            {"id": "d", "name": "D", "metrics": m(sharpe=float("nan"))},
+            {"id": "e", "name": "E", "error": "ZeroDivisionError: division by zero"}]
+    r = engine.rank_strategies(runs, "sharpe")
+    assert [(x["id"], x["rank"]) for x in r["rows"]] == [("a", 1), ("c", 1), ("b", 3), ("d", None)]
+    assert r["failed"] == [{"id": "e", "name": "E", "error": "ZeroDivisionError: division by zero"}] and r["selection"]["trials"] == 3
+    v = engine.rank_strategies(runs, "volatility")
+    assert v["lower_better"] and [(x["id"], x["rank"]) for x in v["rows"]] == [("b", 1), ("c", 2), ("d", 2), ("a", 4)], \
+        "lower volatility ranks first; equal values share a rank"
+
+
+def test_ranking_deflates_the_winner_and_measures_overfitting():
+    from scipy import stats
+    runs = _template_runs()
+    dated = [r for r in runs if not r.get("error")]
+    # one run on other dates is left out of the PBO group
+    odd = dict(dated[0], id="short", name="short", dates=dated[0]["dates"][:-5])
+    out = engine.rank_strategies(dated + [odd], "cagr")
+    sel = out["selection"]
+    top = next(r for r in dated + [odd] if r["id"] == out["rows"][0]["id"])
+    sharpes = [r["metrics"]["sharpe"] for r in dated + [odd] if r["metrics"].get("sharpe") == r["metrics"].get("sharpe")]
+    V = stats.tvar(sharpes) / top["ann"]                     # variance of the Sharpe ratios, per day
+    N, g = sel["trials"], 0.5772156649015329
+    sr0 = math.sqrt(V) * ((1 - g) * stats.norm.ppf(1 - 1 / N) + g * stats.norm.ppf(1 - 1 / (N * math.e)))
+    r = top["returns"]
+    sr = engine.mean(r) / engine.stdev(r)
+    k = len(r)
+    want = stats.norm.cdf((sr - sr0) * math.sqrt(k - 1) / math.sqrt(1 - engine.skewness(r) * sr + (engine.kurtosis(r) + 2) / 4 * sr * sr))
+    assert sel["best"] == top["id"] and approx(sel["dsr"], want, 1e-9), (sel["dsr"], want)
+    assert approx(sel["sr_hurdle"], sr0 * math.sqrt(top["ann"]), 1e-9)
+    assert "short" not in sel["pbo_ids"] and sel["pbo_configs"] == len(dated)
+    assert approx(sel["pbo"], engine.pbo_cscv([x["blocks"] for x in dated], ann=dated[0]["ann"])["pbo"])
+    assert 0 <= sel["pbo"] <= 1
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

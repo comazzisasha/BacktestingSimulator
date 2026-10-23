@@ -67,7 +67,8 @@ position and shows a delta-hedged option's volatility P&L. Option prices are mod
 trailing realized volatility or a loaded volatility index), not market quotes.
 **Start/End Surfaces** score every window: S(s, e), the strategy backtested from s to e, and B(s, e),
 the benchmark over the same window, for a chosen statistic (return, CAGR, Sharpe, drawdown …), as
-heatmaps or 3D surfaces.
+heatmaps or 3D surfaces. **Strategy Ranking** backtests every built-in strategy on your market and settings,
+ranks them by a chosen statistic, and deflates the winner's Sharpe ratio for the number tried.
 
 ## Paper trading
 
