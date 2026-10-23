@@ -4596,6 +4596,94 @@ def _fresh(strategy):
     return strategy() if callable(strategy) and not isinstance(strategy, Strategy) else strategy
 
 
+SURFACE_STATS = {"total_return": "Total return", "cagr": "CAGR", "volatility": "Volatility", "sharpe": "Sharpe ratio",
+                 "sortino": "Sortino ratio", "max_drawdown": "Max drawdown", "calmar": "Calmar ratio"}
+
+
+def surface_grid(dates, step="quarter", start=None, end=None):
+    """Window edges for a start/end surface: the first bar of every month, quarter or year
+    from start to end, plus the last bar."""
+    s, e = _resolve_range(dates, start, end)
+    key = {"month": lambda d: d[:7], "quarter": lambda d: (d[:4], (int(d[5:7]) - 1) // 3),
+           "year": lambda d: d[:4]}[step]
+    grid, last = [], None
+    for d in dates[s:e + 1]:
+        k = key(d)
+        if k != last:
+            grid.append(d)
+            last = k
+    if grid[-1] != dates[e]:
+        grid.append(dates[e])
+    return grid
+
+
+def prefix_stat(dates, equity, stat, ends, rf=0.0, ann=None):
+    """`stat` of equity[0..k] for each bar index k in ends (ascending), exactly as
+    performance() computes it on that slice, in one pass over the curve."""
+    P = ann or TRADING_DAYS
+    rfd = (1 + rf) ** (1 / P) - 1
+    d0 = _dt.date.fromisoformat(dates[0][:10])
+    out, ei = [], 0
+    n = 0
+    mu = m2 = down = 0.0          # Welford mean & sum of squared deviations of the returns; downside sum
+    peak, mdd = -math.inf, 0.0
+    for k, v in enumerate(equity):
+        if k:
+            r = v / equity[k - 1] - 1 if equity[k - 1] > 0 else 0.0
+            n += 1
+            d = r - mu
+            mu += d / n
+            m2 += d * (r - mu)
+            down += min(r - rfd, 0.0) ** 2
+        if v > peak:
+            peak = v
+        mdd = min(mdd, v / peak - 1 if peak > 0 else 0.0)
+        while ei < len(ends) and ends[ei] == k:
+            ei += 1
+            years = max((_dt.date.fromisoformat(dates[k][:10]) - d0).days / 365.25, 1 / 365.25)
+            cagr = (v / equity[0]) ** (1 / years) - 1 if v > 0 else -1.0
+            sd = math.sqrt(m2 / (n - 1)) if n >= 2 else NAN
+            if stat == "total_return":
+                x = v / equity[0] - 1
+            elif stat == "cagr":
+                x = cagr
+            elif stat == "volatility":
+                x = sd * math.sqrt(P)
+            elif stat == "sharpe":
+                x = (mu - rfd) / sd * math.sqrt(P) if n >= 2 and sd > 0 else NAN
+            elif stat == "sortino":
+                dsd = math.sqrt(down / n) if n else 0.0
+                x = (mu - rfd) / dsd * math.sqrt(P) if n >= 2 and dsd > 0 else NAN
+            elif stat == "max_drawdown":
+                x = mdd
+            elif stat == "calmar":
+                x = cagr / abs(mdd) if mdd < 0 else NAN
+            else:
+                raise ValueError("unknown statistic %r (use %s)" % (stat, ", ".join(SURFACE_STATS)))
+            out.append(x)
+    return out
+
+
+def surface_row(make_strategy, sets, cfg, start, ends, stat, bench=None, portfolio=False, rates=None, signal_key=None):
+    """One row of the start/end surfaces: the strategy backtested from `start` & the
+    benchmark held from `start`, scored by `stat` on every window [start, e] for e in ends.
+
+    A backtest from s to e is the backtest from s to the last end cut at e: the engine
+    only ever uses data up to each bar, so one run per start gives the whole row."""
+    run = backtest_portfolio if portfolio else backtest
+    res = run(make_strategy(), sets if portfolio else sets[0], cfg, start, ends[-1], bench, rates=rates, signal_key=signal_key)
+    import bisect
+    idx = [bisect.bisect_right(res.dates, e) - 1 for e in ends]
+    ok = [i for i, k in enumerate(idx) if k > 0]
+    A, rf = res_ann(res), res.config.risk_free
+    ks = [idx[i] for i in ok]
+    S, B = prefix_stat(res.dates, res.equity, stat, ks, rf, A), prefix_stat(res.dates, res.bench_equity, stat, ks, rf, A)
+    row_s, row_b = [None] * len(ends), [None] * len(ends)
+    for j, i in enumerate(ok):
+        row_s[i], row_b[i] = S[j], B[j]
+    return {"start": res.dates[0], "requested": start, "S": row_s, "B": row_b, "ends": [res.dates[k] if k >= 0 else None for k in idx]}
+
+
 def cost_sensitivity(strategy, ds, cfg, levels, start=None, end=None, bench=None, rates=None):
     """Re-run the backtest at each cost level and report how the result decays.
 
@@ -6675,6 +6763,37 @@ def api_subperiods(p):
     return subperiod_metrics(res, p.get("n", 5))
 
 
+def api_surface_grid(p):
+    """Window edges for the start/end surfaces over the run's dates."""
+    sets, _, _, _, portfolio, _ = _prepare(p)
+    dates = shared_panel(sets).dates if portfolio else sets[0].dates
+    grid = surface_grid(dates, p.get("step", "quarter"), p.get("start"), p.get("end"))
+    return {"grid": grid, "stats": SURFACE_STATS}
+
+
+def api_surface(p):
+    """Rows of the start/end surfaces for the given start dates: {start, S, B, ends} each,
+    with S & B the statistic of the strategy & the benchmark on [start, e] for every e in ends."""
+    sets, bench, cfg, strat, portfolio, rates = _prepare(p)
+    stat = p.get("stat", "sharpe")
+    if stat not in SURFACE_STATS:
+        raise ValueError("unknown statistic %r (use %s)" % (stat, ", ".join(SURFACE_STATS)))
+    key = _signal_key(p, strat)
+    ends = sorted(p["ends"])
+    rows = []
+    for st in p["starts"]:
+        later = [e for e in ends if e > st]
+        if not later:
+            continue
+        row = surface_row(lambda: Strategy.from_code(p["code"], p.get("params")), sets, cfg, st, later, stat, bench, portfolio, rates, key)
+        full_s, full_b = [None] * len(ends), [None] * len(ends)
+        for e, a, b in zip(later, row["S"], row["B"]):
+            j = ends.index(e)
+            full_s[j], full_b[j] = a, b
+        rows.append({"start": st, "actual_start": row["start"], "S": full_s, "B": full_b})
+    return {"stat": stat, "ends": ends, "rows": rows}
+
+
 def api_costs(p):
     sets, bench, cfg, _, portfolio, rates = _prepare(p)
     return cost_sensitivity(lambda: Strategy.from_code(p["code"], p.get("params")), sets if portfolio else sets[0],
@@ -6805,7 +6924,7 @@ API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
     "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit,
-    "options": api_options, "risk": api_risk, "capacity": api_capacity,
+    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

@@ -218,6 +218,16 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--border); background: var(--sunk); color: var(--fg-2); white-space: nowrap; }
 .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .badge.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
+.surf-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.surf-two h3 { margin: 0 0 6px; }
+.surf-c { position: relative; width: 100%; aspect-ratio: 1 / 0.9; max-height: 460px; }
+.surf-c canvas { display: block; width: 100%; height: 100%; border-radius: 6px; touch-action: none; }
+.surf-c canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.surf-c.is3d canvas { cursor: grab; }
+.surf-legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-3); }
+.surf-legend .ramp { flex: 0 1 220px; height: 10px; border-radius: 3px; border: 1px solid var(--border); }
+.surf-read { min-height: 2.6em; margin: 0; font-variant-numeric: tabular-nums; }
+.seg { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .divcell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .divwait { margin: 0; padding: 10px 16px 14px; }
 .badge.ok { color: var(--gain); }
@@ -896,6 +906,24 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       </div>
     </section>
 
+    <section class="panel" id="surface" data-opt="surface" aria-labelledby="h-surf">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-surf">Start/End Surfaces</h2><p>Every start date <i>s</i> & end date <i>e</i> with <i>s</i> &lt; <i>e</i>: your strategy backtested from <i>s</i> to <i>e</i> gives <b>S(s, e)</b>, the benchmark held over the same window gives <b>B(s, e)</b>. Shows whether the result depends on when you happened to start & stop.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="surfForm" novalidate>
+          <div class="field"><label for="sfStat">Statistic</label><select id="sfStat" name="statistic"><option value="total_return">Total return</option><option value="cagr">CAGR</option><option value="sharpe" selected>Sharpe ratio</option><option value="sortino">Sortino ratio</option><option value="volatility">Volatility</option><option value="max_drawdown">Max drawdown</option><option value="calmar">Calmar ratio</option></select></div>
+          <div class="grid2">
+            <div class="field"><label for="sfStep">Date Grid</label><select id="sfStep" name="grid" aria-describedby="sfStep-help"><option value="month">Monthly</option><option value="quarter" selected>Quarterly</option><option value="year">Yearly</option></select></div>
+            <div class="field"><label for="sfMin">Shortest Window</label><select id="sfMin" name="shortest-window"><option value="0">Any</option><option value="182">6 months</option><option value="365" selected>1 year</option><option value="1095">3 years</option></select></div>
+          </div>
+          <p class="help" id="sfStep-help">Windows start & end on the first trading day of each month, quarter or year in your date range. One backtest per start date; monthly over 10 years is 120 backtests. Short windows make annualized statistics swing wildly, so they’re hidden by default.</p>
+          <div class="field"><span class="label" id="sfView-l">View</span><div class="seg" role="radiogroup" aria-labelledby="sfView-l"><label class="check"><input type="radio" name="sf-view" value="heat" checked> Heatmap</label><label class="check"><input type="radio" name="sf-view" value="3d"> 3D surface</label></div></div>
+          <div class="row"><button class="btn primary" id="sfRun" type="submit">Build Surfaces</button><button class="btn" id="sfStop" type="button" hidden>Cancel</button><span class="muted tnum" id="sfCount" aria-live="polite"></span></div>
+          <div class="bar" id="sfBar" hidden role="progressbar" aria-label="Surface progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </form>
+        <div class="out" id="sfOut" aria-live="polite"><p class="out-empty">Pick a statistic & a date grid. Uses your current strategy, instruments, benchmark & settings.</p></div>
+      </div>
+    </section>
+
     <section class="panel" id="risk" data-opt="risk" aria-labelledby="h-risk">
       <div class="panel-h"><div class="toolhead"><h2 id="h-risk">Risk Report</h2><p>Where the returns come from & what could hurt: a factor regression with autocorrelation-robust t-statistics, rolling beta, each holding’s share of the risk, historical stress windows & Value at Risk for the final holdings.</p></div></div>
       <div class="panel-b toolgrid">
@@ -1191,7 +1219,7 @@ const LOCALE = (() => {
   }
   return 'en-US';
 })();
-const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'risk', 'capacity', 'options', 'subperiods', 'costs', 'permutation', 'analytics'];
+const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'surface', 'risk', 'capacity', 'options', 'subperiods', 'costs', 'permutation', 'analytics'];
 
 const RECOMMENDED = [
   ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
@@ -1279,7 +1307,7 @@ const trials = {
 // Choices are remembered in this browser, separately for panels, statistics & tools.
 const PANELS = [['relative', 'Relative Performance', 'std'], ['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
   ['roll', 'Rolling Sharpe Ratio', 'std'], ['vol', 'Rolling Volatility', 'extra']];
-const TOOLS = [['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['options', 'Options Overlay', 'extra'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
+const TOOLS = [['surface', 'Start/End Surfaces', 'std'], ['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['options', 'Options Overlay', 'extra'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
   ['analytics', 'Instrument Analytics', 'std']];
 const shown = {
   is(kind, key, tier) { if (tier === 'core') return true; const o = store.get('show.' + kind, {}); return key in o ? !!o[key] : tier === 'std'; },
@@ -3452,6 +3480,233 @@ function renderOptions(r) {
   }
 }
 
+/* -------------------------------------------------- start/end surfaces -- */
+// S(s, e): the strategy backtested from s to e; B(s, e): the benchmark over the same window.
+// One backtest per start date (cut at every end date gives the whole row), spread over the helpers.
+let surfCancel = false, surfRunning = false, surfLast = null;
+const SURF = {
+  total_return: { fmt: v => fmt.pct(v, 1, true), kind: 'div' }, cagr: { fmt: v => fmt.pct(v, 1, true), kind: 'div' },
+  sharpe: { fmt: v => fmt.num(v), kind: 'div' }, sortino: { fmt: v => fmt.num(v), kind: 'div' }, calmar: { fmt: v => fmt.num(v), kind: 'div' },
+  volatility: { fmt: v => fmt.pct(v, 1), kind: 'vol' }, max_drawdown: { fmt: v => fmt.pct(v, 1), kind: 'dd' },
+};
+const surfDays = (a, b) => (Date.parse(b.slice(0, 10)) - Date.parse(a.slice(0, 10))) / 864e5;
+async function runSurface(ev) {
+  ev.preventDefault();
+  if (surfRunning) return;
+  const stat = $('#sfStat').value, step = $('#sfStep').value;
+  const base = await freshPayload(); const out = $('#sfOut'), btn = $('#sfRun'), bar = $('#sfBar');
+  surfCancel = false; surfRunning = true; loadingOn(btn); busy(true, 'Building surfaces…');
+  try {
+    await ensurePayload(base);
+    const { grid } = await py.call('surface_grid', { ...base, step });
+    if (grid.length < 3) throw new Error('The date range is too short for this grid. Pick a finer grid or a longer range.');
+    if (grid.length - 1 > 150) throw new Error(`That’s ${fmt.int(grid.length - 1)} start dates. Use a coarser grid or a shorter range (150 at most).`);
+    const starts = grid.slice(0, -1), ends = grid.slice(1);
+    $('#sfStop').hidden = false; bar.hidden = false; progress(bar, 0);
+    const rows = await pool.map(starts, (client, st) => client.call('surface', { ...base, stat, starts: [st], ends }).then(r => r.rows[0] || null), {
+      prepare: client => ensurePayload(base, client), cancelled: () => surfCancel,
+      onDone: n => { progress(bar, n / starts.length); $('#sfCount').textContent = `${fmt.int(n)} of ${fmt.int(starts.length)} start dates`; },
+    });
+    surfLast = { stat, step, starts, ends, rows: starts.map((_, i) => rows[i] || null), cancelled: surfCancel, strategy: currentSource().name,
+      bench: base.benchmark && base.benchmark !== base.ticker ? base.benchmark : (base.tickers || []).length > 1 ? 'equal weight' : `buy & hold ${base.ticker}`, cur: { i: 0, j: 0 }, yaw: 0.55, pitch: 0.7 };
+    renderSurface();
+  } catch (e) { toolError(out, e); }
+  finally { surfRunning = false; busy(false); $('#sfStop').hidden = true; bar.hidden = true; $('#sfCount').textContent = ''; await loadingOff(btn); }
+}
+// Matrices for the current shortest-window choice: M[i][j] for start i & end j, null outside s < e.
+function surfMatrices(L) {
+  const minD = +$('#sfMin').value, S = [], B = [];
+  L.rows.forEach((row, i) => {
+    S.push(L.ends.map((e, j) => (row && row.S[j] != null && surfDays(L.starts[i], e) >= minD - 0.5 ? row.S[j] : null)));
+    B.push(L.ends.map((e, j) => (row && row.B[j] != null && surfDays(L.starts[i], e) >= minD - 0.5 ? row.B[j] : null)));
+  });
+  return { S, B };
+}
+// One colour scale for both surfaces, clipped at the 2nd & 98th percentiles so one extreme window doesn't wash out the rest.
+function surfScale(L, S, B) {
+  const vals = [...S.flat(), ...B.flat()].filter(v => v != null && isFinite(v)).sort((a, b) => a - b);
+  if (!vals.length) return null;
+  const q = f => vals[Math.min(vals.length - 1, Math.max(0, Math.round(f * (vals.length - 1))))];
+  const kind = SURF[L.stat].kind, P = palette();
+  if (kind === 'div') {
+    const lim = Math.max(Math.abs(q(0.02)), Math.abs(q(0.98))) || 1;
+    return { lo: -lim, hi: lim, kind, color: v => alpha(v >= 0 ? P.gain : P.loss, 0.07 + 0.88 * Math.min(1, Math.abs(v) / lim)),
+      ramp: `linear-gradient(90deg, ${alpha(P.loss, 0.95)}, ${alpha(P.loss, 0.07)} 50%, ${alpha(P.gain, 0.07)} 50%, ${alpha(P.gain, 0.95)})` };
+  }
+  const lo = kind === 'dd' ? Math.min(q(0.02), 0) : Math.max(0, q(0.02)), hi = kind === 'dd' ? 0 : q(0.98), span = hi - lo || 1;
+  const hue = kind === 'dd' ? P.loss : P.strat;
+  const t = v => (kind === 'dd' ? (hi - v) / span : (v - lo) / span);   // 0 at the mild end, 1 at the severe end
+  return { lo, hi, kind, color: v => alpha(hue, 0.07 + 0.88 * Math.min(1, Math.max(0, t(v)))),
+    ramp: kind === 'dd' ? `linear-gradient(90deg, ${alpha(hue, 0.95)}, ${alpha(hue, 0.07)})` : `linear-gradient(90deg, ${alpha(hue, 0.07)}, ${alpha(hue, 0.95)})` };
+}
+function surfLabel(d, step) { return step === 'year' ? d.slice(0, 4) : new Date(d.slice(0, 10) + 'T00:00:00Z').toLocaleDateString(LOCALE, { month: 'short', year: '2-digit', timeZone: 'UTC' }); }
+function renderSurface() {
+  const L = surfLast; if (!L) return;
+  const out = $('#sfOut'); out.innerHTML = '';
+  const { S, B } = surfMatrices(L), sc = surfScale(L, S, B), F = SURF[L.stat].fmt;
+  const label = $(`#sfStat option[value="${L.stat}"]`).textContent;
+  const noun = { total_return: 'total return', cagr: 'CAGR', sharpe: 'Sharpe ratio', sortino: 'Sortino ratio', volatility: 'volatility', max_drawdown: 'max drawdown', calmar: 'Calmar ratio' }[L.stat];
+  const cells = []; S.forEach((r, i) => r.forEach((v, j) => { if (v != null && B[i][j] != null) cells.push({ i, j, s: v, b: B[i][j] }); }));
+  if (!sc || !cells.length) { out.innerHTML = `<p class="out-empty">No window is at least as long as the shortest window you picked. Pick a shorter one or a longer date range.</p>`; return; }
+  const better = L.stat === 'volatility' ? (a, b) => a < b : (a, b) => a > b;   // a smaller drawdown is a larger (less negative) number
+  const wins = cells.filter(c => better(c.s, c.b)).length;
+  const byS = [...cells].sort((a, b) => a.s - b.s), med = a => { const x = [...a].sort((p, q) => p - q), m = x.length >> 1; return x.length % 2 ? x[m] : (x[m - 1] + x[m]) / 2; };
+  const best = L.stat === 'volatility' ? byS[0] : byS[byS.length - 1], worst = L.stat === 'volatility' ? byS[byS.length - 1] : byS[0];
+  const win = c => `${fmt.date(L.starts[c.i])} → ${fmt.date(L.ends[c.j])}`;
+  const longest = cells.filter(c => c.i === 0 && c.j === L.ends.length - 1)[0];
+  const intro = document.createElement('div'); intro.className = 'stack';
+  intro.innerHTML = `<p style="margin:0">${L.cancelled ? '<b>Cancelled</b>: only the start dates that finished are shown. ' : ''}The strategy’s ${noun} ${L.stat === 'volatility' ? 'was lower than' : L.stat === 'max_drawdown' ? 'was shallower than' : 'beat'} the benchmark’s in <b>${fmt.int(wins)} of ${fmt.int(cells.length)}</b> windows (${fmt.pct(wins / cells.length, 0)}). ` +
+    `Median over all windows: strategy <b>${F(med(cells.map(c => c.s)))}</b>, benchmark ${F(med(cells.map(c => c.b)))}. Best window for the strategy ${win(best)} (${F(best.s)}), worst ${win(worst)} (${F(worst.s)})` +
+    `${longest ? `; the whole range gives ${F(longest.s)} against ${F(longest.b)}` : ''}.</p>`;
+  out.appendChild(intro);
+  const view = $('input[name="sf-view"]:checked').value;
+  const two = document.createElement('div'); two.className = 'surf-two';
+  const box = (id, title) => `<div><h3 class="subhead">${title}</h3><div class="surf-c${view === '3d' ? ' is3d' : ''}"><canvas id="${id}" tabindex="0" role="img" aria-label="${esc(title)}: ${esc(label)} for every start & end date. ${view === '3d' ? 'Drag or use the arrow keys to turn it.' : 'Use the arrow keys to move between windows.'}" aria-describedby="sfRead"></canvas></div></div>`;
+  two.innerHTML = box('sfS', `Strategy S(s, e)`) + box('sfB', `Benchmark B(s, e)${L.bench ? ` · <span translate="no">${esc(L.bench)}</span>` : ''}`);
+  out.appendChild(two);
+  const foot = document.createElement('div'); foot.className = 'stack';
+  foot.innerHTML = `<div class="surf-legend"><span>${F(sc.lo)}</span><span class="ramp" style="background:${sc.ramp}"></span><span>${F(sc.hi)}</span><span>${esc(label)}, same scale on both; ${view === '3d' ? 'height & colour show the value' : 'rows are start dates, columns end dates'}. Blank: windows shorter than the shortest window, or s ≥ e.</span></div>` +
+    `<p class="surf-read" id="sfRead" aria-live="polite"></p>` +
+    `<div class="row"><button class="btn small" type="button" id="sfCsv">Download CSV</button></div>`;
+  out.appendChild(foot);
+  $('#sfCsv').onclick = () => {
+    const lines = ['start,end,years,strategy,benchmark,difference'];
+    for (const c of cells) lines.push([L.starts[c.i], L.ends[c.j], (surfDays(L.starts[c.i], L.ends[c.j]) / 365.25).toFixed(3), c.s, c.b, c.s - c.b].join(','));
+    downloadFile(`quantlab_surface_${L.stat}_${L.step}.csv`, lines.join('\n') + '\n', 'text/csv');
+  };
+  const ctx = { L, S, B, sc, F, label, view };
+  surfCtx = ctx;
+  if (!S[L.cur.i] || S[L.cur.i][L.cur.j] == null) { const c = longest || cells[0]; L.cur = { i: c.i, j: c.j }; }
+  for (const id of ['sfS', 'sfB']) wireSurfaceCanvas($('#' + id), ctx);
+  drawSurfaces(); surfRead();
+}
+let surfCtx = null;
+function drawSurfaces() {
+  const c = surfCtx; if (!c || !$('#sfS')) return;
+  for (const [id, M] of [['sfS', c.S], ['sfB', c.B]]) (c.view === '3d' ? drawSurface3D : drawSurfaceHeat)($('#' + id), M, c);
+}
+function surfRead() {
+  const c = surfCtx, el = $('#sfRead'); if (!c || !el) return;
+  const { i, j } = c.L.cur, s = c.S[i] && c.S[i][j], b = c.B[i] && c.B[i][j];
+  const yrs = surfDays(c.L.starts[i], c.L.ends[j]) / 365.25;
+  el.textContent = s == null ? '' : `${fmt.date(c.L.starts[i])} → ${fmt.date(c.L.ends[j])} (${fmt.num(yrs, 1)} years): strategy ${c.F(s)}, benchmark ${c.F(b)}, difference ${c.L.stat === 'total_return' || c.L.stat === 'cagr' || c.L.stat === 'volatility' || c.L.stat === 'max_drawdown' ? fmt.pct(s - b, 1, true) : (s - b >= 0 ? '+' : '') + fmt.num(s - b)}.`;
+}
+function sizeCanvas(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * dpr)), h = Math.max(1, Math.round(r.height * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, r.width, r.height);
+  return { g, W: r.width, H: r.height };
+}
+const SURF_M = { l: 58, r: 8, t: 8, b: 38 };
+function surfTicks(dates, step, room) {
+  // indices to label: at most room/56 of them, preferring year boundaries
+  const want = Math.max(2, Math.floor(room / 56)), every = Math.max(1, Math.ceil(dates.length / want)), out = [];
+  for (let k = 0; k < dates.length; k += every) out.push(k);
+  return out;
+}
+function drawSurfaceHeat(cv, M, c) {
+  const { g, W, H } = sizeCanvas(cv), P = palette(), L = c.L, m = SURF_M;
+  const nS = L.starts.length, nE = L.ends.length, cw = (W - m.l - m.r) / nE, ch = (H - m.t - m.b) / nS;
+  for (let i = 0; i < nS; i++) for (let j = 0; j < nE; j++) {
+    const v = M[i][j]; if (v == null) continue;
+    g.fillStyle = c.sc.color(v); g.fillRect(m.l + j * cw, m.t + i * ch, Math.ceil(cw), Math.ceil(ch));
+  }
+  g.strokeStyle = P.border; g.lineWidth = 1; g.strokeRect(m.l + 0.5, m.t + 0.5, W - m.l - m.r - 1, H - m.t - m.b - 1);
+  g.fillStyle = P.fg3; g.font = '11px system-ui, sans-serif'; g.textBaseline = 'middle'; g.textAlign = 'right';
+  for (const k of surfTicks(L.starts, L.step, H - m.t - m.b)) g.fillText(surfLabel(L.starts[k], L.step), m.l - 6, m.t + (k + 0.5) * ch);
+  g.textAlign = 'center'; g.textBaseline = 'top';
+  for (const k of surfTicks(L.ends, L.step, W - m.l - m.r)) g.fillText(surfLabel(L.ends[k], L.step), m.l + (k + 0.5) * cw, H - m.b + 6);
+  g.fillText('End date e →', m.l + (W - m.l - m.r) / 2, H - 14);
+  g.save(); g.translate(12, m.t + (H - m.t - m.b) / 2); g.rotate(-Math.PI / 2); g.textBaseline = 'middle'; g.fillText('Start date s →', 0, 0); g.restore();
+  const { i, j } = L.cur;
+  if (M[i] && M[i][j] != null) { g.strokeStyle = P.fg; g.lineWidth = 2; g.strokeRect(m.l + j * cw + 1, m.t + i * ch + 1, Math.max(2, cw - 2), Math.max(2, ch - 2)); }
+  cv._hit = (x, y) => { const jj = Math.floor((x - m.l) / cw), ii = Math.floor((y - m.t) / ch); return ii >= 0 && ii < nS && jj >= 0 && jj < nE ? { i: ii, j: jj } : null; };
+}
+// 3D: orthographic view of the surface over the (end, start) plane, turned by yaw & tilted by pitch.
+function drawSurface3D(cv, M, c) {
+  const { g, W, H } = sizeCanvas(cv), P = palette(), L = c.L;
+  const nS = L.starts.length, nE = L.ends.length, lo = c.sc.lo, hi = c.sc.hi, span = hi - lo || 1;
+  const cy = Math.cos(L.yaw), sy = Math.sin(L.yaw), cp = Math.cos(L.pitch), sp = Math.sin(L.pitch);
+  const scale = Math.min(W, H) * 0.66, ox = W / 2, oy = H / 2 + 6;
+  const zOf = v => (Math.min(hi, Math.max(lo, v)) - lo) / span * 0.6 - 0.3;
+  const proj = (j, i, z) => {   // x: end, y: start (earliest at the back), z: value
+    const x = (nE > 1 ? j / (nE - 1) : 0.5) - 0.5, y = 0.5 - (nS > 1 ? i / (nS - 1) : 0.5);
+    const X = x * cy - y * sy, Y = x * sy + y * cy;
+    return { x: ox + X * scale, y: oy + (Y * cp - z * sp) * scale * 0.9, d: Y * sp + z * cp };
+  };
+  // floor & axes
+  const corners = [[0, 0], [nE - 1, 0], [nE - 1, nS - 1], [0, nS - 1]].map(([j, i]) => proj(j, i, -0.3));
+  g.strokeStyle = P.border; g.lineWidth = 1; g.beginPath(); corners.forEach((q, k) => (k ? g.lineTo(q.x, q.y) : g.moveTo(q.x, q.y))); g.closePath(); g.stroke();
+  const zero = lo < 0 && hi > 0 ? zOf(0) : null;
+  const quads = [];
+  for (let i = 0; i < nS - 1; i++) for (let j = 0; j < nE - 1; j++) {
+    const a = M[i][j], b = M[i][j + 1], d = M[i + 1][j + 1], e = M[i + 1][j];
+    if (a == null || b == null || d == null || e == null) continue;
+    const pts = [proj(j, i, zOf(a)), proj(j + 1, i, zOf(b)), proj(j + 1, i + 1, zOf(d)), proj(j, i + 1, zOf(e))];
+    quads.push({ pts, v: (a + b + d + e) / 4, depth: (pts[0].d + pts[1].d + pts[2].d + pts[3].d) / 4 });
+  }
+  quads.sort((p, q) => p.depth - q.depth);   // far (small depth) first
+  g.lineWidth = 0.5;
+  for (const q of quads) {
+    g.beginPath(); q.pts.forEach((pt, k) => (k ? g.lineTo(pt.x, pt.y) : g.moveTo(pt.x, pt.y))); g.closePath();
+    g.fillStyle = P.panel; g.fill(); g.fillStyle = c.sc.color(q.v); g.fill(); g.strokeStyle = alpha(P.fg3, 0.35); g.stroke();
+  }
+  if (!quads.length) {   // too few grid points for quads: draw the points
+    for (let i = 0; i < nS; i++) for (let j = 0; j < nE; j++) if (M[i][j] != null) { const q = proj(j, i, zOf(M[i][j])); g.fillStyle = c.sc.color(M[i][j]); g.beginPath(); g.arc(q.x, q.y, 4, 0, 7); g.fill(); }
+  }
+  // the selected window
+  const { i, j } = L.cur;
+  if (M[i] && M[i][j] != null) { const q = proj(j, i, zOf(M[i][j])), f = proj(j, i, -0.3); g.strokeStyle = P.fg; g.lineWidth = 1.5; g.beginPath(); g.moveTo(f.x, f.y); g.lineTo(q.x, q.y); g.stroke(); g.fillStyle = P.fg; g.beginPath(); g.arc(q.x, q.y, 3.5, 0, 7); g.fill(); }
+  // labels
+  g.fillStyle = P.fg3; g.font = '11px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  // label the two floor edges nearest the viewer, pushed outwards from the floor's centre
+  const mid = proj((nE - 1) / 2, (nS - 1) / 2, -0.3);
+  const out = (q, px) => { const dx = q.x - mid.x, dy = q.y - mid.y, n = Math.hypot(dx, dy) || 1; return { x: q.x + dx / n * px, y: q.y + dy / n * px }; };
+  const iEdge = proj(0, 0, -0.3).d + proj(nE - 1, 0, -0.3).d > proj(0, nS - 1, -0.3).d + proj(nE - 1, nS - 1, -0.3).d ? 0 : nS - 1;
+  const jEdge = proj(0, 0, -0.3).d + proj(0, nS - 1, -0.3).d > proj(nE - 1, 0, -0.3).d + proj(nE - 1, nS - 1, -0.3).d ? 0 : nE - 1;
+  const lab = (q, t) => g.fillText(t, q.x, q.y);
+  // dates at each axis's far end & at the corner both axes share
+  const jFar = jEdge ? 0 : nE - 1, iFar = iEdge ? 0 : nS - 1;
+  lab(out(proj(jFar, iEdge, -0.3), 16), surfLabel(L.ends[jFar], L.step)); lab(out(proj((nE - 1) / 2, iEdge, -0.3), 18), 'End date e');
+  lab(out(proj(jEdge, iFar, -0.3), 16), surfLabel(L.starts[iFar], L.step)); lab(out(proj(jEdge, (nS - 1) / 2, -0.3), 18), 'Start date s');
+  lab(out(proj(jEdge, iEdge, -0.3), 18), `e ${surfLabel(L.ends[jEdge], L.step)} · s ${surfLabel(L.starts[iEdge], L.step)}`);
+  g.textAlign = 'left'; g.fillText(`${c.F(hi)} top · ${c.F(lo)} floor${zero != null ? ' · 0 at ' + fmt.pct((zero + 0.3) / 0.6, 0) + ' height' : ''}`, 8, 12);
+  cv._hit = (x, y) => {   // nearest grid point on screen
+    let best = null, bd = 400;
+    for (let ii = 0; ii < nS; ii++) for (let jj = 0; jj < nE; jj++) { const v = M[ii][jj]; if (v == null) continue; const q = proj(jj, ii, zOf(v)), dd = (q.x - x) ** 2 + (q.y - y) ** 2; if (dd < bd) { bd = dd; best = { i: ii, j: jj }; } }
+    return best;
+  };
+}
+function wireSurfaceCanvas(cv, ctx) {
+  let drag = null;
+  const pos = e => { const r = cv.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+  const pick = h => { if (h && ctx.S[h.i] && ctx.S[h.i][h.j] != null) { ctx.L.cur = h; drawSurfaces(); surfRead(); } };
+  cv.addEventListener('pointerdown', e => { if (ctx.view !== '3d') return; drag = { x: e.clientX, y: e.clientY, yaw: ctx.L.yaw, pitch: ctx.L.pitch, moved: false }; cv.setPointerCapture(e.pointerId); cv.style.cursor = 'grabbing'; });
+  cv.addEventListener('pointermove', e => {
+    if (drag) {
+      const dx = e.clientX - drag.x, dy = e.clientY - drag.y; if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+      ctx.L.yaw = drag.yaw + dx * 0.01; ctx.L.pitch = Math.min(1.5, Math.max(0.15, drag.pitch + dy * 0.01)); drawSurfaces(); return;
+    }
+    if (cv._hit) pick(cv._hit(pos(e).x, pos(e).y));
+  });
+  const end = e => { if (drag) { if (!drag.moved && cv._hit) pick(cv._hit(pos(e).x, pos(e).y)); drag = null; cv.style.cursor = ''; } };
+  cv.addEventListener('pointerup', end); cv.addEventListener('pointercancel', () => { drag = null; cv.style.cursor = ''; });
+  cv.addEventListener('keydown', e => {
+    const L = ctx.L, k = e.key;
+    if (ctx.view === '3d' && e.shiftKey && /^Arrow/.test(k)) {   // Shift+arrows turn the 3D view
+      if (k === 'ArrowLeft') L.yaw -= 0.15; if (k === 'ArrowRight') L.yaw += 0.15;
+      if (k === 'ArrowUp') L.pitch = Math.min(1.5, L.pitch + 0.1); if (k === 'ArrowDown') L.pitch = Math.max(0.15, L.pitch - 0.1);
+      e.preventDefault(); drawSurfaces(); return;
+    }
+    const d = { ArrowLeft: [0, -1], ArrowRight: [0, 1], ArrowUp: [-1, 0], ArrowDown: [1, 0] }[k]; if (!d) return;
+    e.preventDefault();
+    let { i, j } = L.cur;
+    for (let n = 0; n < 200; n++) { i += d[0]; j += d[1]; if (i < 0 || j < 0 || i >= L.starts.length || j >= L.ends.length) return; if (ctx.S[i][j] != null) break; }
+    pick({ i, j });
+  });
+}
+
 async function runPerm(ev) {
   ev.preventDefault();
   if (!validate([['permN', between(50, 5000, '', true, 500)], ['permSeed', between(0, 1e9, '', true, 7)]])) return;
@@ -4678,6 +4933,11 @@ function wire() {
   $('#subForm').addEventListener('submit', runSub);
   $('#costForm').addEventListener('submit', runCosts);
   $('#riskForm').addEventListener('submit', runRisk); $('#capForm').addEventListener('submit', runCapacity);
+  $('#surfForm').addEventListener('submit', runSurface); $('#sfStop').onclick = () => { surfCancel = true; };
+  $('#sfMin').addEventListener('change', () => { if (surfLast) renderSurface(); });
+  $$('input[name="sf-view"]').forEach(r => r.addEventListener('change', () => { store.set('surfView', r.value); if (surfLast) renderSurface(); }));
+  { const v = store.get('surfView', 'heat'); const r = $(`input[name="sf-view"][value="${v === '3d' ? '3d' : 'heat'}"]`); if (r) r.checked = true; }
+  if (typeof ResizeObserver !== 'undefined') { let raf = 0; new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(drawSurfaces); }).observe($('#sfOut')); }
   $('#optForm').addEventListener('submit', runOptions); $('#optKind').addEventListener('change', optKindChanged); optKindChanged();
   for (const t of ['focus', 'mousedown']) $('#optIv').addEventListener(t, fillIvSources);
   $('#rkFile').addEventListener('change', async e => { for (const f of e.target.files) await addFactorFile(f); e.target.value = ''; });
@@ -4770,9 +5030,9 @@ function wire() {
   $('#univCode').onclick = () => setPicked(codeInfo.universe || []);
   $('#univAll').onclick = () => setPicked(sortedTickers().filter(t => !instruments.get(t).synthetic));
   $('#univNone').onclick = () => setPicked([]);
-  window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning || surfRunning) { e.preventDefault(); e.returnValue = ''; } });
 
-  const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } };
+  const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } if (surfLast) renderSurface(); };
   try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rerender); } catch (e) { /* old browser */ }
   new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 }

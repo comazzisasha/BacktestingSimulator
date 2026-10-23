@@ -2384,6 +2384,71 @@ def test_options_api():
     assert not bad["ok"] and "single-instrument" in bad["error"]["message"]
 
 
+# --------------------------------------------------------- start/end surfaces -----
+
+def test_surface_grid_edges():
+    days = engine.session_days("2020-02-10", "2021-03-31")
+    q = engine.surface_grid(days, "quarter")
+    assert q == ["2020-02-10", "2020-04-01", "2020-07-01", "2020-10-01", "2021-01-04", "2021-03-31"], q
+    y = engine.surface_grid(days, "year")
+    assert y == ["2020-02-10", "2021-01-04", "2021-03-31"]
+    m = engine.surface_grid(days, "month", "2020-06-15", "2020-09-30")
+    assert m == ["2020-06-15", "2020-07-01", "2020-08-03", "2020-09-01", "2020-09-30"]
+
+
+def test_prefix_stat_matches_performance_on_every_slice():
+    rng = random.Random(11)
+    eq = [10000.0]
+    for i in range(400):
+        eq.append(eq[-1] * (1 if 100 <= i < 130 else 1 + rng.gauss(0.0004, 0.012)))   # includes a flat stretch
+    dates = engine.session_days("2019-01-02", "2025-01-01")[:len(eq)]
+    ends = [1, 2, 5, 60, 110, 125, 200, 200, 399, 400]
+    for stat in engine.SURFACE_STATS:
+        for rf in (0.0, 0.03):
+            got = engine.prefix_stat(dates, eq, stat, ends, rf, 252)
+            for k, v in zip(ends, got):
+                want = engine.performance(dates[:k + 1], eq[:k + 1], rf, ann=252).get(stat, engine.NAN)
+                assert (v != v and want != want) or approx(v, want, 1e-9), (stat, rf, k, v, want)
+    flat = [100.0] * 30
+    assert engine.prefix_stat(dates[:30], flat, "sharpe", [29])[0] != engine.prefix_stat(dates[:30], flat, "sharpe", [29])[0], \
+        "no volatility -> no Sharpe ratio"
+
+
+def _check_surface(payload, sets, cfg, pairs, portfolio=False, bench=None):
+    for stat in ("total_return", "cagr", "sharpe", "max_drawdown"):
+        out = json.loads(engine.handle("surface", json.dumps(dict(payload, stat=stat))))
+        assert out["ok"], out
+        r = out["result"]
+        for i, j in pairs:
+            row = r["rows"][i]
+            s, e = row["start"], r["ends"][j]
+            strat = engine.Strategy.from_code(payload["code"])
+            run = engine.backtest_portfolio if portfolio else engine.backtest
+            res = run(strat, sets if portfolio else sets[0], cfg, s, e, bench)
+            A = engine.res_ann(res)
+            want_s = engine.performance(res.dates, res.equity, cfg.risk_free, ann=A)[stat]
+            want_b = engine.performance(res.dates, res.bench_equity, cfg.risk_free, ann=A)[stat]
+            assert approx(row["S"][j], want_s, 1e-9) and approx(row["B"][j], want_b, 1e-9), (stat, s, e, row["S"][j], want_s)
+
+
+def test_surfaces_equal_separate_backtests_of_each_window():
+    engine.DATA["DEMO-STOCK"], engine.DATA["DEMO-BOND"] = DEMO, BOND
+    code = load_templates()["sma_cross"]
+    grid = json.loads(engine.handle("surface_grid", json.dumps({"ticker": "DEMO-STOCK", "code": code, "step": "year"})))["result"]["grid"]
+    base = {"ticker": "DEMO-STOCK", "code": code, "starts": grid[:-1], "ends": grid[1:], "config": {"risk_free": 0.02}}
+    _check_surface(base, [DEMO], engine.Config(risk_free=0.02), [(0, 0), (0, 10), (3, 3), (3, 7), (9, 10)])
+    out = json.loads(engine.handle("surface", json.dumps(dict(base, stat="cagr"))))["result"]
+    assert all(row["S"][j] is None for i, row in enumerate(out["rows"]) for j in range(i)), "only windows with s < e"
+    assert len(out["rows"]) == len(grid) - 1 and all(v is not None for v in out["rows"][0]["S"])
+    # against another instrument as the benchmark
+    _check_surface(dict(base, benchmark="DEMO-BOND"), [DEMO], engine.Config(risk_free=0.02), [(1, 4), (6, 9)], bench=BOND)
+    # a portfolio against its equal-weight benchmark
+    pf = {"tickers": ["DEMO-STOCK", "DEMO-BOND"], "code": load_templates()["pf_equal_weight"], "starts": grid[:-1], "ends": grid[1:]}
+    _check_surface(pf, [DEMO, BOND], engine.Config(), [(0, 5), (2, 8)], portfolio=True)
+    bad = json.loads(engine.handle("surface", json.dumps(dict(base, stat="alpha"))))
+    assert not bad["ok"] and "unknown statistic" in bad["error"]["message"]
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
