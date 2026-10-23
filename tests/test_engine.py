@@ -2084,6 +2084,54 @@ def test_next_orders_from_the_last_bar():
     assert out["next"]["orders"][0]["side"] == "sell"
 
 
+# -------------------------------------------------------------- benchmarks -----
+
+def test_blend_specs_parse():
+    assert engine.parse_blend("SPY 60, TLT 40") == ([("SPY", 0.6), ("TLT", 0.4)], "monthly")
+    assert engine.parse_blend("60% SPY + 40% TLT | daily")[1] == "daily"
+    w, _ = engine.parse_blend("SPY:3,TLT:1")
+    assert w == [("SPY", 0.75), ("TLT", 0.25)]
+    for bad in ("SPY", "SPY 60, TLT", "SPY 60, TLT 40 | weekly"):
+        try:
+            engine.parse_blend(bad)
+            raise AssertionError("accepted %r" % bad)
+        except ValueError:
+            pass
+
+
+def test_blended_benchmark_rebalancing():
+    daily = engine.blended_benchmark([DEMO, BOND], [0.6, 0.4], "daily")
+    rs, rb = engine.returns_by_date(DEMO), engine.returns_by_date(BOND)
+    for i in (10, 500, 1500):
+        d = daily.dates[i]
+        assert abs(daily.close[i] / daily.close[i - 1] - 1 - (0.6 * rs[d] + 0.4 * rb[d])) < 1e-12
+    monthly = engine.blended_benchmark([DEMO, BOND], [0.6, 0.4], "monthly")
+    # inside a month the weights drift; on the first day of a month they are reset
+    i = next(k for k in range(1, monthly.n) if monthly.dates[k][:7] != monthly.dates[k - 1][:7] and k > 30)
+    d = monthly.dates[i + 1]
+    assert abs(monthly.close[i + 1] / monthly.close[i] - 1 - (0.6 * rs[d] + 0.4 * rb[d])) < 1e-12, "the day after a reset: target weights"
+    none = engine.blended_benchmark([DEMO, BOND], [0.6, 0.4], "none")
+    tr_s, tr_b = DEMO.total_return_index(), BOND.total_return_index()
+    assert abs(none.close[-1] / none.close[0] - (0.6 * tr_s[-1] / tr_s[0] + 0.4 * tr_b[-1] / tr_b[0])) < 1e-9, "buy and hold the mix"
+    assert engine.blended_benchmark([DEMO, BOND], [0.6, 0.4], "daily") is daily, "cached"
+
+
+def test_blend_and_extra_benchmarks_in_runs():
+    engine.DATA["DEMO-STOCK"], engine.DATA["DEMO-BOND"] = DEMO, BOND
+    code = load_templates()["sma_cross"]
+    out = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code, "benchmark": "DEMO-STOCK 60, DEMO-BOND 40",
+                                                      "benchmarks": ["DEMO-BOND", "NOPE", "DEMO-BOND 50, DEMO-STOCK 50 | daily"]})))
+    assert out["ok"], out
+    r = out["result"]
+    assert r["benchmark"] == "60% DEMO-STOCK / 40% DEMO-BOND"
+    ex = r["benchmarks"]
+    assert ex[0]["name"] == "DEMO-BOND" and "error" in ex[1] and ex[2]["name"].startswith("50% DEMO-BOND")
+    main = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code, "benchmark": "DEMO-BOND"})))["result"]
+    assert abs(ex[0]["metrics"]["beta"] - main["metrics"]["beta"]) < 1e-12 and abs(ex[0]["own"]["cagr"] - main["bench_metrics"]["cagr"]) < 1e-12
+    rel = r["relative"]
+    assert abs(rel[0] - 1) < 1e-12 and abs(rel[-1] - (r["equity"][-1] / r["bench_equity"][-1]) / (r["equity"][0] / r["bench_equity"][0])) < 1e-12
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

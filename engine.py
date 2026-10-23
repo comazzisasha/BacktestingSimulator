@@ -5930,6 +5930,105 @@ def _sanitize(x):
     return x
 
 
+_BLENDS = {}
+
+
+def parse_blend(spec):
+    """'SPY 60, TLT 40' / 'SPY:0.6,TLT:0.4' / '60% SPY + 40% TLT' -> ([(ticker, weight)], rebalance).
+    Weights are normalized to sum to 1; 'daily' or 'monthly' (default) may follow a '|'."""
+    import re
+    text, _, reb = str(spec).partition("|")
+    reb = reb.strip().lower() or "monthly"
+    if reb not in ("daily", "monthly", "quarterly", "none"):
+        raise ValueError("Rebalance a blend daily, monthly, quarterly or none, not %r." % reb)
+    parts = [x.strip() for x in re.split(r"[,+;/]", text) if x.strip()]
+    out = []
+    for part in parts:
+        m = re.fullmatch(r"([A-Za-z0-9.^=\-]+)\s*[: ]\s*(-?[\d.]+)\s*%?|(-?[\d.]+)\s*%?\s+([A-Za-z0-9.^=\-]+)", part)
+        if not m:
+            raise ValueError("Couldn't read %r: write blends like 'SPY 60, TLT 40'." % part)
+        tk, w = (m.group(1), m.group(2)) if m.group(1) else (m.group(4), m.group(3))
+        out.append((tk.upper(), float(w)))
+    total = sum(w for _, w in out)
+    if len(out) < 2 or total <= 0:
+        raise ValueError("A blend needs two or more instruments with positive weights.")
+    return [(t, w / total) for t, w in out], reb
+
+
+def is_blend(spec):
+    return bool(spec) and any(c in str(spec) for c in ",+;:|") and str(spec).upper() not in DATA
+
+
+def blended_benchmark(sets, weights, rebalance="monthly", name=None):
+    """A benchmark that holds fixed weights of several instruments (dividends reinvested),
+    rebalanced back to them daily, monthly, quarterly or never. Returns a DataSet whose
+    closes are the blend's value (its price basis is total return)."""
+    key = (tuple((ds.ticker, ds.fingerprint()) for ds in sets), tuple(weights), rebalance)
+    if key in _BLENDS:
+        return _BLENDS[key]
+    panel = Panel(sets)
+    tr = [panel.aligned(a, "total_return") for a in range(panel.k)]
+    start = next(t for t in range(panel.n) if all(not isnan(x[t]) for x in tr))   # every part has a price
+    value, units, out, prev = 1.0, None, [], None
+    for t in range(start, panel.n):
+        px = [x[t] for x in tr]
+        if units is not None:
+            value = sum(u * p for u, p in zip(units, px))
+        period = panel.dates[t][:7] if rebalance == "monthly" else (
+            panel.dates[t][:4] + str((int(panel.dates[t][5:7]) - 1) // 3) if rebalance == "quarterly" else None)
+        if units is None or rebalance == "daily" or (period is not None and period != prev):
+            units = [w * value / p for w, p in zip(weights, px)]
+        prev = period
+        out.append(value * 100.0)
+    label = name or " / ".join("%g%% %s" % (round(100 * w, 2), ds.ticker) for ds, w in zip(sets, weights))
+    ds = DataSet(label, panel.dates[start:], out)
+    ds.price_basis = "total_return"
+    ds.blend = {"weights": {d.ticker: w for d, w in zip(sets, weights)}, "rebalance": rebalance}
+    if len(_BLENDS) > 16:
+        _BLENDS.pop(next(iter(_BLENDS)))
+    _BLENDS[key] = ds
+    return ds
+
+
+def benchmark_from_spec(spec, base="USD"):
+    """A loaded ticker, or a blend spec (see parse_blend), as a DataSet in the base currency."""
+    if not spec:
+        return None
+    if is_blend(spec):
+        parts, reb = parse_blend(spec)
+        missing = [t for t, _ in parts if t not in DATA]
+        if missing:
+            raise ValueError("The benchmark blend uses %s, which %s not loaded." % (", ".join(missing), "is" if len(missing) == 1 else "are"))
+        return blended_benchmark([in_base(DATA[t], base) for t, _ in parts], [w for _, w in parts], reb)
+    return in_base(_get(str(spec).upper() if str(spec).upper() in DATA else spec), base)
+
+
+def compare_benchmarks(res, specs):
+    """Relative statistics of a Result against extra benchmarks: [{name, equity, metrics}]."""
+    out = []
+    keys = ("beta", "alpha", "correlation", "r_squared", "tracking_error", "information_ratio", "excess_cagr",
+            "up_capture", "down_capture", "beat_months")
+    for spec in specs or []:
+        try:
+            b = benchmark_from_spec(spec, res.config.base_currency)
+            s0, vals, notes = align_benchmark(res.panel.dates, b, res.start, res.start + len(res.dates) - 1, res.config.total_return)
+        except ValueError as e:
+            out.append({"name": str(spec), "error": str(e)})
+            continue
+        off = s0 - res.start
+        dates, eq = res.dates[off:], res.equity[off:]
+        beq = [res.equity[off] * v / vals[0] for v in vals]
+        m = performance(dates, eq, res.config.risk_free, beq, ann=res_ann(res))
+        own = performance(dates, beq, res.config.risk_free, ann=res_ann(res))
+        rel = [a / x for a, x in zip(eq, beq)]
+        idx = _downsample(len(dates))
+        out.append({"name": b.ticker, "spec": str(spec), "start": dates[0], "notes": notes,
+                    "metrics": {k: m.get(k, NAN) for k in keys},
+                    "own": {k: own.get(k, NAN) for k in ("total_return", "cagr", "volatility", "sharpe", "max_drawdown")},
+                    "equity": [[i + off, beq[i]] for i in idx], "relative": [[i + off, rel[i] / rel[0]] for i in idx]})
+    return out
+
+
 def _get(ticker):
     if ticker not in DATA:
         raise ValueError("No data loaded for %s." % ticker)
@@ -6089,10 +6188,10 @@ def _prepare(p):
                          % (", ".join(missing), "is" if len(missing) == 1 else "are", "it" if len(missing) == 1 else "them"))
     sets = [_get(t) for t in tickers]
     b = p.get("benchmark") or ""
-    bench = _get(b) if b and not (not portfolio and b == tickers[0]) else None
+    bench = None if not b or (not portfolio and b == tickers[0]) else ("blend" if is_blend(b) else _get(b))
     cfg = Config(**(p.get("config") or {}))
     sets = [in_base(ds, cfg.base_currency) for ds in sets]
-    bench = in_base(bench, cfg.base_currency)
+    bench = benchmark_from_spec(b, cfg.base_currency) if bench == "blend" else in_base(bench, cfg.base_currency)
     rates = None
     if cfg.rate_ticker:
         if cfg.rate_ticker not in RATES:
@@ -6253,6 +6352,8 @@ def api_run(p):
         "fills": _fill_rows(res, res.fills[-ROW_LIMIT:]), "fills_total": len(res.fills),
         "trades": res.trades[-ROW_LIMIT:], "trades_total": len(res.trades), "metrics": m, "bench_metrics": b,
         "carry": res.carry, "margin_calls": res.margin_calls[:50], "book": res.book_stats, "limits": res.limits, "next": res.next,
+        "relative": [a / b / (res.equity[0] / res.bench_equity[0]) if b > 0 else NAN for a, b in zip(res.equity, res.bench_equity)],
+        "benchmarks": compare_benchmarks(res, p.get("benchmarks")),
         "monthly": monthly_table(res.dates, res.equity),
         "bench_monthly": monthly_table(res.dates, res.bench_equity),
         "hist": histogram([daily_returns(res.equity), daily_returns(res.bench_equity)]),

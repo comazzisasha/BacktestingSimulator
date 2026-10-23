@@ -485,9 +485,14 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
               <div class="field" id="univField" hidden><span class="label" id="univLabel">Universe</span>
                 <button class="btn univ-btn" id="univBtn" type="button" aria-expanded="false" aria-controls="univPick" aria-describedby="univLabel"><span id="univSummary" translate="no">—</span><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M4 6l4 4 4-4"/></svg></button></div>
               <div class="field"><label for="benchmark">Benchmark</label><select id="benchmark" name="benchmark" translate="no"></select></div>
+              <div class="field" id="blendField" hidden><label for="benchBlend">Blend (Weights in %)</label><input type="text" id="benchBlend" name="benchmark-blend" placeholder="SPY 60, TLT 40" autocomplete="off" spellcheck="false" translate="no" aria-describedby="benchBlend-err"><p class="ferr" id="benchBlend-err" hidden></p></div>
+              <div class="field" id="blendRebField" hidden><label for="blendReb">Rebalance Blend</label><select id="blendReb" name="blend-rebalance"><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="daily">Daily</option><option value="none">Never (buy & hold)</option></select></div>
               <div class="field"><label for="start">From</label><input type="date" id="start" name="from" aria-describedby="start-err"><p class="ferr" id="start-err" hidden></p></div>
               <div class="field"><label for="end">To</label><input type="date" id="end" name="to" aria-describedby="end-err"><p class="ferr" id="end-err" hidden></p></div>
             </div>
+            <div class="field"><label for="benchExtraIn">Also Compare With</label>
+              <div class="row" style="flex-wrap:nowrap"><input type="text" id="benchExtraIn" name="compare-with" placeholder="QQQ, or IWM 50, SPY 50" autocomplete="off" spellcheck="false" translate="no" style="flex:1 1 auto;min-width:0" aria-describedby="benchExtraIn-err"><button class="btn small" id="benchExtraAdd" type="button">Add</button></div>
+              <p class="ferr" id="benchExtraIn-err" hidden></p><div class="row" id="benchExtraChips" translate="no"></div></div>
             <div class="picker" id="univPick" hidden>
               <div class="row"><input type="text" id="univSearch" name="universe-search" placeholder="Filter tickers…" autocomplete="off" spellcheck="false" aria-label="Filter instruments" style="flex:1 1 140px">
                 <button class="btn small" id="univCode" type="button">Use Strategy’s List</button><button class="btn small" id="univAll" type="button">All</button><button class="btn small" id="univNone" type="button">None</button></div>
@@ -702,6 +707,13 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <section class="panel" id="attrPanel" aria-labelledby="h-attr" hidden>
             <div class="panel-h"><h3 id="h-attr">Attribution</h3><span class="muted" id="attrInfo"></span></div>
             <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="P&amp;L by instrument"><table class="metrics" id="attrTable"></table></div></div>
+          </section>
+
+          <section class="panel" data-opt="relative" aria-labelledby="h-rel">
+            <div class="panel-h"><h3 id="h-rel">Relative Performance</h3><ul class="legend" id="relLegend"></ul><span class="spacer"></span><span class="muted" id="relInfo"></span></div>
+            <div class="panel-b"><div class="chart mid"><canvas id="chRel" role="img" aria-label="Strategy value divided by each benchmark's, starting at 1"></canvas></div>
+              <div class="tablebox" tabindex="0" aria-label="Strategy versus each benchmark"><table class="metrics" id="relTable"></table></div>
+              <p class="help">Above 1 and rising: ahead of that benchmark. Add more benchmarks with <i>Also Compare With</i> in the Market panel.</p></div>
           </section>
 
           <div class="two">
@@ -1206,7 +1218,7 @@ const trials = {
 /* --------------------------------------------------- optional sections -- */
 // Tiers: 'core' is always shown, 'std' is shown by default, 'extra' is hidden by default.
 // Choices are remembered in this browser, separately for panels, statistics & tools.
-const PANELS = [['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
+const PANELS = [['relative', 'Relative Performance', 'std'], ['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
   ['roll', 'Rolling Sharpe Ratio', 'std'], ['vol', 'Rolling Volatility', 'extra']];
 const TOOLS = [['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
   ['analytics', 'Instrument Analytics', 'std']];
@@ -2376,7 +2388,7 @@ function readLimits() {
 function saveSettings() {
   const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill', 'cfgSizing', 'cfgVolT', 'cfgKelly', 'cfgLook', 'cfgMaxW', 'cfgMaxG', 'cfgMaxN', 'cfgDD', 'cfgDDScale', 'cfgBase'].forEach(id => { s[id] = $('#' + id).value.trim(); });
   s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked; s.cfgTR = $('#cfgTR').checked;
-  s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.start = $('#start').value; s.end = $('#end').value;
+  s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.benchBlend = $('#benchBlend').value; s.blendReb = $('#blendReb').value; s.start = $('#start').value; s.end = $('#end').value;
   store.set('settings', s); summarizeSettings(); url.write();
 }
 function restoreSettings() {
@@ -2399,16 +2411,33 @@ function summarizeSettings() {
   if (c.base_currency) bits.push(`in ${c.base_currency}`);
   $('#settingsSummary').textContent = bits.join(' · ');
 }
+// The benchmark as the engine takes it: a ticker, '' (buy & hold / equal weight) or a blend spec.
+function benchSpec() { return $('#benchmark').value === '__blend' ? `${$('#benchBlend').value.trim()} | ${$('#blendReb').value}` : $('#benchmark').value; }
+function extraBenches() { return store.get('benchExtra', []); }
+function specTickers(spec) { return String(spec || '').toUpperCase().split(/[\s,+;/|:%]+/).filter(t => instruments.has(t)); }
+function showBlend() { const on = $('#benchmark').value === '__blend'; $('#blendField').hidden = !on; $('#blendRebField').hidden = !on; }
+function renderExtraBenches() {
+  $('#benchExtraChips').innerHTML = extraBenches().map((b, i) => `<span class="chip">${esc(b)} <button class="linkbtn" type="button" data-unbench="${i}" aria-label="Stop comparing with ${esc(b)}">✕</button></span>`).join('');
+}
+function addExtraBench() {
+  const v = $('#benchExtraIn').value.trim(); if (!v) return;
+  const t = specTickers(v), blend = /[,+;:]/.test(v);
+  const err = blend ? (t.length < 2 ? 'A blend needs two loaded tickers with weights, e.g. IWM 50, SPY 50.' : null) : (instruments.has(v.toUpperCase()) ? null : `${v.toUpperCase()} isn’t loaded.`);
+  if (!setFieldError('benchExtraIn', err)) return;
+  const l = extraBenches(); if (l.length >= 5) { setFieldError('benchExtraIn', 'Compare with five at most.'); return; }
+  l.push(blend ? v : v.toUpperCase()); store.set('benchExtra', l); $('#benchExtraIn').value = ''; renderExtraBenches(); runBacktest();
+}
 function payloadBase() {
-  const p = { benchmark: $('#benchmark').value, code: strategyCode(), modules: files.payload(), config: readConfig(), start: $('#start').value || null, end: $('#end').value || null };
+  const p = { benchmark: benchSpec(), code: strategyCode(), modules: files.payload(), config: readConfig(), start: $('#start').value || null, end: $('#end').value || null };
   if (isPortfolio()) p.tickers = pickedUniverse(); else p.ticker = $('#instrument').value;
+  if (extraBenches().length) p.benchmarks = extraBenches();
   return p;
 }
 // The payload for the code in the editor right now (inspects it first, so a UNIVERSE is never missed).
 async function freshPayload() { if (codeInfo.for !== strategyCode()) await refreshParams(); return payloadBase(); }
 const payloadTickers = p => (p.tickers ? [...p.tickers] : [p.ticker]).filter(Boolean);
 // Load what a payload needs into Python: its instruments, benchmark & rate series.
-async function ensurePayload(p, client = py) { await client.ensure([...payloadTickers(p), p.benchmark, ...fxTickers(p)]); await client.ensureRate(p.config.rate_ticker); }
+async function ensurePayload(p, client = py) { await client.ensure([...payloadTickers(p), ...(instruments.has(p.benchmark) ? [p.benchmark] : specTickers(p.benchmark)), ...(p.benchmarks || []).flatMap(specTickers), ...fxTickers(p)]); await client.ensureRate(p.config.rate_ticker); }
 
 /* ---------------------------------------------------------- universe ---- */
 // A strategy that defines UNIVERSE = [...] is a portfolio strategy. The Market panel then
@@ -2456,11 +2485,12 @@ function validInputs() {
 // Resolves when no backtest is running (the Run button is enabled again).
 function whenRunIdle() { return new Promise(res => { const tick = () => ($('#runBtn').disabled ? setTimeout(tick, 50) : res()); tick(); }); }
 // Returns the result it produced, or null if it didn't run (busy, invalid inputs, or an error).
+let runQueued = false;
 // fresh: run even if this exact setup has a cached result (Reproduce must really re-run).
 // modules: module versions to use instead of the library's (Reproduce uses the recorded ones).
 async function runBacktest({ fresh = false, modules = null } = {}) {
   if (!py.ready) return null;
-  const btn = $('#runBtn'); if (btn.disabled) return null;
+  const btn = $('#runBtn'); if (btn.disabled) { runQueued = true; return null; }   // run again with the new inputs when this one ends
   if (codeInfo.for !== strategyCode()) await refreshParams();
   const p = payloadBase(); if (modules) p.modules = { ...p.modules, ...modules };
   if (!payloadTickers(p).length) { if (isPortfolio()) { toast('Pick at least one instrument for the portfolio in the Market panel.'); $('#univBtn').focus(); } else showEmptyData(); return null; }
@@ -2487,6 +2517,7 @@ async function runBacktest({ fresh = false, modules = null } = {}) {
   } catch (e) { showError(e); }
   finally { $('#results').setAttribute('aria-busy', 'false'); busy(false); await loadingOff(btn); }
   if (done) announce(done);
+  if (runQueued) { runQueued = false; setTimeout(runBacktest, 0); }
   return produced;
 }
 const LIMIT_RULES = { vol_target: 'Volatility target', kelly: 'Kelly sizing', drawdown: 'Drawdown', 'position cap': 'Position cap', 'net limit': 'Net limit', 'gross limit': 'Gross limit' };
@@ -2582,8 +2613,11 @@ function drawResultCharts(r) {
   const log = $('#eqScale [aria-pressed="true"]').dataset.scale === 'log';
   kill('eq');
   const eqOpts = baseOptions(d, P, v => fmt.money(v)); eqOpts.scales.y.ticks.callback = v => fmt.moneyAxis(v); eqOpts.scales.y.type = log ? 'logarithmic' : 'linear';
-  charts.eq = new Chart($('#chEquity'), { data: { datasets: [line('Strategy', r.equity, P.strat, { borderWidth: 2 }), line('Benchmark', r.bench_equity, P.bench, { borderWidth: 1.4, borderDash: [5, 3] })] }, options: eqOpts });
-  $('#eqLegend').innerHTML = legendHTML([[P.strat, 'Strategy'], [P.bench, r.benchmark === r.ticker ? 'Buy & hold (dashed)' : r.benchmark + ' (dashed)']]);
+  const extra = (r.benchmarks || []).filter(b => !b.error), EXTRA = [P.fg3, P.gain, P.loss, P.primary, P.fg2];   // none of them the benchmark's colour
+  charts.eq = new Chart($('#chEquity'), { data: { datasets: [line('Strategy', r.equity, P.strat, { borderWidth: 2 }), line('Benchmark', r.bench_equity, P.bench, { borderWidth: 1.4, borderDash: [5, 3] }),
+    ...extra.map((b, i) => ({ type: 'line', label: b.name, data: b.equity.map(([x, y]) => ({ x, y })), borderColor: EXTRA[i % 5], backgroundColor: EXTRA[i % 5], borderWidth: 1.1, borderDash: [2, 3], pointRadius: 0, pointHoverRadius: 3 }))] }, options: eqOpts });
+  $('#eqLegend').innerHTML = legendHTML([[P.strat, 'Strategy'], [P.bench, r.benchmark === r.ticker ? 'Buy & hold (dashed)' : r.benchmark + ' (dashed)'], ...extra.map((b, i) => [EXTRA[i % 5], b.name])]);
+  drawRelative(r, P, extra, EXTRA);
   $('#chEquity').setAttribute('aria-label', `Equity curve: strategy ends at ${fmt.money(r.equity[r.equity.length - 1])}, benchmark at ${fmt.money(r.bench_equity[r.bench_equity.length - 1])}`);
 
   kill('dd');
@@ -2633,6 +2667,21 @@ function drawWeights(r, P) {
     backgroundColor: alpha(x.color, 0.8), borderWidth: 0, barPercentage: 1, categoryPercentage: 1, grouped: false })) }, options: o });
   $('#pxLegend').innerHTML = legendHTML(sets.map(x => [alpha(x.color, 0.8), x.label, 8]));
   $('#chPrice').setAttribute('aria-label', `Portfolio weights over time for ${order.length} instruments`);
+}
+function drawRelative(r, P, extra, colors) {
+  kill('rel'); if (!panelOn('relative')) return;
+  const main = r.benchmark === r.ticker ? 'Buy & hold' : r.benchmark, o = baseOptions(r.dates, P, v => fmt.num(v, 3)); o.plugins.legend = { display: false };
+  charts.rel = new Chart($('#chRel'), { data: { datasets: [line('vs ' + main, r.relative, P.bench, { borderWidth: 1.8 }),
+    ...extra.map((b, i) => ({ type: 'line', label: 'vs ' + b.name, data: b.relative.map(([x, y]) => ({ x, y })), borderColor: colors[i % 5], backgroundColor: colors[i % 5], borderWidth: 1.2, pointRadius: 0, pointHoverRadius: 3 }))] }, options: o });
+  $('#relLegend').innerHTML = legendHTML([[P.bench, 'vs ' + main], ...extra.map((b, i) => [colors[i % 5], 'vs ' + b.name])]);
+  const last = r.relative[r.relative.length - 1]; $('#relInfo').textContent = `${last >= 1 ? 'Ahead of' : 'Behind'} ${main} by ${fmt.pct(Math.abs(last - 1), 1)} overall`;
+  const m = r.metrics, bm = r.bench_metrics;
+  const rows = [{ name: main, own: bm, rel: m }, ...extra.map(b => ({ name: b.name, own: b.own, rel: b.metrics }))];
+  const errs = (r.benchmarks || []).filter(b => b.error);
+  $('#relTable').innerHTML = '<thead><tr><th scope="col">Benchmark</th><th scope="col" class="n">Its CAGR</th><th scope="col" class="n">Its Sharpe</th><th scope="col" class="n">Its Max DD</th><th scope="col" class="n">Excess CAGR</th><th scope="col" class="n">Beta</th><th scope="col" class="n">Correlation</th><th scope="col" class="n">Tracking Error</th><th scope="col" class="n">Information Ratio</th></tr></thead><tbody>' +
+    rows.map(x => `<tr><th scope="row" translate="no">${esc(x.name)}</th><td class="n">${fmt.pct(x.own.cagr, 2, true)}</td><td class="n">${fmt.num(x.own.sharpe)}</td><td class="n">${fmt.pct(x.own.max_drawdown, 1)}</td><td class="n ${sign(x.rel.excess_cagr)}">${fmt.pct(x.rel.excess_cagr, 2, true)}</td><td class="n">${fmt.num(x.rel.beta)}</td><td class="n">${fmt.num(x.rel.correlation)}</td><td class="n">${fmt.pct(x.rel.tracking_error, 1)}</td><td class="n">${fmt.num(x.rel.information_ratio)}</td></tr>`).join('') +
+    errs.map(x => `<tr><th scope="row" translate="no">${esc(x.name)}</th><td colspan="8" class="muted">${esc(x.error)}</td></tr>`).join('') + '</tbody>' +
+    (extra.some(b => (b.notes || []).length) ? `<caption class="help" style="caption-side:bottom;text-align:left">${extra.flatMap(b => b.notes || []).map(esc).join(' ')} Each comparison covers the dates both have.</caption>` : '');
 }
 function drawRest(r, P, d) {
   kill('hist');
@@ -2729,9 +2778,9 @@ function fillInstrumentSelects(prefer) {
   const inst = $('#instrument'), bench = $('#benchmark');
   const cur = prefer || {}; const iv = cur.instrument || inst.value, bv = cur.benchmark !== undefined ? cur.benchmark : bench.value;
   inst.innerHTML = list.map(opt).join('');
-  bench.innerHTML = '<option value="">Same instrument (buy & hold)</option>' + list.map(opt).join('');
+  bench.innerHTML = '<option value="">Same instrument (buy & hold)</option>' + list.map(opt).join('') + '<option value="__blend">Custom blend…</option>';
   const fallback = ['SPY', 'QQQ'].find(t => list.includes(t)) || list.find(t => !instruments.get(t).synthetic) || list[0] || '';
-  inst.value = list.includes(iv) ? iv : fallback; bench.value = list.includes(bv) ? bv : '';
+  inst.value = list.includes(iv) ? iv : fallback; bench.value = list.includes(bv) || bv === '__blend' ? bv : ''; showBlend();
   updateDateBounds(); renderAnalyticsList(); renderUniverse();
 }
 function updateDateBounds() {
@@ -3598,7 +3647,7 @@ async function saveRun(p, r) {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: new Date().toISOString(),
     strategy: { kind: currentSource().kind, name: currentSource().name, template: $('#template').value },
     code: p.code, modules: Object.fromEntries(Object.keys(r.provenance.modules || {}).map(n => [n, (p.modules || {})[n]])),
-    market: { ticker: p.ticker || null, tickers: p.tickers || null, benchmark: r.benchmark, start: p.start, end: p.end },
+    market: { benchmark_spec: p.benchmark, ticker: p.ticker || null, tickers: p.tickers || null, benchmark: r.benchmark, start: p.start, end: p.end },
     provenance: { ...r.provenance, engine_file: engineHash }, metrics: r.metrics, bench_metrics: r.bench_metrics,
     curve: { dates: idx.map(i => r.dates[i]), equity: idx.map(i => r.equity[i]), bench: idx.map(i => r.bench_equity[i]) },
     notes: r.notes, label: '',
@@ -3663,7 +3712,10 @@ async function restoreRun(x) {
   await refreshParams();
   if (x.market.tickers) setPicked(x.market.tickers);
   else if (x.market.ticker && instruments.has(x.market.ticker)) { $('#instrument').value = x.market.ticker; updateDateBounds(); }
-  const b = x.market.benchmark; $('#benchmark').value = instruments.has(b) && !(x.market.ticker === b) ? b : '';
+  const b = x.market.benchmark_spec != null ? x.market.benchmark_spec : x.market.benchmark;
+  if (/[,+;:|]/.test(b || '') && !instruments.has(b)) { const [mix, reb] = b.split('|'); $('#benchmark').value = '__blend'; $('#benchBlend').value = mix.trim(); $('#blendReb').value = (reb || 'monthly').trim(); }
+  else $('#benchmark').value = instruments.has(b) && !(x.market.ticker === b) ? b : '';
+  showBlend();
   $('#start').value = x.market.start || ''; $('#end').value = x.market.end || ''; markRange();
   saveSettings(); onCodeChanged(); location.hash = '#backtest';
 }
@@ -4159,7 +4211,11 @@ function wire() {
   $('#saveName').addEventListener('keydown', e => { if (e.key === 'Escape') closeSave(); });
   $('#delBtn').onclick = doDelete;
   $('#instrument').onchange = () => { updateDateBounds(); saveSettings(); runBacktest(); };
-  $('#benchmark').onchange = () => { saveSettings(); runBacktest(); };
+  $('#benchmark').onchange = () => { showBlend(); saveSettings(); if ($('#benchmark').value === '__blend' && !$('#benchBlend').value.trim()) { $('#benchBlend').focus(); return; } runBacktest(); };
+  $('#benchBlend').addEventListener('change', () => { saveSettings(); runBacktest(); }); $('#blendReb').onchange = () => { saveSettings(); runBacktest(); };
+  $('#benchBlend').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); saveSettings(); runBacktest(); } });
+  $('#benchExtraAdd').onclick = addExtraBench; $('#benchExtraIn').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); addExtraBench(); } });
+  $('#benchExtraChips').addEventListener('click', e => { const b = e.target.closest('[data-unbench]'); if (!b) return; const l = extraBenches(); l.splice(+b.dataset.unbench, 1); store.set('benchExtra', l); renderExtraBenches(); runBacktest(); });
   ['start', 'end'].forEach(id => $('#' + id).addEventListener('change', () => { setFieldError(id, null); markRange(); saveSettings(); }));
   $$('#ranges button').forEach(b => { b.onclick = () => { setRange(+b.dataset.years); runBacktest(); }; });
   $$('#settingsForm input, #settingsForm select').forEach(el => el.addEventListener('change', () => { if (el.type === 'text') validate([CFG_RULES.find(r => r[0] === el.id)].filter(Boolean)) && saveSettings(); else saveSettings(); }));
@@ -4336,7 +4392,7 @@ async function boot() {
   const wanted = qs && templates.some(t => t.id === qs) ? 'tpl:' + qs : draft ? draft.template : 'tpl:sma_cross';
   fillTemplateSelect(wanted);
   if (!$('#template').value) $('#template').value = 'tpl:sma_cross';
-  files.render(); renderModules(); ghRestore(); $('#rkFactors').value = store.get('riskFactors', 'SPY'); showPane(store.get('pane', 'problems')); setPaneOpen(store.get('paneOpen', true));
+  files.render(); renderModules(); ghRestore(); renderExtraBenches(); $('#rkFactors').value = store.get('riskFactors', 'SPY'); showPane(store.get('pane', 'problems')); setPaneOpen(store.get('paneOpen', true));
   if (draft && draft.code && draft.template === $('#template').value) { files.setStrategy(draft.code); const s = currentSource(); $('#about').textContent = s.about; $('#delBtn').hidden = s.kind !== 'mine'; }
   else loadSelectedTemplate();
 
@@ -4346,7 +4402,7 @@ async function boot() {
   if (window.Chart) { Chart.defaults.font.family = cssVar('--f-sans'); Chart.defaults.font.size = 12; }
   const prefer = { ...(settings || {}) };
   if (q.get('ticker')) prefer.instrument = q.get('ticker').toUpperCase();
-  if (q.has('bench')) prefer.benchmark = (q.get('bench') || '').toUpperCase();
+  if (q.has('bench')) prefer.benchmark = q.get('bench') === '__blend' ? '__blend' : (q.get('bench') || '').toUpperCase();
   fillInstrumentSelects(prefer); fillRateSelect(); summarizeSettings(); renderFactorSets();
   const from = q.get('from') || (settings && settings.start), to = q.get('to') || (settings && settings.end);
   if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) $('#start').value = from;
