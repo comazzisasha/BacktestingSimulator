@@ -793,6 +793,82 @@ def test_dividend_and_split_files():
     assert not already.apply_splits([("2020-02-03", 2)])[0]["adjusted"] and already.close[0] == 50.0
 
 
+def test_ex_date_pays_only_shares_held_at_the_previous_close():
+    ds = synthetic("EXD", [100.0] * 60, dividends=[("2020-02-14", 2.0)])
+    ex = ds.index["2020-02-14"]
+
+    def buy_from(day):
+        code = "def on_bar(ctx):\n    return 1.0 if ctx.date >= %r else 0.0\n" % day
+        return engine.backtest(engine.Strategy.from_code(code), ds, engine.Config(slippage_bps=0))
+    early = buy_from(ds.dates[ex - 2])     # decided two closes before: filled at the open before the ex-date
+    late = buy_from(ds.dates[ex - 1])      # decided the close before: filled at the ex-date open
+    assert early.position[ex - 1] > 0 and late.position[ex - 1] == 0 and late.position[ex] > 0
+    assert approx(early.carry["dividends_received"], 2.0 * early.position[ex - 1], 1e-12)
+    assert late.carry["dividends_received"] == 0, "a position bought at the ex-date open doesn't get the dividend"
+    m, _ = engine.summarize(early)
+    assert approx(m["dividends_received"], 2.0 * early.position[ex - 1], 1e-12)
+
+
+def test_ex_date_on_a_non_trading_day_moves_to_the_next_session():
+    ds = synthetic("HOL", [100.0] * 200, dividends=[("2020-07-04", 0.5), ("2020-02-16", 0.25), ("2019-01-01", 9.0)])
+    assert ds.dividends[ds.index["2020-07-06"]] == 0.5, "Saturday 4 July (market shut on the 3rd) -> Monday"
+    assert ds.dividends[ds.index["2020-02-18"]] == 0.25, "Sunday before Presidents' Day -> Tuesday"
+    assert sum(ds.dividends) == 0.75, "an ex-date before the first bar is dropped"
+    short = engine.backtest(engine.Strategy.from_code("def on_bar(ctx):\n    return -1.0\n"), ds,
+                            engine.Config(slippage_bps=0, allow_short=True))
+    t = ds.index["2020-07-06"]
+    held = short.position[t - 1]
+    assert held < 0 and short.carry["dividends_paid"] > 0
+    assert approx(short.carry["dividends_paid"], -held * 0.5 - short.position[ds.index["2020-02-18"] - 1] * 0.25, 1e-12), \
+        "a short pays the dividend on the shares it is short"
+
+
+def test_total_return_series_matches_a_hand_calculation():
+    closes = [100.0, 101.0, 99.0, 100.0, 102.0]
+    ds = synthetic("TRI", closes, dividends=[("2020-01-06", 1.0), ("2020-01-08", 0.5)])   # bars 2 and 4
+    want = [100.0, 101.0]
+    want.append(want[-1] * (99.0 + 1.0) / 101.0)
+    want.append(want[-1] * 100.0 / 99.0)
+    want.append(want[-1] * (102.0 + 0.5) / 100.0)
+    assert all(approx(a, b, 1e-12) for a, b in zip(ds.total_return_index(), want)), ds.total_return_index()
+    st = engine.instrument_stats([ds])
+    assert approx(st["rows"][0]["total_return"], want[-1] / 100 - 1, 1e-12) and st["rows"][0]["last"] == 102.0
+    res = run("def on_bar(ctx):\n    return 0.0\n", ds)
+    assert approx(res.bench_equity[-1] / res.bench_equity[0], want[-1] / want[0], 1e-12), "the benchmark reinvests"
+
+
+def test_include_dividends_off_gives_price_only_results():
+    closes = [100.0 + 0.2 * i for i in range(120)]
+    ds = synthetic("PO", closes, dividends=[("2020-02-03", 1.0), ("2020-05-01", 1.0)])
+    hold = "def on_bar(ctx):\n    return 1.0\n"
+    on, off = run(hold, ds), run(hold, ds, total_return=False)
+    assert on.carry["dividends_received"] > 0 and off.carry["dividends_received"] == 0
+    assert approx(off.bench_equity[-1] / off.bench_equity[0], closes[-1] / closes[0], 1e-12), "price-only benchmark"
+    assert on.bench_equity[-1] > off.bench_equity[-1] and on.equity[-1] > off.equity[-1]
+    m, _ = engine.summarize(off)
+    assert m["dividends_received"] == 0
+    st = engine.instrument_stats([ds], total_return=False)
+    assert approx(st["rows"][0]["total_return"], closes[-1] / closes[0] - 1, 1e-12)
+    out = json.loads(engine.handle("analytics", json.dumps({"tickers": [], "total_return": False})))
+    assert out["ok"]
+
+
+def test_dividend_file_formats():
+    for text in ("ex_date,amount\n2020-03-20,1.25\n2020-06-19,0.5\n",
+                 "Ex-Dividend Date,Dividend\n2020-03-20,1.25\n2020-06-19,0.5\n",
+                 "Date,Dividends\n2020-03-20,1.25\n2020-06-19,0.5\n"):
+        assert engine.parse_events_csv(text) == ("dividends", [("2020-03-20", 1.25), ("2020-06-19", 0.5)]), text
+    nasdaq = ("Ex/EFF Date,Type,Cash Amount,Declaration Date,Record Date,Payment Date\n"
+              "06/19/2020,Cash,$0.50,06/01/2020,06/22/2020,06/30/2020\n"
+              "04/01/2020,Stock,$0.00,03/01/2020,04/02/2020,04/10/2020\n"
+              "03/20/2020,Special,$5.00,03/01/2020,03/23/2020,03/30/2020\n"
+              "03/02/2020,Cash,\"$1,250.00\",02/01/2020,03/03/2020,03/10/2020\n")
+    assert engine.parse_events_csv(nasdaq) == ("dividends", [("2020-03-02", 1250.0), ("2020-06-19", 0.5)]), \
+        "only cash rows count; $ amounts & MM/DD/YYYY dates parse"
+    assert engine.csv_kind(["ex_date", "amount"]) == "dividends"
+    assert engine.csv_kind(["date", "close", "amount"]) == "prices", "a close column makes it a price file"
+
+
 def test_cash_interest_act360_and_rate_series():
     ds = synthetic("CASHY", [100.0] * 253)
     flat = "def on_bar(ctx):\n    return 0.0\n"
@@ -2306,6 +2382,71 @@ def test_options_api():
     bad = json.loads(engine.handle("options", json.dumps({
         "tickers": ["DEMO-STOCK", "DEMO-BOND"], "code": load_templates()["pf_equal_weight"]})))
     assert not bad["ok"] and "single-instrument" in bad["error"]["message"]
+
+
+# --------------------------------------------------------- start/end surfaces -----
+
+def test_surface_grid_edges():
+    days = engine.session_days("2020-02-10", "2021-03-31")
+    q = engine.surface_grid(days, "quarter")
+    assert q == ["2020-02-10", "2020-04-01", "2020-07-01", "2020-10-01", "2021-01-04", "2021-03-31"], q
+    y = engine.surface_grid(days, "year")
+    assert y == ["2020-02-10", "2021-01-04", "2021-03-31"]
+    m = engine.surface_grid(days, "month", "2020-06-15", "2020-09-30")
+    assert m == ["2020-06-15", "2020-07-01", "2020-08-03", "2020-09-01", "2020-09-30"]
+
+
+def test_prefix_stat_matches_performance_on_every_slice():
+    rng = random.Random(11)
+    eq = [10000.0]
+    for i in range(400):
+        eq.append(eq[-1] * (1 if 100 <= i < 130 else 1 + rng.gauss(0.0004, 0.012)))   # includes a flat stretch
+    dates = engine.session_days("2019-01-02", "2025-01-01")[:len(eq)]
+    ends = [1, 2, 5, 60, 110, 125, 200, 200, 399, 400]
+    for stat in engine.SURFACE_STATS:
+        for rf in (0.0, 0.03):
+            got = engine.prefix_stat(dates, eq, stat, ends, rf, 252)
+            for k, v in zip(ends, got):
+                want = engine.performance(dates[:k + 1], eq[:k + 1], rf, ann=252).get(stat, engine.NAN)
+                assert (v != v and want != want) or approx(v, want, 1e-9), (stat, rf, k, v, want)
+    flat = [100.0] * 30
+    assert engine.prefix_stat(dates[:30], flat, "sharpe", [29])[0] != engine.prefix_stat(dates[:30], flat, "sharpe", [29])[0], \
+        "no volatility -> no Sharpe ratio"
+
+
+def _check_surface(payload, sets, cfg, pairs, portfolio=False, bench=None):
+    for stat in ("total_return", "cagr", "sharpe", "max_drawdown"):
+        out = json.loads(engine.handle("surface", json.dumps(dict(payload, stat=stat))))
+        assert out["ok"], out
+        r = out["result"]
+        for i, j in pairs:
+            row = r["rows"][i]
+            s, e = row["start"], r["ends"][j]
+            strat = engine.Strategy.from_code(payload["code"])
+            run = engine.backtest_portfolio if portfolio else engine.backtest
+            res = run(strat, sets if portfolio else sets[0], cfg, s, e, bench)
+            A = engine.res_ann(res)
+            want_s = engine.performance(res.dates, res.equity, cfg.risk_free, ann=A)[stat]
+            want_b = engine.performance(res.dates, res.bench_equity, cfg.risk_free, ann=A)[stat]
+            assert approx(row["S"][j], want_s, 1e-9) and approx(row["B"][j], want_b, 1e-9), (stat, s, e, row["S"][j], want_s)
+
+
+def test_surfaces_equal_separate_backtests_of_each_window():
+    engine.DATA["DEMO-STOCK"], engine.DATA["DEMO-BOND"] = DEMO, BOND
+    code = load_templates()["sma_cross"]
+    grid = json.loads(engine.handle("surface_grid", json.dumps({"ticker": "DEMO-STOCK", "code": code, "step": "year"})))["result"]["grid"]
+    base = {"ticker": "DEMO-STOCK", "code": code, "starts": grid[:-1], "ends": grid[1:], "config": {"risk_free": 0.02}}
+    _check_surface(base, [DEMO], engine.Config(risk_free=0.02), [(0, 0), (0, 10), (3, 3), (3, 7), (9, 10)])
+    out = json.loads(engine.handle("surface", json.dumps(dict(base, stat="cagr"))))["result"]
+    assert all(row["S"][j] is None for i, row in enumerate(out["rows"]) for j in range(i)), "only windows with s < e"
+    assert len(out["rows"]) == len(grid) - 1 and all(v is not None for v in out["rows"][0]["S"])
+    # against another instrument as the benchmark
+    _check_surface(dict(base, benchmark="DEMO-BOND"), [DEMO], engine.Config(risk_free=0.02), [(1, 4), (6, 9)], bench=BOND)
+    # a portfolio against its equal-weight benchmark
+    pf = {"tickers": ["DEMO-STOCK", "DEMO-BOND"], "code": load_templates()["pf_equal_weight"], "starts": grid[:-1], "ends": grid[1:]}
+    _check_surface(pf, [DEMO, BOND], engine.Config(), [(0, 5), (2, 8)], portfolio=True)
+    bad = json.loads(engine.handle("surface", json.dumps(dict(base, stat="alpha"))))
+    assert not bad["ok"] and "unknown statistic" in bad["error"]["message"]
 
 
 if __name__ == "__main__":

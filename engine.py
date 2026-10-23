@@ -1129,7 +1129,8 @@ def read_csv_table(text):
 
 CSV_COLUMNS = {
     # the same names, in the same order of preference, as parseCSV() in index.html
-    "date": ("date", "observation_date", "ex/eff date", "ex-date", "ex date", "ex-dividend date", "timestamp", "time"),
+    "date": ("date", "observation_date", "ex/eff date", "ex-date", "ex_date", "ex date", "ex-dividend date", "ex_dividend_date",
+             "timestamp", "time"),
     "close": ("close/last", "close", "price", "last"),
     "adj_close": ("adj close", "adj. close", "adj_close", "adjusted close", "adjclose"),
     "open": ("open",), "high": ("high",), "low": ("low",), "volume": ("volume", "vol."),
@@ -1359,9 +1360,12 @@ def parse_events_csv(text):
     if kind not in ("dividends", "splits"):
         raise ValueError("Expected a dividend or split history, got %s" % kind)
     di, vi = _col(header, "date"), _col(header, "dividend" if kind == "dividends" else "split")
+    ti = header.index("type") if kind == "dividends" and "type" in header else None   # Nasdaq: Cash, or stock & other kinds
     out = []
     for row in rows:
         if max(di, vi) >= len(row):
+            continue
+        if ti is not None and ti < len(row) and row[ti].strip().lower() not in ("cash", ""):
             continue
         day = _iso_date(row[di])
         val = _num(row[vi]) if kind == "dividends" else _split_ratio(row[vi])
@@ -3948,7 +3952,8 @@ METRICS = [
     ("avg_long", "Long exposure (avg.)", "Carry & exposure", "pct", "extra", "Mean long market value / equity."),
     ("avg_short", "Short exposure (avg.)", "Carry & exposure", "pct", "extra", "Mean short market value / equity."),
     ("max_gross", "Gross exposure (max)", "Carry & exposure", "pct", "extra", "Highest gross exposure at any close."),
-    ("dividends_net", "Dividends", "Carry & exposure", "money", "std", "Dividends received on longs minus dividends paid on shorts."),
+    ("dividends_received", "Dividends received", "Carry & exposure", "money", "std", "Cash dividends paid to the account on shares held at the close before each ex-date."),
+    ("dividends_net", "Dividends (net)", "Carry & exposure", "money", "std", "Dividends received on longs minus dividends paid on shorts."),
     ("interest_net", "Interest on cash", "Carry & exposure", "money", "std", "Interest earned on cash minus interest paid on borrowed cash (ACT/360)."),
     ("borrow_paid", "Borrow fees", "Carry & exposure", "money", "extra", "Fees paid to borrow shares for short positions."),
     ("carry_total", "Net carry", "Carry & exposure", "money", "extra", "Dividends + interest - borrow fees."),
@@ -4408,6 +4413,7 @@ def summarize(res, rf=None, trials=None):
     m.update(execution_stats(res))
     m.update(exposure_stats(res))
     c = res.carry
+    m["dividends_received"] = c["dividends_received"]
     m["dividends_net"] = c["dividends_received"] - c["dividends_paid"]
     m["interest_net"] = c["interest_earned"] - c["interest_paid"]
     m["borrow_paid"] = c["borrow_paid"]
@@ -4588,6 +4594,94 @@ def subperiod_metrics(res, n_periods=5, rf=None):
 def _fresh(strategy):
     """Strategies may be passed as a Strategy or a function that builds a new one."""
     return strategy() if callable(strategy) and not isinstance(strategy, Strategy) else strategy
+
+
+SURFACE_STATS = {"total_return": "Total return", "cagr": "CAGR", "volatility": "Volatility", "sharpe": "Sharpe ratio",
+                 "sortino": "Sortino ratio", "max_drawdown": "Max drawdown", "calmar": "Calmar ratio"}
+
+
+def surface_grid(dates, step="quarter", start=None, end=None):
+    """Window edges for a start/end surface: the first bar of every month, quarter or year
+    from start to end, plus the last bar."""
+    s, e = _resolve_range(dates, start, end)
+    key = {"month": lambda d: d[:7], "quarter": lambda d: (d[:4], (int(d[5:7]) - 1) // 3),
+           "year": lambda d: d[:4]}[step]
+    grid, last = [], None
+    for d in dates[s:e + 1]:
+        k = key(d)
+        if k != last:
+            grid.append(d)
+            last = k
+    if grid[-1] != dates[e]:
+        grid.append(dates[e])
+    return grid
+
+
+def prefix_stat(dates, equity, stat, ends, rf=0.0, ann=None):
+    """`stat` of equity[0..k] for each bar index k in ends (ascending), exactly as
+    performance() computes it on that slice, in one pass over the curve."""
+    P = ann or TRADING_DAYS
+    rfd = (1 + rf) ** (1 / P) - 1
+    d0 = _dt.date.fromisoformat(dates[0][:10])
+    out, ei = [], 0
+    n = 0
+    mu = m2 = down = 0.0          # Welford mean & sum of squared deviations of the returns; downside sum
+    peak, mdd = -math.inf, 0.0
+    for k, v in enumerate(equity):
+        if k:
+            r = v / equity[k - 1] - 1 if equity[k - 1] > 0 else 0.0
+            n += 1
+            d = r - mu
+            mu += d / n
+            m2 += d * (r - mu)
+            down += min(r - rfd, 0.0) ** 2
+        if v > peak:
+            peak = v
+        mdd = min(mdd, v / peak - 1 if peak > 0 else 0.0)
+        while ei < len(ends) and ends[ei] == k:
+            ei += 1
+            years = max((_dt.date.fromisoformat(dates[k][:10]) - d0).days / 365.25, 1 / 365.25)
+            cagr = (v / equity[0]) ** (1 / years) - 1 if v > 0 else -1.0
+            sd = math.sqrt(m2 / (n - 1)) if n >= 2 else NAN
+            if stat == "total_return":
+                x = v / equity[0] - 1
+            elif stat == "cagr":
+                x = cagr
+            elif stat == "volatility":
+                x = sd * math.sqrt(P)
+            elif stat == "sharpe":
+                x = (mu - rfd) / sd * math.sqrt(P) if n >= 2 and sd > 0 else NAN
+            elif stat == "sortino":
+                dsd = math.sqrt(down / n) if n else 0.0
+                x = (mu - rfd) / dsd * math.sqrt(P) if n >= 2 and dsd > 0 else NAN
+            elif stat == "max_drawdown":
+                x = mdd
+            elif stat == "calmar":
+                x = cagr / abs(mdd) if mdd < 0 else NAN
+            else:
+                raise ValueError("unknown statistic %r (use %s)" % (stat, ", ".join(SURFACE_STATS)))
+            out.append(x)
+    return out
+
+
+def surface_row(make_strategy, sets, cfg, start, ends, stat, bench=None, portfolio=False, rates=None, signal_key=None):
+    """One row of the start/end surfaces: the strategy backtested from `start` & the
+    benchmark held from `start`, scored by `stat` on every window [start, e] for e in ends.
+
+    A backtest from s to e is the backtest from s to the last end cut at e: the engine
+    only ever uses data up to each bar, so one run per start gives the whole row."""
+    run = backtest_portfolio if portfolio else backtest
+    res = run(make_strategy(), sets if portfolio else sets[0], cfg, start, ends[-1], bench, rates=rates, signal_key=signal_key)
+    import bisect
+    idx = [bisect.bisect_right(res.dates, e) - 1 for e in ends]
+    ok = [i for i, k in enumerate(idx) if k > 0]
+    A, rf = res_ann(res), res.config.risk_free
+    ks = [idx[i] for i in ok]
+    S, B = prefix_stat(res.dates, res.equity, stat, ks, rf, A), prefix_stat(res.dates, res.bench_equity, stat, ks, rf, A)
+    row_s, row_b = [None] * len(ends), [None] * len(ends)
+    for j, i in enumerate(ok):
+        row_s[i], row_b[i] = S[j], B[j]
+    return {"start": res.dates[0], "requested": start, "S": row_s, "B": row_b, "ends": [res.dates[k] if k >= 0 else None for k in idx]}
 
 
 def cost_sensitivity(strategy, ds, cfg, levels, start=None, end=None, bench=None, rates=None):
@@ -4952,19 +5046,20 @@ def lookahead_check(strategy, ds, full_signals, samples=8, budget=None):
     return {"checked": done, "planned": len(picks), "violations": bad}
 
 
-def instrument_stats(datasets, start=None, end=None, rf=0.0):
+def instrument_stats(datasets, start=None, end=None, rf=0.0, total_return=True):
     """Per-instrument buy-and-hold stats plus a correlation matrix of daily returns
-    on the dates all instruments share."""
+    on the dates all instruments share; dividends reinvested unless total_return is False."""
     rows = []
+    series = {ds.ticker: ds.total_return_index() if total_return else ds.close for ds in datasets}
     for ds in datasets:
         try:
             s, e = _resolve_range(ds.dates, start, end, "%s data" % ds.ticker)
         except ValueError:
             continue
-        eq = ds.close[s:e + 1]
+        eq = series[ds.ticker][s:e + 1]
         m = performance(ds.dates[s:e + 1], eq, rf)
         rows.append({"ticker": ds.ticker, "start": ds.dates[s], "end": ds.dates[e], "bars": e - s + 1,
-                     "last": eq[-1], "total_return": m["total_return"], "cagr": m["cagr"],
+                     "last": ds.close[e], "total_return": m["total_return"], "cagr": m["cagr"],
                      "volatility": m.get("volatility"), "sharpe": m.get("sharpe"),
                      "max_drawdown": m["max_drawdown"], "skew": m.get("skew"),
                      "best_day": m.get("best_day"), "worst_day": m.get("worst_day")})
@@ -4980,7 +5075,7 @@ def instrument_stats(datasets, start=None, end=None, rf=0.0):
     if len(common) >= 3:
         rets = {}
         for ds in used:
-            closes = [ds.close[ds.index[d]] for d in common]
+            closes = [series[ds.ticker][ds.index[d]] for d in common]
             rets[ds.ticker] = daily_returns(closes)
             step = max(1, len(common) // 600)
             rebased[ds.ticker] = [100 * closes[j] / closes[0] for j in range(0, len(common), step)]
@@ -6668,6 +6763,37 @@ def api_subperiods(p):
     return subperiod_metrics(res, p.get("n", 5))
 
 
+def api_surface_grid(p):
+    """Window edges for the start/end surfaces over the run's dates."""
+    sets, _, _, _, portfolio, _ = _prepare(p)
+    dates = shared_panel(sets).dates if portfolio else sets[0].dates
+    grid = surface_grid(dates, p.get("step", "quarter"), p.get("start"), p.get("end"))
+    return {"grid": grid, "stats": SURFACE_STATS}
+
+
+def api_surface(p):
+    """Rows of the start/end surfaces for the given start dates: {start, S, B, ends} each,
+    with S & B the statistic of the strategy & the benchmark on [start, e] for every e in ends."""
+    sets, bench, cfg, strat, portfolio, rates = _prepare(p)
+    stat = p.get("stat", "sharpe")
+    if stat not in SURFACE_STATS:
+        raise ValueError("unknown statistic %r (use %s)" % (stat, ", ".join(SURFACE_STATS)))
+    key = _signal_key(p, strat)
+    ends = sorted(p["ends"])
+    rows = []
+    for st in p["starts"]:
+        later = [e for e in ends if e > st]
+        if not later:
+            continue
+        row = surface_row(lambda: Strategy.from_code(p["code"], p.get("params")), sets, cfg, st, later, stat, bench, portfolio, rates, key)
+        full_s, full_b = [None] * len(ends), [None] * len(ends)
+        for e, a, b in zip(later, row["S"], row["B"]):
+            j = ends.index(e)
+            full_s[j], full_b[j] = a, b
+        rows.append({"start": st, "actual_start": row["start"], "S": full_s, "B": full_b})
+    return {"stat": stat, "ends": ends, "rows": rows}
+
+
 def api_costs(p):
     sets, bench, cfg, _, portfolio, rates = _prepare(p)
     return cost_sensitivity(lambda: Strategy.from_code(p["code"], p.get("params")), sets if portfolio else sets[0],
@@ -6699,7 +6825,7 @@ def api_permutation(p):
 
 def api_analytics(p):
     sets = [_get(t) for t in p["tickers"] if t in DATA]
-    return instrument_stats(sets, p.get("start"), p.get("end"), float(p.get("rf", 0.0)))
+    return instrument_stats(sets, p.get("start"), p.get("end"), float(p.get("rf", 0.0)), p.get("total_return", True) is not False)
 
 
 def api_metric_list(p):
@@ -6798,7 +6924,7 @@ API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
     "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit,
-    "options": api_options, "risk": api_risk, "capacity": api_capacity,
+    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

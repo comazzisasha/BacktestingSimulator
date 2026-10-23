@@ -65,6 +65,9 @@ that re-runs the strategy at growing account sizes with square-root impact and p
 An optional **Options Overlay** tool adds covered calls, protective puts or a collar to a strategy's long
 position and shows a delta-hedged option's volatility P&L. Option prices are modelled (Black-Scholes on
 trailing realized volatility or a loaded volatility index), not market quotes.
+**Start/End Surfaces** score every window: S(s, e), the strategy backtested from s to e, and B(s, e),
+the benchmark over the same window, for a chosen statistic (return, CAGR, Sharpe, drawdown …), as
+heatmaps or 3D surfaces.
 
 ## Paper trading
 
