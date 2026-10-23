@@ -881,6 +881,7 @@ class DataSet:
         self.dividend_source = None      # None (price return only), 'adj_close' or 'events'
         self.price_basis = "price"       # 'price' or 'total_return' (only an adjusted close was given)
         self.calendar = None             # 'NYSE', 'weekdays' or '24/7'; None = judged from the dates
+        self.fundamentals = {}           # field -> ([dates the value became known], [values]), point in time
         self.splits_applied = []
         self.kind = "price"
         self._cache = {}
@@ -949,6 +950,35 @@ class DataSet:
         self._cache.clear()
         return matched
 
+    def set_fundamentals(self, table):
+        """Point-in-time fundamentals: {field: [(date known, value), ...]}. A value counts
+        from the first bar AFTER the date it became known (filings often come after the
+        close), so a strategy never trades on it the same day. Replaces earlier ones."""
+        out = {}
+        for field, pts in (table or {}).items():
+            clean = sorted((d, float(v)) for d, v in ((_iso_date(d), _num(v)) for d, v in pts) if d is not None and v is not None)
+            if clean:
+                out[str(field)] = ([d for d, _ in clean], [v for _, v in clean])
+        self.fundamentals = out
+        self._cache.clear()
+        return {f: len(v[0]) for f, v in out.items()}
+
+    def fundamental_series(self, field):
+        """One value per bar: the latest `field` known before that bar's day (NaN before the first)."""
+        if field not in self.fundamentals:
+            raise KeyError("No fundamental %r for %s; loaded: %s" % (field, self.ticker, ", ".join(sorted(self.fundamentals)) or "none"))
+        def build():
+            dates, vals = self.fundamentals[field]
+            out, j, cur = [], 0, NAN
+            for d in self.dates:
+                day = d[:10]
+                while j < len(dates) and dates[j] < day:
+                    cur = vals[j]
+                    j += 1
+                out.append(cur)
+            return out
+        return self.cached(("fundamental", field), build)
+
     def apply_splits(self, events):
         """Split events [(date, ratio)] with ratio = new shares per old share (4.0 for 4:1).
 
@@ -1000,6 +1030,10 @@ class DataSet:
             h = hashlib.sha256("\n".join(self.dates).encode())
             for col in (self.open, self.high, self.low, self.close, self.volume, self.dividends):
                 h.update(struct.pack("<%dd" % len(col), *col))
+            for field in sorted(self.fundamentals):          # only when there are any: older hashes stay the same
+                dates, vals = self.fundamentals[field]
+                h.update(("\0%s\0%s" % (field, "\n".join(dates))).encode())
+                h.update(struct.pack("<%dd" % len(vals), *vals))
             return h.hexdigest()[:16]
         return self.cached(("fingerprint",), build)
 
@@ -1063,9 +1097,18 @@ class DataView:
         self.close = ds.close[:n]
         self.volume = ds.volume[:n]
         self.dividends = ds.dividends[:n]
+        self._ds = ds
 
     def __len__(self):
         return self.n
+
+    def fundamental(self, field):
+        """Point-in-time values of a fundamental, one per bar (see DataSet.set_fundamentals)."""
+        return self._ds.fundamental_series(field)[:self.n]
+
+    @property
+    def fundamental_fields(self):
+        return sorted(self._ds.fundamentals)
 
 
 def read_csv_table(text):
@@ -1087,6 +1130,12 @@ CSV_COLUMNS = {
     "dividend": ("dividends", "dividend", "cash amount", "amount", "dividend amount"),
     "split": ("stock splits", "split", "splits", "split ratio", "ratio"),
     "clock": ("time",),   # a time-of-day column next to a separate date column (intraday files)
+    # fundamentals: when a value became known, the period it covers, and whose it is
+    "available": ("available", "available date", "filing date", "filed", "filing_date", "date filed", "report date",
+                  "reported", "announcement date", "acceptance date", "accepted", "knowledge date"),
+    "period": ("period end", "period_end", "period ending", "fiscal period end", "fiscal date", "fiscal_date",
+               "quarter end", "fiscal quarter end"),
+    "ticker": ("ticker", "symbol"),
 }
 
 
@@ -1094,6 +1143,8 @@ def csv_kind(header):
     """What a CSV holds: 'prices', 'dividends', 'splits' or 'rates' (a single value column, e.g. FRED)."""
     def has(key):
         return any(n in header for n in CSV_COLUMNS[key])
+    if has("available") or has("period"):
+        return "fundamentals"
     if not has("date"):
         raise ValueError("CSV needs a Date column")
     if has("close") or has("adj_close"):
@@ -1165,6 +1216,56 @@ def parse_events_csv(text):
         if day and val:
             out.append((day, val))
     return kind, sorted(out)
+
+
+FUNDAMENTAL_LAG_DAYS = 45   # assumed delay from period end to publication when a file has no filing date
+
+
+def parse_fundamentals_csv(text, lag_days=FUNDAMENTAL_LAG_DAYS):
+    """A point-in-time fundamentals file: when each value became known (a filing,
+    report or availability date) and one column per field (eps, revenue, book_value ...),
+    optionally a Ticker column for several instruments in one file. Without a known
+    date, the period end + lag_days is used, and a warning says so: values are rarely
+    public on the last day of the quarter. Returns {'tickers': {TICKER or '': {field:
+    [(date, value)]}}, 'fields', 'warnings'}."""
+    header, rows = read_csv_table(text)
+    ia, ip, it = _col(header, "available"), _col(header, "period"), _col(header, "ticker")
+    if ia is None and ip is None:
+        raise ValueError("A fundamentals file needs a filing/available date or a period end column.")
+    skip = {i for i in (ia, ip, it, _col(header, "date")) if i is not None}
+    fields = []
+    for i, name in enumerate(header):
+        if i in skip or not name:
+            continue
+        vals = [r[i] for r in rows if i < len(r) and r[i].strip()]
+        nums = [v for v in vals if _num(v) is not None]
+        if vals and len(nums) >= 0.5 * len(vals):
+            fields.append((i, "".join(ch if ch.isalnum() else "_" for ch in name).strip("_") or "field%d" % i))
+    if not fields:
+        raise ValueError("No numeric columns (eps, revenue ...) found next to the dates.")
+    lagged = 0
+    out = {}
+    for r in rows:
+        when = _iso_date(r[ia]) if ia is not None and ia < len(r) and r[ia].strip() else None
+        if when is None and ip is not None and ip < len(r):
+            pe = _iso_date(r[ip])
+            if pe:
+                when = (_dt.date.fromisoformat(pe) + _dt.timedelta(days=int(lag_days))).isoformat()
+                lagged += 1
+        if when is None:
+            continue
+        tk = r[it].strip().upper() if it is not None and it < len(r) else ""
+        tab = out.setdefault(tk, {})
+        for i, name in fields:
+            v = _num(r[i]) if i < len(r) else None
+            if v is not None:
+                tab.setdefault(name, []).append((when, v))
+    warnings = []
+    if lagged:
+        warnings.append("%d row%s had no filing date, so each value counts from %d days after its period end. "
+                        "Add a filing date column for exact point-in-time data." % (lagged, "" if lagged == 1 else "s", int(lag_days)))
+    return {"tickers": {k: {f: sorted(v) for f, v in t.items()} for k, t in out.items()},
+            "fields": [n for _, n in fields], "warnings": warnings}
 
 
 class RateSeries:
@@ -1504,9 +1605,20 @@ class AlignedView:
         for col in ("open", "high", "low", "close", "volume", "dividends", "total_return"):
             setattr(self, col, panel.aligned(a, col)[:n])
         self.listed = panel.live[a][:n]
+        self._panel, self._a = panel, a
 
     def __len__(self):
         return self.n
+
+    def fundamental(self, field):
+        """Point-in-time values of a fundamental on the shared calendar (NaN before the first)."""
+        ser = self._panel.sets[self._a].fundamental_series(field)
+        nat = self._panel.nat[self._a]
+        return [ser[j] if j >= 0 else NAN for j in nat[:self.n]]
+
+    @property
+    def fundamental_fields(self):
+        return sorted(self._panel.sets[self._a].fundamentals)
 
 
 class PanelView:
@@ -1602,6 +1714,19 @@ class AssetContext:
     def dividend(self):
         """Cash dividend per share with today as ex-date (0 on most days)."""
         return self._ds.dividends[self._j] if self._j >= 0 and self.trading else 0.0
+
+    def fundamental(self, field, default=NAN):
+        """The latest value of a fundamental (e.g. 'eps') known before today: point in time,
+        from a fundamentals file on the Data tab. `default` until the first one is known."""
+        if self._j < 0:
+            return default
+        v = self._ds.fundamental_series(field)[self._j]
+        return default if isnan(v) else v
+
+    @property
+    def fundamentals(self):
+        """{field: latest value known before today} for every loaded fundamental."""
+        return {f: self.fundamental(f) for f in sorted(self._ds.fundamentals)}
 
     @property
     def position(self):
@@ -2167,6 +2292,8 @@ class Config:
         "dd_limit": 0.0,          # drawdown from the equity high that triggers de-risking (0.15 = 15%; 0 = off)
         "dd_scale": 0.5,          # weights are multiplied by this while de-risked
         "dd_resume": 0.5,         # full size again once the drawdown is back within dd_resume x dd_limit
+        # data
+        "delisting_return": 0.0,  # return on the last close when an instrument's data ends early (-0.3 = -30%)
     }
 
     def __init__(self, **kw):
@@ -2210,6 +2337,8 @@ class Config:
             raise ValueError("position, gross and net limits must be non-negative and dd_limit from 0 to 1")
         if not 0 <= self.dd_scale <= 1 or not 0 <= self.dd_resume <= 1:
             raise ValueError("dd_scale and dd_resume must be from 0 to 1")
+        if not -1 <= self.delisting_return <= 1:
+            raise ValueError("delisting_return must be from -1 to 1 (-0.3 = -30%)")
 
     def as_dict(self):
         return {k: (dict(getattr(self, k)) if isinstance(getattr(self, k), dict) else getattr(self, k))
@@ -2563,16 +2692,16 @@ class Account:
         return rest
 
     # ---- fills and trade bookkeeping ---------------------------------------
-    def _fill(self, a, q, price, t, reason=None, maker=False, kind="market"):
+    def _fill(self, a, q, price, t, reason=None, maker=False, kind="market", free=False):
         cfg = self.cfg
         prev = self.shares[a]
-        if maker:                      # a resting limit order: no spread, slippage or impact
+        if maker or free:              # a resting limit order: no spread, slippage or impact
             slip = half = imp = 0.0
         else:
             slip, half, imp = cfg.slippage_bps / 1e4, cfg.spread_bps / 2e4, self.impact(a, abs(q))
         adj = slip + half + imp
         px = price * (1 + adj) if q > 0 else price * (1 - adj)
-        comm = abs(q) * px * cfg.commission_bps / 1e4 + cfg.commission_fixed
+        comm = 0.0 if free else abs(q) * px * cfg.commission_bps / 1e4 + cfg.commission_fixed
         if self._val[a] != price:
             self._val[a] = price
             self._eq = None
@@ -2634,6 +2763,20 @@ class Account:
             "bars": t - tr["entry_i"], "open": still_open,
         })
         self.open_trades[a] = None
+
+    def delist(self, a, t, ret=0.0):
+        """Close instrument a's position at its last close x (1 + ret), with no costs: its
+        data has ended (delisted, merged, or a file that isn't up to date)."""
+        sh = self.shares[a]
+        if not sh:
+            return None
+        px = self.panel.mark(a, t) * (1 + ret)
+        self.arrival_t = t
+        self._set_val([None] * self.k, t)
+        self._val[a] = px
+        self._eq = None
+        self._fill(a, -sh, px, t, "delisted", kind="delisting", free=True)
+        return px
 
     def liquidate(self, t, fraction=1.0, reason=None):
         """Sell `fraction` of every position at today's close (instruments with a bar today)."""
@@ -3258,12 +3401,28 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         pending = None
         wiped = False
         mm = cfg.maintenance_margin
+        # Instruments whose data ends before the backtest does: their position is closed on the
+        # first calendar bar after their last one.
+        ends = {}
+        if portfolio:
+            import bisect
+            for a, ds in enumerate(panel.sets):
+                if ds.dates[-1] < panel.dates[e]:
+                    ends.setdefault(max(s + 1, bisect.bisect_right(panel.dates, ds.dates[-1])), []).append(a)
+        delisted = []
         for t in range(s, e + 1):
             run.t = t
             if t > s and not wiped:
                 acct.accrue(t - 1, t)
                 if cfg.total_return:
                     acct.pay_dividends(t)
+            if t in ends and not wiped:
+                for a in ends[t]:
+                    sh = acct.shares[a]
+                    px = acct.delist(a, t, cfg.delisting_return)
+                    run.cancel(a=a)
+                    delisted.append({"ticker": panel.tickers[a], "last_date": panel.sets[a].dates[-1], "date": panel.dates[t],
+                                     "shares": sh, "price": px})
             if not wiped:
                 acct.begin_bar(t)
                 carry = None
@@ -3385,6 +3544,19 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     if len(full_logs) > LOG_KEEP:
         full_logs = full_logs[:LOG_KEEP] + "\n... output stopped here: over %d MB ...\n" % (LOG_KEEP // 10 ** 6)
     logs = _log_preview(full_logs)
+    for d in delisted:
+        notes.append("%s has no data after %s: its position (%s shares) was closed at its last close%s on %s. If the "
+                     "instrument still trades, the file is out of date; download a newer one."
+                     % (d["ticker"], d["last_date"], format(round(d["shares"], 4), ","),
+                        "" if not cfg.delisting_return else " %+.0f%% (delisting return)" % (100 * cfg.delisting_return), d["date"]))
+    if portfolio and panel.k >= 3:
+        span = (panel.days[e] - panel.days[s]).days / 365.25
+        alive = all((panel.days[e] - _dt.date.fromisoformat(ds.dates[-1][:10])).days <= 10 for ds in panel.sets)
+        if alive and span >= 3:
+            notes.append("Survivorship bias: all %d instruments were still trading at the end of the test. A universe "
+                         "chosen today leaves out companies that were delisted or dropped out of the index over these "
+                         "%.0f years, which usually flatters the result. Add their histories (they are closed out when "
+                         "their data ends) or test on an index fund." % (panel.k, span))
     if acct.margin_calls:
         notes.append("%d margin call%s (first on %s): positions were cut at the close to restore the margin."
                      % (len(acct.margin_calls), "" if len(acct.margin_calls) == 1 else "s", acct.margin_calls[0]["date"]))
@@ -3410,6 +3582,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         book_stats=dict(run.book_stats, open=len(run.book)),
         logs=logs, full_logs=full_logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
         signals=sig, signal_key=signal_key, limits=limits.summary(len(equity)) if limits.on else None, ann=panel_ann(panel),
+        delisted=delisted,
     )
 
 
@@ -5539,6 +5712,8 @@ def api_load_data(p):
         ds.apply_splits(p["splits"])
     if p.get("dividends"):
         ds.set_dividends(p["dividends"])
+    if p.get("fundamentals"):
+        ds.set_fundamentals(p["fundamentals"])
     DATA[p["ticker"]] = ds
     return dict(_data_info(ds), quality=quality_report(ds))
 
@@ -5547,7 +5722,8 @@ def _data_info(ds):
     return {"ticker": ds.ticker, "bars": ds.n, "start": ds.dates[0], "end": ds.dates[-1],
             "dividends": ds.dividend_source, "dividend_count": sum(1 for d in ds.dividends if d),
             "dividend_total": sum(ds.dividends), "price_basis": ds.price_basis,
-            "splits": ds.splits_applied, "fingerprint": ds.fingerprint()}
+            "splits": ds.splits_applied, "fingerprint": ds.fingerprint(),
+            "fundamentals": {f: {"count": len(v[0]), "first": v[0][0], "last": v[0][-1]} for f, v in ds.fundamentals.items()}}
 
 
 def api_parse_csv(p):
@@ -5560,6 +5736,9 @@ def api_parse_csv(p):
                                        "close": ds.close, "volume": ds.volume},
                 "dividends": [[d, v] for d, v in zip(ds.dates, ds.dividends) if v],
                 "price_basis": ds.price_basis, "quality": quality_report(ds)}
+    if kind == "fundamentals":
+        f = parse_fundamentals_csv(p["text"], p.get("lag_days", FUNDAMENTAL_LAG_DAYS))
+        return {"kind": kind, **f}
     if kind == "rates":
         r = parse_rate_csv(p["text"], p.get("ticker") or "RATE")
         return {"kind": kind, "dates": r.dates, "values": r.values}

@@ -1244,6 +1244,11 @@ const CSV_COLUMNS = {
   dividend: ['dividends', 'dividend', 'cash amount', 'amount', 'dividend amount'],
   split: ['stock splits', 'split', 'splits', 'split ratio', 'ratio'],
   clock: ['time'],   // a time-of-day column next to a separate date column (intraday files)
+  // fundamentals: when a value became known, the period it covers, and whose it is
+  available: ['available', 'available date', 'filing date', 'filed', 'filing_date', 'date filed', 'report date',
+    'reported', 'announcement date', 'acceptance date', 'accepted', 'knowledge date'],
+  period: ['period end', 'period_end', 'period ending', 'fiscal period end', 'fiscal date', 'fiscal_date', 'quarter end', 'fiscal quarter end'],
+  ticker: ['ticker', 'symbol'],
 };
 function csvHeader(text) {
   const first = text.replace(/^﻿/, '').split(/\r?\n/).find(l => l.trim());
@@ -1252,6 +1257,7 @@ function csvHeader(text) {
 // 'prices' | 'dividends' | 'splits' | 'rates' (date + one value column, e.g. FRED), like engine.csv_kind
 function csvKind(head) {
   const has = k => CSV_COLUMNS[k].some(n => head.includes(n));
+  if (has('available') || has('period')) return 'fundamentals';
   if (!has('date')) throw new Error('No Date column found. Use a price, dividend or split history CSV.');
   if (has('close') || has('adj_close')) return 'prices';
   if (has('dividend')) return 'dividends';
@@ -1412,7 +1418,7 @@ const py = {
       const rec = instruments.get(t);
       if (!rec) throw new Error(`No data is loaded for ${t}. Add it on the Data tab.`);
       const ev = rec.events || {};
-      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, calendar: store.get('calendars', {})[t] || null });
+      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, fundamentals: ev.fundamentals || null, calendar: store.get('calendars', {})[t] || null });
       dataInfo.set(t, info); this.loaded.add(t);
     }
   },
@@ -3193,7 +3199,7 @@ const pendingFiles = [];
 const newId = () => Math.random().toString(36).slice(2);
 // "SPY_dividends.csv", "spy-splits.csv", "SPY dividend history.csv" -> "SPY"
 function tickerFromEventsFilename(name) {
-  const stem = name.replace(/\.[^.]+$/, '').replace(/[\s_\-]*(dividends?|divs?|splits?|history|events)[\s_\-]*/gi, ' ').trim().split(/\s+/)[0] || '';
+  const stem = name.replace(/\.[^.]+$/, '').replace(/[\s_\-]*(dividends?|divs?|splits?|history|events|fundamentals?|financials|earnings)[\s_\-]*/gi, ' ').trim().split(/\s+/)[0] || '';
   return tickerFromFilename(stem + '.csv');
 }
 async function handleFiles(files) {
@@ -3208,15 +3214,37 @@ async function handleFiles(files) {
         else pendingFiles.push({ kind, file: f.name, data, id: newId() });
       } else if (kind === 'rates') {
         await saveRate((tickerFromFilename(f.name) || 'RATE'), text, f.name);
+      } else if (kind === 'fundamentals' && CSV_COLUMNS.ticker.some(n => csvHeader(text).includes(n))) {
+        await attachFundamentals(text, f.name, null);
       } else {
         const t = tickerFromEventsFilename(f.name);
-        if (t && instruments.has(t)) await attachEvents(t, kind, text, f.name);
+        if (t && instruments.has(t)) await (kind === 'fundamentals' ? attachFundamentals(text, f.name, t) : attachEvents(t, kind, text, f.name));
         else pendingFiles.push({ kind, file: f.name, text, id: newId(), guess: t });
       }
     } catch (e) { toast(`${f.name}: ${e.message}`); }
   }
   if (added) toast(`Added ${fmt.int(added)} instrument${added === 1 ? '' : 's'}.`);
   renderPending();
+}
+// Point-in-time fundamentals -> the instruments' records. A file with a Ticker column covers several.
+async function attachFundamentals(text, filename, ticker) {
+  await py.ready;
+  const parsed = await py.call('parse_csv', { text });
+  if (parsed.kind !== 'fundamentals') throw new Error('expected a fundamentals file');
+  const keys = Object.keys(parsed.tickers);
+  const targets = keys.length === 1 && keys[0] === '' ? { [ticker]: parsed.tickers[''] } : parsed.tickers;
+  const done = [], missing = [];
+  for (const [t, tab] of Object.entries(targets)) {
+    if (!t || !instruments.has(t)) { missing.push(t || '(no ticker)'); continue; }
+    const rec = { ...instruments.get(t) };
+    rec.events = { ...(rec.events || {}), fundamentals: { ...((rec.events || {}).fundamentals || {}), ...tab } };
+    if (rec.source === 'bundled') { rec.source = 'upload'; rec.base = 'bundled'; }
+    addInstrument(rec); await idb.put(rec); done.push(t);
+  }
+  if (done.length) await py.ensure(done);
+  fillInstrumentSelects(); renderInstTable();
+  toast(`${done.length ? `Added ${parsed.fields.join(', ')} to ${done.join(', ')} from ${filename}.` : `Nothing added from ${filename}.`}` +
+    `${missing.length ? ` Not loaded: ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}; add their prices first.` : ''}${parsed.warnings.length ? ' ' + parsed.warnings.join(' ') : ''}`);
 }
 // Dividend or split history -> the instrument's record (kept in this browser), then reload it in Python.
 async function attachEvents(ticker, kind, text, filename) {
@@ -3246,7 +3274,7 @@ function renderPending() {
   $('#pending').innerHTML = pendingFiles.map(p => {
     if (p.kind !== 'prices') {
       const opts = sortedTickers().map(t => `<option${t === p.guess ? ' selected' : ''}>${esc(t)}</option>`).join('');
-      return `<form data-id="${p.id}" novalidate aria-label="Attach ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">${p.kind === 'dividends' ? 'Dividend' : 'Split'} history</span></div>` +
+      return `<form data-id="${p.id}" novalidate aria-label="Attach ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">${p.kind === 'dividends' ? 'Dividend history' : p.kind === 'fundamentals' ? 'Fundamentals' : 'Split history'}</span></div>` +
         `<div class="field"><label for="tk-${p.id}">Instrument</label><select id="tk-${p.id}" name="ticker" translate="no">${opts}</select></div><div></div>` +
         `<button class="btn primary small" type="submit">Attach to Instrument</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
     }
@@ -3311,7 +3339,9 @@ function renderInstTable() {
   for (const t of list) {
     const r = instruments.get(t);
     const src = r.synthetic ? '<span class="chip">Synthetic demo</span>' : r.base === 'bundled' ? '<span class="chip">Bundled + your files</span>' : r.source === 'upload' ? '<span class="chip">Your file</span>' : '<span class="chip">Bundled</span>';
-    h += `<tr><th scope="row" translate="no">${esc(t)}</th><td>${esc(r.name || '')}</td><td>${src}</td><td class="tnum">${fmt.date(r.start)}</td><td class="tnum">${fmt.date(r.end)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.price(r.last)}</td>` +
+    const fd = (dataInfo.get(t) || {}).fundamentals || {}, fk = Object.keys(fd);
+    const fchip = fk.length ? ` <span class="chip" title="Point-in-time fundamentals: ${esc(fk.map(k => `${k} (${fd[k].count}, ${fd[k].first} to ${fd[k].last})`).join('; '))}">${fk.length <= 3 ? esc(fk.join(', ')) : fmt.int(fk.length) + ' fundamentals'}</span>` : '';
+    h += `<tr><th scope="row" translate="no">${esc(t)}</th><td>${esc(r.name || '')}${fchip}</td><td>${src}</td><td class="tnum">${fmt.date(r.start)}</td><td class="tnum">${fmt.date(r.end)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.price(r.last)}</td>` +
       `<td>${calendarSelect(t)}</td><td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
       `<td>${r.source === 'upload' ? `<button class="btn small danger" type="button" data-remove="${esc(t)}" aria-label="Remove ${esc(t)}">${r.base === 'bundled' ? 'Reset' : 'Remove'}</button>` : ''}</td></tr>`;
     if (openQuality.has(t) && dataInfo.has(t)) h += qualityDetail(t);
@@ -3874,7 +3904,7 @@ function wire() {
     e.preventDefault(); const form = e.target; const p = pendingFiles.find(x => x.id === form.dataset.id); if (!p) return;
     if (p.kind !== 'prices') {
       const t = $('#tk-' + p.id).value; if (!t) return;
-      try { await attachEvents(t, p.kind, p.text, p.file); pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); } catch (err) { toast(`${p.file}: ${err.message}`); }
+      try { await (p.kind === 'fundamentals' ? attachFundamentals(p.text, p.file, t) : attachEvents(t, p.kind, p.text, p.file)); pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); } catch (err) { toast(`${p.file}: ${err.message}`); }
       return;
     }
     const t = $('#tk-' + p.id).value.trim().toUpperCase();

@@ -1711,6 +1711,94 @@ def test_intraday_backtest():
     assert ds.dates[s] == "2024-01-03T09:30" and ds.dates[e] == "2024-01-04T15:55"
 
 
+# ----------------------------------------------- delisting & survivorship -----
+
+def _cut(ds, n, ticker):
+    return engine.DataSet(ticker, ds.dates[:n], ds.close[:n], ds.open[:n], ds.high[:n], ds.low[:n], ds.volume[:n])
+
+
+def test_delisted_positions_are_closed_at_the_last_close():
+    gone = _cut(BOND, 1000, "GONE")
+    code = "def on_bar(ctx):\n    return {'DEMO-STOCK': 0.5, 'GONE': 0.5}\n"
+    for ret in (0.0, -0.5):
+        res = engine.backtest_portfolio(engine.Strategy.from_code(code), [DEMO, gone], engine.Config(slippage_bps=0, delisting_return=ret))
+        d = [f for f in res.fills if f.get("kind") == "delisting"]
+        assert len(d) == 1 and d[0]["ticker"] == "GONE" and d[0]["position"] == 0 and d[0]["commission"] == 0
+        assert d[0]["date"] == DEMO.dates[1000], "closed on the first bar after its last one"
+        assert abs(d[0]["price"] - gone.close[-1] * (1 + ret)) < 1e-9
+        assert not [f for f in res.fills if f["ticker"] == "GONE" and f["i"] > d[0]["i"]], "never traded again"
+        assert res.weights["GONE"][-1] == 0 and res.delisted[0]["ticker"] == "GONE"
+        assert any("GONE has no data after %s" % gone.dates[-1] in n for n in res.notes)
+        t = d[0]["i"] - res.start
+        held = abs(d[0]["qty"]) * gone.close[-1]
+        jump = res.equity[t] - res.equity[t - 1]
+        demo_move = res.weights["DEMO-STOCK"][t - 1] * res.equity[t - 1] * (DEMO.close[1000] / DEMO.close[999] - 1)
+        assert abs(jump - demo_move - ret * held) < 0.05 * held + 1, (jump, demo_move, ret * held)
+    m, _ = engine.summarize(res)
+    assert m["final_equity"] > 0
+
+
+def test_survivorship_note():
+    third = engine.DataSet("THIRD", DEMO.dates, [c * 1.01 for c in DEMO.close])
+    code = "def on_bar(ctx):\n    return [1 / 3] * 3\n"
+    res = engine.backtest_portfolio(engine.Strategy.from_code(code), [DEMO, BOND, third], engine.Config())
+    assert any(n.startswith("Survivorship bias: all 3 instruments") for n in res.notes)
+    res2 = engine.backtest_portfolio(engine.Strategy.from_code(code), [DEMO, BOND, _cut(third, 1500, "THIRD")], engine.Config())
+    assert not any(n.startswith("Survivorship") for n in res2.notes), "a universe with a delisted name has no survivorship note"
+    single = run("def on_bar(ctx):\n    return 1.0\n")
+    assert not any(n.startswith("Survivorship") for n in single.notes)
+
+
+# --------------------------------------------------- point-in-time fundamentals -----
+
+def test_fundamentals_csv_and_point_in_time_access():
+    text = ("Ticker,Period End,Filing Date,EPS,Revenue,Form\n"
+            "DEMO-STOCK,2017-03-31,2017-05-02,1.10,100,10-Q\n"
+            "DEMO-STOCK,2017-06-30,2017-08-01,1.25,110,10-Q\n"
+            "DEMO-STOCK,2017-09-30,,1.40,120,10-Q\n"
+            "DEMO-BOND,2017-03-31,2017-04-20,0.5,10,10-Q\n")
+    assert engine.csv_kind(engine.read_csv_table(text)[0]) == "fundamentals"
+    f = engine.parse_fundamentals_csv(text)
+    assert f["fields"] == ["eps", "revenue"], "text columns like Form are not fields"
+    eps = f["tickers"]["DEMO-STOCK"]["eps"]
+    assert eps[:2] == [("2017-05-02", 1.1), ("2017-08-01", 1.25)]
+    assert eps[2] == ("2017-11-14", 1.4) and "1 row had no filing date" in f["warnings"][0], "period end + 45 days"
+    ds = engine.DataSet("DEMO-STOCK", DEMO.dates, DEMO.close, DEMO.open, DEMO.high, DEMO.low, DEMO.volume)
+    fp = ds.fingerprint()
+    ds.set_fundamentals(f["tickers"]["DEMO-STOCK"])
+    assert ds.fingerprint() != fp, "fundamentals are part of the data a run used"
+    ser = ds.fundamental_series("eps")
+    i = ds.dates.index("2017-05-02")
+    assert math.isnan(ser[i]) and ser[i + 1] == 1.1, "known from the bar after its filing date"
+    code = ("def on_bar(ctx):\n"
+            "    e = ctx.fundamental('eps')\n"
+            "    ctx.state.setdefault('seen', {})[ctx.date] = e\n"
+            "    return 1.0 if e > 1.2 else 0.0\n")
+    strat = engine.Strategy.from_code(code)
+    res = engine.backtest(strat, ds, engine.Config(slippage_bps=0))
+    first_long = next(i for i, x in enumerate(res.exposure) if x > 0.5)
+    known = ds.dates.index("2017-08-01") + 1 - res.start
+    assert first_long == known + 1, "decided on the first bar after the filing, filled the next"
+    sig = "def signals(data):\n    e = data.fundamental('eps')\n    return [1.0 if v > 1.2 else 0.0 for v in e]\n"
+    r2 = engine.backtest(engine.Strategy.from_code(sig), ds, engine.Config(slippage_bps=0))
+    assert r2.equity == res.equity
+    look = engine.lookahead_check(engine.Strategy.from_code(sig), ds, r2.signals)
+    assert not look["violations"], "point-in-time values pass the look-ahead check"
+    # portfolio access, aligned to the shared calendar
+    bond = engine.DataSet("DEMO-BOND", BOND.dates, BOND.close)
+    bond.set_fundamentals(f["tickers"]["DEMO-BOND"])
+    pcode = "def on_bar(ctx):\n    return {'DEMO-BOND': 1.0 if ctx['DEMO-BOND'].fundamental('eps') > 0 else 0.0}\n"
+    pr = engine.backtest_portfolio(engine.Strategy.from_code(pcode), [ds, bond], engine.Config(slippage_bps=0))
+    assert pr.weights["DEMO-BOND"][-1] > 0.9
+    try:
+        ds.fundamental_series("pe")
+        raise AssertionError("unknown field accepted")
+    except KeyError as e:
+        assert "eps" in str(e)
+    out = json.loads(engine.handle("parse_csv", json.dumps({"text": text})))
+    assert out["ok"] and out["result"]["kind"] == "fundamentals"
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
