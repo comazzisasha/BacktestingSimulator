@@ -2930,6 +2930,9 @@ async function runMC(ev) {
     const p = document.createElement('p'); p.style.margin = '0';
     p.innerHTML = `Your backtest: total return <b>${fmt.pct(r.actual_final, 2, true)}</b>, max drawdown <b>${fmt.pct(r.actual_mdd)}</b>. Across ${fmt.int(r.n_paths)} resampled paths (blocks of ${fmt.int(r.block)}&nbsp;days), <b>${fmt.pct(r.prob_loss, 1)}</b> lost money & <b>${fmt.pct(r.prob_worse_dd, 1)}</b> had a deeper drawdown than yours.`;
     out.appendChild(p);
+    const ci = r.ci95, q = document.createElement('p'); q.style.margin = '0';
+    q.innerHTML = `Bootstrap 95% confidence intervals: Sharpe ratio <b>${fmt.num(ci.sharpe[0])} to ${fmt.num(ci.sharpe[1])}</b>, CAGR ${fmt.pct(ci.cagr[0], 1, true)} to ${fmt.pct(ci.cagr[1], 1, true)}, volatility ${fmt.pct(ci.volatility[0], 1)} to ${fmt.pct(ci.volatility[1], 1)}, max drawdown ${fmt.pct(ci.max_drawdown[0], 1)} to ${fmt.pct(ci.max_drawdown[1], 1)}. ${ci.sharpe[0] > 0 ? 'The Sharpe interval stays above zero.' : `The Sharpe interval includes zero: in ${fmt.pct(r.prob_sharpe_negative, 0)} of the paths it was negative.`}`;
+    out.appendChild(q);
   } catch (e) { out.innerHTML = `<p class="ferr">${esc(e.info ? e.info.message : e.message)} Fix the strategy on the Backtest tab, then try again.</p>`; }
   finally { busy(false); await loadingOff(btn); }
 }

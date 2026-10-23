@@ -1985,6 +1985,70 @@ def test_parquet_files_load():
         assert out["ok"] and out["result"]["text"].startswith("date,open")
 
 
+# ----------------------------------------------------- statistical rigour -----
+
+def _ar1(n, phi, seed=5, mu=0.0004, sd=0.01):
+    rng = random.Random(seed)
+    out, prev = [], 0.0
+    for _ in range(n):
+        prev = phi * prev + rng.gauss(0, sd)
+        out.append(mu + prev)
+    return out
+
+
+def test_exact_p_values_match_scipy():
+    from scipy import stats
+    import numpy as np
+    r = _ar1(800, 0.0, seed=2)
+    out = engine.return_tests(r)
+    assert abs(out["p_value"] - stats.t.sf(out["t_stat"], len(r) - 1)) < 1e-12
+    assert abs(engine.binom_sf(37, 60) - stats.binom.sf(36, 60, 0.5)) < 1e-12
+    assert engine.binom_sf(0, 10) == 1.0 and engine.binom_sf(11, 10) == 0.0
+    res = run(load_templates()["sma_cross"])
+    m, _ = engine.summarize(res)
+    closed = [t for t in res.trades if not t["open"]]
+    wins = sum(1 for t in closed if t["pnl"] > 0)
+    assert abs(m["win_rate_p"] - stats.binom.sf(wins - 1, len(closed), 0.5)) < 1e-12
+    n = len(res.equity) - 1
+    assert abs(m["alpha_p"] - stats.t.sf(m["alpha_t"], n - 2)) < 1e-12
+    # Newey-West t of the mean, computed independently
+    x = np.array(r) - np.mean(r)
+    L = int(np.floor(4 * (len(r) / 100) ** (2 / 9)))
+    S = x @ x + 2 * sum((1 - l / (L + 1)) * (x[l:] @ x[:-l]) for l in range(1, L + 1))
+    t_nw = np.mean(r) / (np.sqrt(S) / len(r))
+    assert abs(out["t_stat_hac"] - t_nw) < 1e-9 and abs(out["p_value_hac"] - stats.t.sf(t_nw, len(r) - 1)) < 1e-12
+    assert "alpha_t_hac" in m and "p_value_hac" in m
+
+
+def test_lo_adjusted_sharpe_and_effective_sample_size():
+    import numpy as np
+    iid, ar = _ar1(3000, 0.0, seed=8), _ar1(3000, 0.5, seed=8)
+    a, b = engine.return_tests(iid), engine.return_tests(ar)
+    # independent Lo (2002) with the first 10 sample autocorrelations
+    x = np.array(ar) - np.mean(ar)
+    rho = [float(x[k:] @ x[:-k] / (x @ x)) for k in range(1, 11)]
+    q = 252
+    eta = q / math.sqrt(q + 2 * sum((q - k) * rk for k, rk in enumerate(rho, 1)))
+    sr = np.mean(ar) / np.std(ar, ddof=1)
+    assert abs(b["sharpe_lo_adj"] - sr * eta) < 1e-9
+    assert b["sharpe_lo_adj"] < sr * math.sqrt(252), "positive autocorrelation: the plain Sharpe overstates"
+    assert abs(a["sharpe_lo_adj"] / (np.mean(iid) / np.std(iid, ddof=1) * math.sqrt(252)) - 1) < 0.15, "about the same for i.i.d. returns"
+    assert 0.85 * len(iid) < a["n_eff"] <= len(iid)
+    assert 0.2 * len(ar) < b["n_eff"] < 0.55 * len(ar), b["n_eff"] / len(ar)   # (1 - phi) / (1 + phi) = 1/3 in theory
+    assert abs(b["eff_years"] - b["n_eff"] / 252) < 1e-12
+
+
+def test_bootstrap_confidence_intervals():
+    r = _ar1(1500, 0.0, seed=3, mu=0.0006)
+    mc = engine.monte_carlo(r, 400, 20, seed=11)
+    lo, hi = mc["ci95"]["sharpe"]
+    sr = engine.mean(r) / engine.stdev(r) * math.sqrt(252)
+    assert lo < sr < hi and hi - lo < 2.5
+    assert mc["ci95"]["max_drawdown"][0] <= mc["ci95"]["max_drawdown"][1] <= 0
+    assert engine.monte_carlo(r, 400, 20, seed=11)["ci95"] == mc["ci95"], "seeded: reproducible"
+    assert 0 <= mc["prob_sharpe_negative"] <= 1
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

@@ -4431,12 +4431,14 @@ def attribution(res):
 # 7. Research tools
 # =============================================================================
 
-def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120, ann=None):
+def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120, ann=None, rfd=0.0):
     """Circular block bootstrap of daily returns.
 
     Resamples blocks of `block` consecutive days (keeping short-term patterns
     such as volatility clustering) to build n_paths alternative histories of
-    the same length. Shows how much of a result could be luck of the ordering.
+    the same length. Shows how much of a result could be luck of the ordering,
+    and gives bootstrap 95% confidence intervals (2.5th to 97.5th percentiles)
+    for the Sharpe ratio, volatility, CAGR and maximum drawdown.
     """
     R = list(returns_)
     T = len(R)
@@ -4449,17 +4451,22 @@ def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120, ann=None):
     checkpoints = sorted(set(int(round(j * (T - 1) / (points - 1))) for j in range(points)))
     snaps = [[] for _ in checkpoints]
     years = T / (ann or TRADING_DAYS)
-    finals, cagrs, mdds = [], [], []
+    finals, cagrs, mdds, sharpes, vols = [], [], [], [], []
+    A = ann or TRADING_DAYS
     for _ in range(n_paths):
         eq = peak = 1.0
         mdd = 0.0
         t = ci = 0
+        s1 = s2 = 0.0
         while t < T:
             st = rng.randrange(T)
             for j in range(block):
                 if t >= T:
                     break
-                eq *= 1.0 + R[(st + j) % T]
+                x = R[(st + j) % T]
+                s1 += x
+                s2 += x * x
+                eq *= 1.0 + x
                 if eq > peak:
                     peak = eq
                 elif eq / peak - 1 < mdd:
@@ -4471,6 +4478,10 @@ def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120, ann=None):
         finals.append(eq - 1)
         cagrs.append(eq ** (1 / years) - 1 if eq > 0 else -1.0)
         mdds.append(mdd)
+        var = (s2 - s1 * s1 / T) / (T - 1)
+        sd = math.sqrt(var) if var > 0 else 0.0
+        vols.append(sd * math.sqrt(A))
+        sharpes.append((s1 / T - rfd) / sd * math.sqrt(A) if sd > 0 else NAN)
     actual = [1.0]
     for x in R:
         actual.append(actual[-1] * (1 + x))
@@ -4487,6 +4498,9 @@ def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120, ann=None):
         "actual_mdd": min(drawdown(actual)),
         "prob_worse_dd": sum(1 for d in mdds if d < min(drawdown(actual))) / n_paths,
         "cagr_hist": histogram([cagrs], 30),
+        "ci95": {k: [percentile(v, 2.5), percentile(v, 97.5)] for k, v in
+                 (("sharpe", [x for x in sharpes if not isnan(x)]), ("volatility", vols), ("cagr", cagrs), ("max_drawdown", mdds))},
+        "prob_sharpe_negative": sum(1 for x in sharpes if x < 0) / n_paths,
     }
 
 
@@ -6263,7 +6277,8 @@ def api_metrics(p):
 
 def api_montecarlo(p):
     res, _ = _run_payload(p)
-    mc = monte_carlo(daily_returns(res.equity), p.get("paths", 500), p.get("block", 20), p.get("seed", 7), ann=res_ann(res))
+    mc = monte_carlo(daily_returns(res.equity), p.get("paths", 500), p.get("block", 20), p.get("seed", 7), ann=res_ann(res),
+                     rfd=(1 + res.config.risk_free) ** (1 / res_ann(res)) - 1)
     mc["dates"] = [res.dates[c + 1] for c in mc["checkpoints"]]
     mc["start_date"] = res.dates[0]
     return mc
