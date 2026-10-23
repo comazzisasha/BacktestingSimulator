@@ -55,6 +55,14 @@ Every run is saved in the browser with its code hash, parameters, settings, data
 engine version (History tab: compare, restore, re-run to check it reproduces). Export CSVs, the run as
 JSON, or a printable tear sheet; back up or move the whole workspace as one file (Data tab).
 
+## Risk and capacity
+
+The Research Tools tab has a **Risk Report** (multi-factor regression on loaded tickers, spreads such as
+`IWM-SPY` or uploaded Fama-French files, with Newey-West t-statistics and return/variance attribution;
+rolling beta; each holding's share of the risk; ten historical stress windows replayed on the final
+holdings; historical, normal and Cornish-Fisher VaR with a Kupiec back-test) and a **Capacity** curve
+that re-runs the strategy at growing account sizes with square-root impact and participation limits.
+
 ## Modules, editor and tests
 
 Shared code lives in **modules**: Python files in the browser's module library that any strategy

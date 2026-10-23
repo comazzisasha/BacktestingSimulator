@@ -1283,6 +1283,240 @@ def test_completions_describe_ctx_and_qt():
     assert "weights" in {e["name"] for e in c["portfolio"]} and "close" in {e["name"] for e in c["data"]}
 
 
+# ------------------------------------------------------- risk analytics -----
+
+def test_special_functions_match_scipy():
+    try:
+        from scipy import stats, special
+    except ImportError:
+        stats = special = None
+    for df in (1, 2, 3, 7.5, 30, 250):
+        for t in (-4.0, -1.2, 0.0, 0.3, 1.96, 6.0):
+            got = engine.t_sf(t, df)
+            if stats:
+                assert abs(got - stats.t.sf(t, df)) < 1e-12, (t, df, got, stats.t.sf(t, df))
+            else:   # Simpson integration of the t density from t to a far tail
+                c = math.exp(math.lgamma((df + 1) / 2) - math.lgamma(df / 2)) / math.sqrt(df * math.pi)
+                f = lambda x: c * (1 + x * x / df) ** (-(df + 1) / 2)
+                hi, n = 400.0, 200000
+                h = (hi - t) / n
+                ref = h / 3 * (f(t) + f(hi) + sum((4 if i % 2 else 2) * f(t + i * h) for i in range(1, n)))
+                assert abs(got - ref) < 1e-6
+    assert abs(engine.t_sf(2.0, 1e6) - (1 - engine.norm_cdf(2.0))) < 1e-6
+    if special:
+        for a, b, x in ((0.5, 0.5, 0.3), (5, 2, 0.9), (30, 40, 0.42), (2.5, 0.5, 0.01)):
+            assert abs(engine.betainc(a, b, x) - special.betainc(a, b, x)) < 1e-12
+        for df in (1, 2, 3, 5, 12):
+            for x in (0.01, 0.5, 3.84, 10.0, 40.0):
+                assert abs(engine.chi2_sf(x, df) - stats.chi2.sf(x, df)) < 1e-11, (x, df)
+
+
+def _rand_regression(n=600, seed=4):
+    rng = random.Random(seed)
+    f1 = [rng.gauss(0, 0.01) for _ in range(n)]
+    f2 = [rng.gauss(0, 0.008) for _ in range(n)]
+    e, prev = [], 0.0
+    for _ in range(n):                         # autocorrelated, heteroskedastic noise: HAC differs from OLS
+        prev = 0.5 * prev + rng.gauss(0, 0.004) * (1 + abs(rng.gauss(0, 1)))
+        e.append(prev)
+    y = [0.0003 + 1.4 * a - 0.6 * b + u for a, b, u in zip(f1, f2, e)]
+    return y, [[1.0, a, b] for a, b in zip(f1, f2)]
+
+
+def test_ols_and_newey_west_match_numpy():
+    import numpy as np
+    y, X = _rand_regression()
+    fit = engine.ols(y, X)
+    Xa, ya = np.array(X), np.array(y)
+    b = np.linalg.lstsq(Xa, ya, rcond=None)[0]
+    assert np.allclose(fit["coef"], b, rtol=0, atol=1e-12)
+    e = ya - Xa @ b
+    n, k = Xa.shape
+    inv = np.linalg.inv(Xa.T @ Xa)
+    assert np.allclose(fit["se"], np.sqrt(np.diag(inv) * (e @ e) / (n - k)), rtol=1e-10)
+    L = int(np.floor(4 * (n / 100) ** (2 / 9)))
+    S = (Xa * e[:, None]).T @ (Xa * e[:, None])
+    for lag in range(1, L + 1):
+        G = (Xa[lag:] * e[lag:, None]).T @ (Xa[:-lag] * e[:-lag, None])
+        S += (1 - lag / (L + 1)) * (G + G.T)
+    V = inv @ S @ inv
+    assert fit["hac_lags"] == L and np.allclose(fit["se_hac"], np.sqrt(np.diag(V)), rtol=1e-9)
+    assert fit["se_hac"][1] != fit["se"][1]
+    assert abs(fit["coef"][1] - 1.4) < 0.1 and abs(fit["coef"][2] + 0.6) < 0.1
+    assert abs(fit["r2"] - (1 - (e @ e) / ((ya - ya.mean()) @ (ya - ya.mean())))) < 1e-12
+
+
+def test_factor_regression_decompositions_add_up():
+    import numpy as np
+    engine.DATA["DEMO-STOCK"], engine.DATA["DEMO-BOND"] = DEMO, BOND
+    res = run(load_templates()["sma_cross"], risk_free=0.02)
+    fr = engine.factor_regression(res, ["DEMO-STOCK", "DEMO-STOCK-DEMO-BOND"])
+    assert fr["factors"] == ["DEMO-STOCK", "DEMO-STOCK-DEMO-BOND"]
+    total = sum(a["return"] for a in fr["attribution"])
+    assert abs(total - fr["mean_excess"]) < 1e-12, "alpha + sum(beta x factor mean) = mean excess return"
+    assert abs(sum(v["share"] for v in fr["variance"]) - 1) < 1e-12
+    assert abs(sum(v["share"] for v in fr["variance"][:-1]) - fr["r2"]) < 1e-9, "factor shares add up to R-squared"
+    # independently: rebuild the regression with numpy on the same dates
+    rf = 0.02 / 252
+    rs, rb = engine.returns_by_date(DEMO), engine.returns_by_date(BOND)
+    ys, xs = [], []
+    for t in range(1, len(res.equity)):
+        d = res.dates[t]
+        if d in rs and d in rb:
+            ys.append(res.equity[t] / res.equity[t - 1] - 1 - rf)
+            xs.append([1.0, rs[d] - rf, rs[d] - rb[d]])
+    b = np.linalg.lstsq(np.array(xs), np.array(ys), rcond=None)[0]
+    assert fr["n"] == len(ys)
+    assert abs(fr["rows"][0]["coef"] - b[0] * 252) < 1e-10 and abs(fr["rows"][1]["coef"] - b[1]) < 1e-10
+    hold = run("def on_bar(ctx):\n    return 1.0\n", risk_free=0.02)
+    hb = engine.factor_regression(hold, ["DEMO-STOCK"])
+    assert abs(hb["rows"][1]["coef"] - 1) < 0.01 and hb["r2"] > 0.99, "buy and hold has beta 1 to itself"
+
+
+def test_factor_csv_ken_french_format():
+    text = ("This file was created by CMPT_ME_BEME_RETS using the 202401 CRSP database.\n\n"
+            ",Mkt-RF,SMB,HML,RF\n"
+            "20200102,  0.86, -0.97, -0.33, 0.006\n"
+            "20200103, -0.67,  0.30,  0.00, 0.006\n"
+            "20200106,  0.36, -0.21, -0.55, 0.006\n\n"
+            " Annual Factors: January-December\n,Mkt-RF,SMB,HML,RF\n2020, 23.66, 13.0, -46.5, 0.45\n")
+    t = engine.parse_factor_csv(text)
+    assert t["dates"] == ["2020-01-02", "2020-01-03", "2020-01-06"] and t["percent"]
+    assert list(t["columns"]) == ["Mkt-RF", "SMB", "HML", "RF"]
+    assert abs(t["columns"]["Mkt-RF"][0] - 0.0086) < 1e-15 and abs(t["columns"]["RF"][1] - 0.00006) < 1e-15
+    plain = engine.parse_factor_csv("date,MOM\n2021-03-01,0.012\n2021-03-02,-0.004\n")
+    assert not plain["percent"] and plain["columns"]["MOM"] == [0.012, -0.004]
+    # an uploaded table with RF: the strategy's excess return uses that RF
+    dates = [d for d in DEMO.dates[1:400]]
+    rs = engine.returns_by_date(DEMO)
+    engine.FACTORS["ff"] = {"dates": dates, "columns": {"MKT": [rs[d] - 0.0001 for d in dates], "RF": [0.0001] * len(dates)}}
+    res = run("def on_bar(ctx):\n    return 1.0\n", risk_free=0.0)
+    fr = engine.factor_regression(res, ["ff:MKT"])
+    assert fr["rf_source"] == "uploaded RF column" and fr["n"] <= 399 and abs(fr["rows"][1]["coef"] - 1) < 0.01
+
+
+def test_rolling_beta_matches_direct_computation():
+    import numpy as np
+    y, X = _rand_regression(400, seed=9)
+    b = [r[1] for r in X]
+    beta, corr = engine.rolling_beta(y, b, 60)
+    assert all(math.isnan(v) for v in beta[:59])
+    for t in (59, 150, 399):
+        yy, bb = np.array(y[t - 59:t + 1]), np.array(b[t - 59:t + 1])
+        c = np.cov(yy, bb)
+        assert abs(beta[t] - c[0, 1] / c[1, 1]) < 1e-9 and abs(corr[t] - np.corrcoef(yy, bb)[0, 1]) < 1e-9
+
+
+def _pf_result():
+    engine.DATA["DEMO-STOCK"], engine.DATA["DEMO-BOND"] = DEMO, BOND
+    code = "UNIVERSE = ['DEMO-STOCK', 'DEMO-BOND']\ndef on_bar(ctx):\n    return {'DEMO-STOCK': 0.6, 'DEMO-BOND': 0.3}\n"
+    return engine.backtest_portfolio(engine.Strategy.from_code(code), [DEMO, BOND], engine.Config(slippage_bps=0), bench=DEMO)
+
+
+def test_risk_decomposition_contributions_sum_to_vol():
+    import numpy as np
+    res = _pf_result()
+    d = engine.risk_decomposition(res, 252)
+    fin = d["final"]
+    assert abs(sum(a["contribution"] for a in fin["assets"]) - fin["vol"]) < 1e-12
+    assert abs(sum(a["share"] for a in fin["assets"]) - 1) < 1e-12
+    R, _ = engine._asset_returns(res, 252)
+    w = np.array(engine.current_weights(res))
+    C = np.cov(np.array(R).T)
+    assert abs(fin["vol"] - math.sqrt(w @ C @ w * 252)) < 1e-12
+    assert abs(fin["assets"][0]["weight"] - 0.6) < 0.02 and fin["diversification"] >= 1 - 1e-12
+
+
+def test_stress_tests_replay_holdings_and_window_returns():
+    res = _pf_result()
+    custom = ("Test window", res.dates[300], res.dates[340])
+    st = engine.stress_tests(res, [custom], shocks=(-0.1,))
+    row = [r for r in st["scenarios"] if r["name"] == "Test window"][0]
+    i0, i1 = 299, 340       # the close before the window starts, and its last day
+    assert abs(row["strategy"] - (res.equity[i1] / res.equity[i0] - 1)) < 1e-12
+    w = engine.current_weights(res)
+    trs, trb = DEMO.total_return_index(), BOND.total_return_index()
+    js = lambda ds, d: ds.dates.index(d)
+    exp = w[0] * (trs[js(DEMO, res.dates[i1])] / trs[js(DEMO, res.dates[i0])] - 1) + \
+        w[1] * (trb[js(BOND, res.dates[i1])] / trb[js(BOND, res.dates[i0])] - 1)
+    assert abs(row["holdings"] - exp) < 1e-12 and row["coverage"] == 1.0
+    assert row["strategy_mdd"] <= 0 and row["benchmark"] is not None
+    b = st["beta"]
+    assert abs(b["betas"]["DEMO-STOCK"] - 1) < 1e-9, "the benchmark's beta to itself is 1"
+    assert abs(st["shocks"][0]["pnl"] - b["portfolio_beta"] * -0.1) < 1e-15
+    ew = engine.backtest_portfolio(engine.Strategy.from_code("UNIVERSE = ['DEMO-STOCK', 'DEMO-BOND']\ndef on_bar(ctx):\n    return {'DEMO-STOCK': 0.5, 'DEMO-BOND': 0.5}\n"),
+                                   [DEMO, BOND], engine.Config(slippage_bps=0))
+    assert ew.benchmark == "Equal weight"
+    sw = engine.stress_tests(ew, [custom])
+    r2 = [r for r in sw["scenarios"] if r["name"] == "Test window"][0]
+    assert abs(r2["benchmark"] - (ew.bench_equity[i1] / ew.bench_equity[i0] - 1)) < 1e-12 and sw["shocks"], "equal-weight benchmark from the run"
+    # a window before the data starts can't be replayed
+    early = engine.stress_tests(res, [("Too early", "1990-01-02", "1990-02-01")])
+    assert not any(r["name"] == "Too early" for r in early["scenarios"])
+
+
+def test_portfolio_var_methods_and_kupiec():
+    import numpy as np
+    from scipy import stats
+    res = _pf_result()
+    v = engine.portfolio_var(res, 500, levels=(0.99,), horizon=10)
+    R, _ = engine._asset_returns(res, 500)
+    w = np.array(engine.current_weights(res))
+    pnl = np.array(R) @ w
+    row = v["levels"][0]
+    assert abs(row["hist"] + engine.percentile(list(pnl), 1)) < 1e-15
+    assert abs(row["hist"] + np.percentile(pnl, 1)) < 1e-12, "same as numpy's linear percentile"
+    mu, sig, z = pnl.mean(), math.sqrt(w @ np.cov(np.array(R).T) @ w), stats.norm.ppf(0.01)
+    assert abs(row["normal"] + (mu + z * sig)) < 1e-12
+    assert abs(row["normal_es"] - (-(mu - sig * stats.norm.pdf(z) / 0.01))) < 1e-12
+    S, K = stats.skew(pnl), stats.kurtosis(pnl)
+    zcf = z + (z * z - 1) * S / 6 + (z ** 3 - 3 * z) * K / 24 - (2 * z ** 3 - 5 * z) * S * S / 36
+    assert abs(row["cornish_fisher"] + (mu + zcf * sig)) < 1e-10
+    assert abs(sum(c["var"] for c in row["components"]) - (-z * sig)) < 1e-12
+    bt = v["backtest"][0]
+    r = engine.daily_returns(res.equity)
+    x = sum(1 for t in range(250, len(r)) if r[t] < engine.percentile(r[t - 250:t], 1))
+    assert bt["breaches"] == x and bt["days"] == len(r) - 250
+    n, p = bt["days"], 0.01
+    lr = -2 * ((n - x) * math.log(1 - p) + x * math.log(p) - (n - x) * math.log(1 - x / n) - x * math.log(x / n))
+    assert abs(bt["lr"] - lr) < 1e-9 and abs(bt["p_value"] - stats.chi2.sf(lr, 1)) < 1e-12
+    assert engine.kupiec_pof(5, 500, 0.01)[1] > 0.99, "exactly the expected number of breaches"
+
+
+def test_capacity_curve_degrades_with_size():
+    engine.DATA["DEMO-STOCK"] = DEMO
+    sets, cfg = [DEMO], engine.Config(slippage_bps=0, max_participation=0.1)
+    strat = engine.Strategy.from_code(load_templates()["sma_cross"])
+    cap = engine.capacity_curve(strat, sets, cfg, levels=[1e4, 1e7, 1e9, 1e11])
+    rows = cap["rows"]
+    assert cap["impact_forced"] and cap["impact_coef"] == 1.0
+    assert rows[0]["cagr"] > rows[1]["cagr"] > rows[2]["cagr"] > rows[3]["cagr"] and rows[0]["costs_pct"] < rows[1]["costs_pct"] < rows[2]["costs_pct"]
+    assert rows[3]["partial_fills"] > rows[2]["partial_fills"] > 0 == rows[0]["partial_fills"], "the cap spreads big orders over days"
+    assert rows[0]["participation_median"] < rows[1]["participation_median"] < rows[2]["participation_median"]
+    assert rows[-1]["participation_p95"] <= 0.1 + 1e-9, "the participation cap holds"
+    s0 = rows[0]["sharpe"]
+    assert rows[2]["sharpe"] >= 0.5 * s0 > rows[3]["sharpe"] and 1e9 < cap["capacity"] < 1e11, "Sharpe halves between 1e9 and 1e11"
+    assert not cap["beyond_tested"]
+    small = engine.capacity_curve(strat, sets, cfg, levels=[1e4, 1e5])
+    assert small["capacity"] is None and small["beyond_tested"]
+    out = json.loads(engine.handle("capacity", json.dumps({"ticker": "DEMO-STOCK", "code": load_templates()["sma_cross"], "levels": [1e4, 1e8]})))
+    assert out["ok"] and len(out["result"]["rows"]) == 2
+
+
+def test_risk_report_api():
+    engine.DATA["DEMO-STOCK"], engine.DATA["DEMO-BOND"] = DEMO, BOND
+    out = json.loads(engine.handle("risk", json.dumps({
+        "ticker": "DEMO-STOCK", "benchmark": "DEMO-BOND", "code": load_templates()["sma_cross"],
+        "factors": ["DEMO-STOCK", "NOPE"], "window": 63,
+        "scenarios": [{"name": "Mine", "start": DEMO.dates[100], "end": DEMO.dates[150]}]})))
+    assert out["ok"], out
+    r = out["result"]
+    assert "factors" in r["errors"] and "NOPE" in r["errors"]["factors"], "a bad factor is reported, the rest still runs"
+    assert {"rolling", "decomposition", "stress", "var"} <= set(r)
+    assert r["rolling"]["window"] == 63 and len(r["rolling"]["dates"]) == len(r["rolling"]["beta"])
+    assert any(s["name"] == "Mine" for s in r["stress"]["scenarios"])
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

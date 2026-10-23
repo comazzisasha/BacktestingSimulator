@@ -162,6 +162,98 @@ Z_95 = 1.6448536269514722   # one-sided 95% quantile of the standard normal
 Z_975 = 1.959963984540054   # two-sided 95%
 
 
+def _betacf(a, b, x):
+    """Continued fraction for the regularized incomplete beta function (modified Lentz)."""
+    tiny, qab, qap, qam = 1e-300, a + b, a + 1.0, a - 1.0
+    c, d = 1.0, 1.0 - qab * x / qap
+    d = 1.0 / (d if abs(d) > tiny else tiny)
+    h = d
+    for m in range(1, 400):
+        m2 = 2 * m
+        aa = m * (b - m) * x / ((qam + m2) * (a + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        h *= d * c
+        aa = -(a + m) * (qab + m) * x / ((a + m2) * (qap + m2))
+        d = 1.0 + aa * d
+        d = 1.0 / (d if abs(d) > tiny else tiny)
+        c = 1.0 + aa / c
+        c = c if abs(c) > tiny else tiny
+        delta = d * c
+        h *= delta
+        if abs(delta - 1.0) < 3e-16:
+            break
+    return h
+
+
+def betainc(a, b, x):
+    """Regularized incomplete beta function I_x(a, b)."""
+    if x <= 0:
+        return 0.0
+    if x >= 1:
+        return 1.0
+    ln = math.lgamma(a + b) - math.lgamma(a) - math.lgamma(b) + a * math.log(x) + b * math.log1p(-x)
+    if x < (a + 1) / (a + b + 2):
+        return math.exp(ln) * _betacf(a, b, x) / a
+    return 1.0 - math.exp(ln) * _betacf(b, a, 1 - x) / b
+
+
+def t_sf(t, df):
+    """P(T > t) for Student's t with df degrees of freedom (exact, via the incomplete beta)."""
+    if isnan(t) or df <= 0:
+        return NAN
+    if math.isinf(t):
+        return 0.0 if t > 0 else 1.0
+    tail = 0.5 * betainc(df / 2.0, 0.5, df / (df + t * t))
+    return tail if t > 0 else 1.0 - tail
+
+
+def chi2_sf(x, df):
+    """P(X > x) for a chi-squared variable (exact for 1 and 2 degrees of freedom, else via the
+    regularized gamma function)."""
+    if isnan(x):
+        return NAN
+    if x <= 0:
+        return 1.0
+    if df == 1:
+        return math.erfc(math.sqrt(x / 2))
+    if df == 2:
+        return math.exp(-x / 2)
+    return _gamma_q(df / 2.0, x / 2.0)
+
+
+def _gamma_q(a, x):
+    """Upper regularized incomplete gamma Q(a, x) (series below a + 1, continued fraction above)."""
+    gl = math.lgamma(a)
+    if x < a + 1:
+        term = total = 1.0 / a
+        ap = a
+        for _ in range(1000):
+            ap += 1
+            term *= x / ap
+            total += term
+            if abs(term) < abs(total) * 1e-16:
+                break
+        return 1.0 - total * math.exp(-x + a * math.log(x) - gl)
+    tiny = 1e-300
+    b, c, d = x + 1 - a, 1 / tiny, 1 / (x + 1 - a)
+    h = d
+    for i in range(1, 1000):
+        an = -i * (i - a)
+        b += 2
+        d = an * d + b
+        d = 1 / (d if abs(d) > tiny else tiny)
+        c = b + an / c
+        c = c if abs(c) > tiny else tiny
+        delta = d * c
+        h *= delta
+        if abs(delta - 1) < 1e-16:
+            break
+    return math.exp(-x + a * math.log(x) - gl) * h
+
+
 # =============================================================================
 # 2. qt: technical indicators
 #
@@ -4531,6 +4623,549 @@ def completions():
 
 
 # =============================================================================
+# 7c. Risk analytics: factor models, rolling beta, risk decomposition, stress
+#     tests, portfolio VaR and capacity
+# =============================================================================
+
+def _solve(A, B):
+    """Solve A X = B for square A (Gauss-Jordan with partial pivoting). B is a list of rows."""
+    n = len(A)
+    M = [list(A[i]) + list(B[i]) for i in range(n)]
+    w = len(M[0])
+    for col in range(n):
+        piv = max(range(col, n), key=lambda r: abs(M[r][col]))
+        if abs(M[piv][col]) < 1e-14:
+            raise ValueError("the factors are collinear (one is a combination of the others)")
+        M[col], M[piv] = M[piv], M[col]
+        inv = 1.0 / M[col][col]
+        M[col] = [v * inv for v in M[col]]
+        for r in range(n):
+            if r != col and M[r][col]:
+                f = M[r][col]
+                M[r] = [a - f * b for a, b in zip(M[r], M[col])]
+    return [row[n:w] for row in M]
+
+
+def _inverse(A):
+    n = len(A)
+    return _solve(A, [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)])
+
+
+def newey_west_lags(n):
+    """The usual automatic lag length for Newey-West standard errors: floor(4 (n/100)^(2/9))."""
+    return int(math.floor(4 * (n / 100.0) ** (2.0 / 9.0)))
+
+
+def ols(y, X, hac_lags=None):
+    """Least squares y = X b + e, where each row of X starts with 1.0 for the intercept.
+
+    Returns coefficients with ordinary standard errors and Newey-West (HAC) ones, which
+    stay valid when residuals are autocorrelated or their variance changes over time
+    (Bartlett weights, no small-sample correction). p-values are two-sided, from
+    Student's t with n - k degrees of freedom."""
+    n, k = len(y), len(X[0])
+    if n <= k + 1:
+        raise ValueError("Need more observations than factors.")
+    XtX = [[sum(r[i] * r[j] for r in X) for j in range(k)] for i in range(k)]
+    Xty = [[sum(r[i] * v for r, v in zip(X, y))] for i in range(k)]
+    inv = _inverse(XtX)
+    b = [sum(inv[i][j] * Xty[j][0] for j in range(k)) for i in range(k)]
+    fit = [sum(bi * xi for bi, xi in zip(b, r)) for r in X]
+    e = [v - f for v, f in zip(y, fit)]
+    sse = sum(x * x for x in e)
+    my = sum(y) / n
+    sst = sum((v - my) ** 2 for v in y)
+    df = n - k
+    s2 = sse / df
+    se = [math.sqrt(max(0.0, s2 * inv[i][i])) for i in range(k)]
+    L = newey_west_lags(n) if hac_lags is None else int(hac_lags)
+    S = [[0.0] * k for _ in range(k)]
+    for r, et in zip(X, e):
+        for i in range(k):
+            ri = r[i] * et * et
+            row = S[i]
+            for j in range(k):
+                row[j] += ri * r[j]
+    for lag in range(1, L + 1):
+        wl = 1.0 - lag / (L + 1.0)
+        for t in range(lag, n):
+            ee = wl * e[t] * e[t - lag]
+            xt, xs = X[t], X[t - lag]
+            for i in range(k):
+                for j in range(k):
+                    S[i][j] += ee * (xt[i] * xs[j] + xs[i] * xt[j])
+    tmp = [[sum(inv[i][m] * S[m][j] for m in range(k)) for j in range(k)] for i in range(k)]
+    V = [[sum(tmp[i][m] * inv[m][j] for m in range(k)) for j in range(k)] for i in range(k)]
+    se_hac = [math.sqrt(max(0.0, V[i][i])) for i in range(k)]
+    tval = [bi / s if s > 0 else NAN for bi, s in zip(b, se)]
+    thac = [bi / s if s > 0 else NAN for bi, s in zip(b, se_hac)]
+    p2 = lambda t: NAN if isnan(t) else 2 * t_sf(abs(t), df)
+    r2 = 1 - sse / sst if sst > 0 else NAN
+    return {"coef": b, "se": se, "t": tval, "p": [p2(t) for t in tval], "se_hac": se_hac, "t_hac": thac,
+            "p_hac": [p2(t) for t in thac], "r2": r2, "adj_r2": 1 - (1 - r2) * (n - 1) / df if not isnan(r2) else NAN,
+            "resid": e, "fitted": fit, "n": n, "k": k, "df": df, "hac_lags": L}
+
+
+def returns_by_date(ds, total_return=True):
+    """{date: return} from each bar to the instrument's previous bar."""
+    src = ds.total_return_index() if total_return else ds.close
+    return {ds.dates[j]: src[j] / src[j - 1] - 1 for j in range(1, ds.n) if src[j - 1] > 0}
+
+
+FACTORS = {}   # uploaded factor tables: name -> {"dates": [...], "columns": {col: [daily returns]}}
+
+
+def parse_factor_csv(text, percent=None):
+    """A table of daily factor returns, e.g. the Fama-French files from Ken French's data
+    library: a date column (YYYYMMDD, YYYY-MM-DD or MM/DD/YYYY) and one column per factor.
+    Lines before the header and after the data (notes, annual tables) are skipped. Values
+    in percent (as in those files) are detected and divided by 100; pass percent=True or
+    False to decide. A column named RF is the daily risk-free rate."""
+    rows = [r for r in (line.strip() for line in text.replace("\r", "").split("\n"))]
+    def as_date(x):
+        x = x.strip().strip('"')
+        if len(x) == 8 and x.isdigit():
+            return "%s-%s-%s" % (x[:4], x[4:6], x[6:])
+        return _iso_date(x)
+    header, data = None, []
+    for line in rows:
+        cells = [c.strip().strip('"') for c in line.split(",")]
+        if len(cells) < 2:
+            if data:
+                break
+            continue
+        d = as_date(cells[0])
+        if d is None:
+            if data:
+                break                      # the daily table has ended (Ken French files append more)
+            if any(c for c in cells[1:]):
+                header = cells
+            continue
+        try:
+            vals = [float(c) if c not in ("", "-99.99", "-999") else NAN for c in cells[1:]]
+        except ValueError:
+            if data:
+                break
+            continue
+        data.append((d, vals))
+    if not data:
+        raise ValueError("No dated rows found. Expected a date column followed by factor returns.")
+    k = len(data[0][1])
+    names = [(header[i + 1] if header and i + 1 < len(header) and header[i + 1] else "F%d" % (i + 1)) for i in range(k)]
+    data.sort()
+    cols = {nm: [row[1][i] if i < len(row[1]) else NAN for row in data] for i, nm in enumerate(names)}
+    if percent is None:
+        vals = [abs(v) for c in cols.values() for v in c if not isnan(v)]
+        percent = bool(vals) and percentile(vals, 50) > 0.02   # daily returns: a median above 2% means percent units
+    if percent:
+        cols = {nm: [v / 100.0 for v in c] for nm, c in cols.items()}
+    return {"dates": [d for d, _ in data], "columns": cols, "percent": bool(percent)}
+
+
+def _factor_series(spec, rf_daily):
+    """(name, {date: return}) for one factor spec: a loaded ticker (excess of rf), 'A-B'
+    (the return of A minus that of B), or 'set:column' from an uploaded table."""
+    spec = spec.strip()
+    if ":" in spec:
+        name, col = spec.split(":", 1)
+        tab = FACTORS.get(name)
+        if tab is None or col not in tab["columns"]:
+            raise ValueError("No uploaded factor %s." % spec)
+        return col, dict(zip(tab["dates"], tab["columns"][col]))
+    if "-" in spec and spec.upper() not in DATA:
+        up = spec.upper()
+        cuts = [(up[:i].strip(), up[i + 1:].strip()) for i, ch in enumerate(up) if ch == "-"]
+        pair = next(((a, b) for a, b in cuts if a in DATA and b in DATA), None)   # tickers may contain '-' too
+        if pair is None:
+            raise ValueError("%s: use two loaded tickers, e.g. IWM-SPY for small minus large caps." % spec)
+        a, b = pair
+        ra, rb = returns_by_date(DATA[a]), returns_by_date(DATA[b])
+        return "%s-%s" % (a, b), {d: ra[d] - rb[d] for d in ra if d in rb}
+    t = spec.upper()
+    if t not in DATA:
+        raise ValueError("%s isn't loaded; add it on the Data tab to use it as a factor." % t)
+    return t, {d: r - rf_daily.get(d, 0.0) for d, r in returns_by_date(DATA[t]).items()}
+
+
+def factor_regression(res, specs, hac_lags=None):
+    """Regress the strategy's daily excess returns on factors (see _factor_series).
+
+    Reports alpha (annualized) and each factor's beta with ordinary and Newey-West
+    t-statistics, R-squared, and two decompositions that add up exactly: mean return
+    = alpha + sum(beta x mean factor return), and variance = each factor's share
+    (beta x cov(factor, fitted)) + the idiosyncratic rest."""
+    rf_const = res.config.risk_free / TRADING_DAYS
+    rf = {}
+    for spec in specs:
+        if ":" in spec:
+            tab = FACTORS.get(spec.split(":", 1)[0])
+            if tab and "RF" in tab["columns"]:
+                rf = dict(zip(tab["dates"], tab["columns"]["RF"]))
+    rf_daily = rf or {d: rf_const for d in res.dates}
+    named = [_factor_series(sp, rf_daily) for sp in specs if sp.strip()]
+    if not named:
+        raise ValueError("Pick at least one factor, e.g. SPY.")
+    eq, dates = res.equity, res.dates
+    rows, y = [], []
+    for t in range(1, len(eq)):
+        d = dates[t]
+        if eq[t - 1] <= 0 or d not in rf_daily:
+            continue
+        fs = [f.get(d) for _, f in named]
+        if any(v is None or isnan(v) for v in fs):
+            continue
+        y.append(eq[t] / eq[t - 1] - 1 - rf_daily[d])
+        rows.append([1.0] + fs)
+    if len(y) < 30:
+        raise ValueError("Only %d days have the strategy and every factor; need at least 30." % len(y))
+    fit = ols(y, rows, hac_lags)
+    names = [n for n, _ in named]
+    n = len(y)
+    out_rows = []
+    for i, nm in enumerate(["alpha"] + names):
+        scale = TRADING_DAYS if i == 0 else 1.0
+        out_rows.append({"name": nm, "coef": fit["coef"][i] * scale, "se": fit["se"][i] * scale, "t": fit["t"][i],
+                         "p": fit["p"][i], "se_hac": fit["se_hac"][i] * scale, "t_hac": fit["t_hac"][i], "p_hac": fit["p_hac"][i]})
+    means = [sum(r[i] for r in rows) / n for i in range(1, len(names) + 1)]
+    attribution = [{"name": "alpha", "return": fit["coef"][0] * TRADING_DAYS}]
+    attribution += [{"name": nm, "beta": fit["coef"][i + 1], "factor_return": means[i] * TRADING_DAYS,
+                     "return": fit["coef"][i + 1] * means[i] * TRADING_DAYS} for i, nm in enumerate(names)]
+    var_y = sum((v - sum(y) / n) ** 2 for v in y) / (n - 1)
+    fitted_sys = [f - fit["coef"][0] for f in fit["fitted"]]
+    ms = sum(fitted_sys) / n
+    variance = []
+    for i, nm in enumerate(names):
+        col = [r[i + 1] for r in rows]
+        mc = sum(col) / n
+        cov = sum((a - mc) * (b - ms) for a, b in zip(col, fitted_sys)) / (n - 1)
+        variance.append({"name": nm, "share": fit["coef"][i + 1] * cov / var_y if var_y > 0 else NAN})
+    variance.append({"name": "idiosyncratic", "share": 1 - sum(v["share"] for v in variance)})
+    resid_vol = stdev(fit["resid"]) * math.sqrt(TRADING_DAYS)
+    return {"n": n, "factors": names, "rows": out_rows, "r2": fit["r2"], "adj_r2": fit["adj_r2"],
+            "resid_vol": resid_vol, "hac_lags": fit["hac_lags"], "df": fit["df"],
+            "mean_excess": sum(y) / n * TRADING_DAYS, "attribution": attribution, "variance": variance,
+            "rf_source": "uploaded RF column" if rf else "risk-free setting (%.2f%%)" % (100 * res.config.risk_free)}
+
+
+def rolling_beta(r, b, window=126):
+    """Rolling beta and correlation of r against b (same-length daily return lists).
+    NaN until window observations are available."""
+    n = len(r)
+    beta, corr = [NAN] * n, [NAN] * n
+    sx = sy = sxx = syy = sxy = 0.0
+    for t in range(n):
+        x, y = b[t], r[t]
+        sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y
+        if t >= window:
+            x0, y0 = b[t - window], r[t - window]
+            sx -= x0; sy -= y0; sxx -= x0 * x0; syy -= y0 * y0; sxy -= x0 * y0
+        if t >= window - 1:
+            m = float(window)
+            vx, vy, cxy = sxx - sx * sx / m, syy - sy * sy / m, sxy - sx * sy / m
+            if vx > 1e-18:
+                beta[t] = cxy / vx
+                if vy > 1e-18:
+                    corr[t] = cxy / math.sqrt(vx * vy)
+    return beta, corr
+
+
+def _asset_returns(res, window):
+    """Daily total returns of each instrument over the last `window` bars of the backtest
+    (bars where it didn't trade count as 0) and their dates."""
+    panel, s, n = res.panel, res.start, len(res.equity)
+    lo = max(1, n - window)
+    tr = [panel.aligned(a, "total_return")[s:s + n] for a in range(panel.k)]
+    R = [[(x[t] / x[t - 1] - 1) if not (isnan(x[t]) or isnan(x[t - 1]) or x[t - 1] <= 0) else 0.0 for x in tr]
+         for t in range(lo, n)]
+    return R, res.dates[lo:n]
+
+
+def _cov(R):
+    n, k = len(R), len(R[0])
+    m = [sum(r[i] for r in R) / n for i in range(k)]
+    return [[sum((r[i] - m[i]) * (r[j] - m[j]) for r in R) / (n - 1) for j in range(k)] for i in range(k)], m
+
+
+def current_weights(res):
+    """Weights (position value / equity) held at the last close of the backtest."""
+    return [res.weights[tk][-1] if res.portfolio else res.exposure[-1] for tk in res.tickers]
+
+
+def risk_decomposition(res, window=252):
+    """Ex-ante risk of the final holdings from the last `window` days of returns: each
+    instrument's weight, volatility, marginal and total contribution to portfolio volatility
+    (the contributions add up to it) and its share; plus the diversification ratio."""
+    R, _ = _asset_returns(res, window)
+    if len(R) < 20:
+        raise ValueError("Need at least 20 days of returns for a risk decomposition.")
+    C, _ = _cov(R)
+    k = len(C)
+    rows_out = []
+    for label, w in (("final", current_weights(res)),
+                     ("average", [mean(res.weights[tk]) if res.portfolio else mean(res.exposure) for tk in res.tickers])):
+        Cw = [sum(C[i][j] * w[j] for j in range(k)) for i in range(k)]
+        var = sum(w[i] * Cw[i] for i in range(k))
+        vol = math.sqrt(max(var, 0.0))
+        ann = math.sqrt(TRADING_DAYS)
+        assets = []
+        for i, tk in enumerate(res.tickers):
+            sd = math.sqrt(max(C[i][i], 0.0))
+            mcr = Cw[i] / vol if vol > 0 else NAN
+            assets.append({"ticker": tk, "weight": w[i], "vol": sd * ann, "marginal": mcr * ann if not isnan(mcr) else NAN,
+                           "contribution": w[i] * mcr * ann if vol > 0 else 0.0,
+                           "share": w[i] * Cw[i] / var if var > 0 else NAN})
+        wsd = sum(abs(w[i]) * math.sqrt(max(C[i][i], 0.0)) for i in range(k))
+        rows_out.append({"holdings": label, "vol": vol * ann, "assets": assets, "gross": sum(abs(x) for x in w),
+                         "net": sum(w), "diversification": wsd / vol if vol > 0 else NAN})
+    return {"window": len(R), "final": rows_out[0], "average": rows_out[1]}
+
+
+STRESS_SCENARIOS = [
+    # name, first day, last day (US equity peak-to-trough windows)
+    ("Global financial crisis (Lehman to the low)", "2008-09-12", "2009-03-09"),
+    ("2010 flash crash & euro crisis", "2010-04-23", "2010-07-02"),
+    ("2011 US downgrade", "2011-07-22", "2011-10-03"),
+    ("2015 China devaluation", "2015-08-17", "2015-08-25"),
+    ("2018 volatility spike (Volmageddon)", "2018-01-26", "2018-02-08"),
+    ("Q4 2018 sell-off", "2018-09-20", "2018-12-24"),
+    ("COVID-19 crash", "2020-02-19", "2020-03-23"),
+    ("2022 rate shock", "2022-01-03", "2022-10-12"),
+    ("2023 regional bank stress", "2023-03-08", "2023-03-13"),
+    ("Aug 2024 carry-trade unwind", "2024-07-16", "2024-08-05"),
+]
+
+
+def _window_return(ds_dates, values, start, end):
+    """Return from the last value before `start` to the last value on or before `end`, or None
+    if the series doesn't cover the window."""
+    import bisect
+    i0 = bisect.bisect_left(ds_dates, start) - 1
+    i1 = bisect.bisect_right(ds_dates, end) - 1
+    if i0 < 0 or i1 <= i0 or ds_dates[-1] < end:
+        return None
+    return values[i1] / values[i0] - 1
+
+
+def stress_tests(res, scenarios=None, shocks=(-0.05, -0.10, -0.20), beta_window=252):
+    """Historical stress windows and benchmark shocks.
+
+    For each window: what the strategy actually did if it was running then; what the
+    final holdings would have done (each instrument's total return over the window x its
+    final weight, needing data for that window); and the benchmark. Shocks estimate the
+    final holdings' one-day P&L from each instrument's beta to the benchmark."""
+    scen = list(STRESS_SCENARIOS) + [tuple(x) for x in (scenarios or [])]
+    w = current_weights(res)
+    bench = DATA.get(res.benchmark) if res.benchmark in DATA else None
+    # A benchmark that isn't a loaded instrument (equal weight) is known on the backtest's dates only.
+    b_dates, b_vals = (bench.dates, bench.total_return_index()) if bench is not None else (res.dates, res.bench_equity)
+    rows = []
+    for name, a, b in scen:
+        row = {"name": name, "start": a, "end": b}
+        if res.dates[0] < a and res.dates[-1] >= b:
+            row["strategy"] = _window_return(res.dates, res.equity, a, b)
+            sub = [v for d, v in zip(res.dates, res.equity) if a <= d <= b]
+            base = [v for d, v in zip(res.dates, res.equity) if d < a][-1]
+            peak, mdd = base, 0.0
+            for v in sub:
+                peak = max(peak, v)
+                mdd = min(mdd, v / peak - 1)
+            row["strategy_mdd"] = mdd
+        held, covered, total = 0.0, 0.0, sum(abs(x) for x in w)
+        missing = []
+        for tk, wt, ds in zip(res.tickers, w, res.panel.sets):
+            if abs(wt) < 1e-12:
+                continue
+            rr = _window_return(ds.dates, ds.total_return_index(), a, b)
+            if rr is None:
+                missing.append(tk)
+                continue
+            held += wt * rr
+            covered += abs(wt)
+        row["holdings"] = held if covered > 0 or total == 0 else None
+        row["coverage"] = covered / total if total > 0 else 1.0
+        row["missing"] = missing
+        if b_vals:
+            row["benchmark"] = _window_return(b_dates, b_vals, a, b) if (bench is not None or res.dates[0] < a) else None
+        if row.get("strategy") is not None or row["holdings"] is not None or row.get("benchmark") is not None:
+            rows.append(row)
+    beta_rows = []
+    if b_vals:
+        rb = returns_by_date(bench) if bench is not None else {
+            res.dates[t]: res.bench_equity[t] / res.bench_equity[t - 1] - 1 for t in range(1, len(res.dates)) if res.bench_equity[t - 1] > 0}
+        R, ds_dates = _asset_returns(res, beta_window)
+        xs = [rb.get(d) for d in ds_dates]
+        betas = []
+        for i, tk in enumerate(res.tickers):
+            pairs = [(rb_v, r[i]) for rb_v, r in zip(xs, R) if rb_v is not None]
+            if len(pairs) < 20:
+                betas.append(NAN)
+                continue
+            bx = [p_[0] for p_ in pairs]
+            by = [p_[1] for p_ in pairs]
+            vb = covariance(bx, bx)
+            betas.append(covariance(bx, by) / vb if vb > 0 else NAN)
+        port_beta = sum(wt * bt for wt, bt in zip(w, betas) if not isnan(bt))
+        beta_rows = [{"shock": sh, "pnl": port_beta * sh, "pnl_money": port_beta * sh * res.equity[-1]} for sh in shocks]
+        beta_info = {"portfolio_beta": port_beta, "betas": dict(zip(res.tickers, betas))}
+    else:
+        beta_info = None
+    return {"scenarios": rows, "shocks": beta_rows, "beta": beta_info, "weights": dict(zip(res.tickers, w)),
+            "benchmark": res.benchmark}
+
+
+def kupiec_pof(exceptions, n, p):
+    """Kupiec's proportion-of-failures test: are `exceptions` VaR breaches in n days
+    consistent with a breach probability p? Returns (LR statistic, p-value)."""
+    x = exceptions
+    if n <= 0:
+        return NAN, NAN
+    phat = x / n
+    def ll(q):
+        out = 0.0
+        if n - x:
+            out += (n - x) * math.log(1 - q) if q < 1 else -math.inf
+        if x:
+            out += x * math.log(q) if q > 0 else -math.inf
+        return out
+    lr = -2 * (ll(p) - ll(phat))
+    return lr, chi2_sf(lr, 1)
+
+
+def portfolio_var(res, window=500, levels=(0.95, 0.99), horizon=10, backtest_window=250):
+    """Value at Risk and expected shortfall of the final holdings, from the instruments'
+    last `window` days of returns: historical (the holdings' P&L on each of those days),
+    parametric (normal, from the covariance matrix) and Cornish-Fisher (adjusted for the
+    skew and fat tails of the historical P&L). Horizon VaR: historical from overlapping
+    `horizon`-day returns, parametric scaled by sqrt(horizon). Component VaR splits the
+    parametric VaR by instrument. Also checks the strategy's own daily returns against a
+    rolling historical VaR (Kupiec test): too many breaches means the VaR is too low."""
+    R, _ = _asset_returns(res, window)
+    if len(R) < 60:
+        raise ValueError("Need at least 60 days of returns for VaR.")
+    w = current_weights(res)
+    k = len(w)
+    pnl = [sum(wi * ri for wi, ri in zip(w, r)) for r in R]
+    C, m = _cov(R)
+    Cw = [sum(C[i][j] * w[j] for j in range(k)) for i in range(k)]
+    sig = math.sqrt(max(sum(w[i] * Cw[i] for i in range(k)), 0.0))
+    mu = sum(wi * mi for wi, mi in zip(w, m))
+    S, K = skewness(pnl), kurtosis(pnl)
+    S, K = (0.0 if isnan(S) else S), (0.0 if isnan(K) else K)
+    h = int(horizon)
+    multi = []
+    for t in range(h, len(pnl) + 1):
+        g = 1.0
+        for x in pnl[t - h:t]:
+            g *= 1 + x
+        multi.append(g - 1)
+    eq = res.equity[-1]
+    out = []
+    for q in levels:
+        z = norm_ppf(1 - q)            # negative, e.g. -2.33 for 99%
+        cut = percentile(pnl, 100 * (1 - q))
+        tail = [x for x in pnl if x <= cut]
+        zcf = z + (z * z - 1) * S / 6 + (z ** 3 - 3 * z) * K / 24 - (2 * z ** 3 - 5 * z) * S * S / 36
+        row = {"level": q,
+               "hist": -cut, "hist_es": -mean(tail) if tail else NAN,
+               "normal": -(mu + z * sig), "normal_es": -(mu - sig * math.exp(-z * z / 2) / math.sqrt(2 * math.pi) / (1 - q)),
+               "cornish_fisher": -(mu + zcf * sig),
+               "hist_h": -percentile(multi, 100 * (1 - q)) if multi else NAN,
+               "normal_h": -(mu * h + z * sig * math.sqrt(h))}
+        row["money"] = {k_: v * eq for k_, v in row.items() if k_ != "level" and not isnan(v)}
+        row["components"] = [{"ticker": tk, "var": -z * w[i] * Cw[i] / sig if sig > 0 else 0.0}
+                             for i, tk in enumerate(res.tickers)]
+        out.append(row)
+    r = daily_returns(res.equity)
+    bt = []
+    for q in levels:
+        x = nobs = 0
+        for t in range(backtest_window, len(r)):
+            v = -percentile(r[t - backtest_window:t], 100 * (1 - q))
+            nobs += 1
+            if r[t] < -v:
+                x += 1
+        lr, pv = kupiec_pof(x, nobs, 1 - q)
+        bt.append({"level": q, "days": nobs, "breaches": x, "expected": nobs * (1 - q), "lr": lr, "p_value": pv})
+    return {"window": len(R), "horizon": h, "equity": eq, "vol": sig * math.sqrt(TRADING_DAYS), "skew": S, "kurtosis": K,
+            "levels": out, "backtest": bt, "backtest_window": backtest_window}
+
+
+def risk_report(res, factors=None, window=126, var_window=500, scenarios=None):
+    """Everything on the Risk Report: factor regression, rolling beta to the benchmark,
+    risk decomposition, stress tests and portfolio VaR. A part that can't be computed
+    reports its reason in 'errors' instead of failing the rest."""
+    out, errors = {}, {}
+    def attempt(key, fn):
+        try:
+            out[key] = fn()
+        except (ValueError, ZeroDivisionError) as e:
+            errors[key] = str(e)
+    if factors:
+        attempt("factors", lambda: factor_regression(res, factors))
+    r, b = daily_returns(res.equity), daily_returns(res.bench_equity)
+    def roll():
+        beta, corr = rolling_beta(r, b, int(window))
+        idx = _downsample(len(beta))
+        return {"window": int(window), "dates": [res.dates[i + 1] for i in idx], "beta": [beta[i] for i in idx],
+                "corr": [corr[i] for i in idx], "benchmark": res.benchmark}
+    attempt("rolling", roll)
+    attempt("decomposition", lambda: risk_decomposition(res))
+    attempt("stress", lambda: stress_tests(res, scenarios))
+    attempt("var", lambda: portfolio_var(res, int(var_window)))
+    out["errors"] = errors
+    return out
+
+
+def capacity_curve(strategy, sets, cfg, levels=None, start=None, end=None, bench=None, portfolio=False, rates=None,
+                   threshold=0.5, signal_key=None):
+    """How results change with account size. Re-runs the backtest at each starting cash
+    level with square-root market impact on (impact_coef 1 if it is off) and reports
+    CAGR, Sharpe, costs and how much of each fill bar's volume the fills took.
+    'capacity' is the largest size whose Sharpe stays above threshold x the Sharpe at
+    the smallest size (interpolated on a log scale); 'beyond_tested' means it never fell
+    that far within the sizes tested."""
+    levels = sorted(levels or [1e4, 1e5, 1e6, 1e7, 1e8, 1e9])
+    base = cfg.as_dict()
+    coef = base.get("impact_coef") or 1.0
+    if not any(v and not isnan(v) for ds in sets for v in ds.volume):
+        raise ValueError("Capacity needs trading volume, and these instruments have none.")
+    rows = []
+    for cash in levels:
+        c = Config(**dict(base, cash=float(cash), impact_coef=coef))
+        if portfolio:
+            res = backtest_portfolio(strategy, sets, c, start, end, bench, rates=rates, signal_key=signal_key)
+        else:
+            res = backtest(strategy, sets[0], c, start, end, bench, rates=rates, signal_key=signal_key)
+        m, _ = summarize(res)
+        parts = []
+        for f in res.fills:
+            a = res.tickers.index(f["ticker"]) if f.get("ticker") in res.tickers else 0
+            ds = res.panel.sets[a]
+            j = res.panel.nat[a][f["i"]]
+            vol = ds.volume[j] if j >= 0 else NAN     # the fill bar's volume, as the participation limit uses
+            if vol and not isnan(vol) and vol > 0:
+                parts.append(abs(f["qty"]) / vol)
+        rows.append({"cash": cash, "cagr": m["cagr"], "sharpe": m["sharpe"], "max_drawdown": m["max_drawdown"],
+                     "costs": m["total_costs"], "impact": m.get("impact_paid", NAN),
+                     "costs_pct": m["total_costs"] / cash if cash else NAN,
+                     "participation_median": percentile(parts, 50) if parts else NAN,
+                     "participation_p95": percentile(parts, 95) if parts else NAN,
+                     "partial_fills": m.get("partial_fills", 0), "fills": len(res.fills)})
+    s0 = rows[0]["sharpe"]
+    cap = None
+    if s0 and not isnan(s0) and s0 > 0:
+        bar = threshold * s0
+        for lo, hi in zip(rows, rows[1:]):
+            if lo["sharpe"] >= bar > hi["sharpe"]:
+                f = (lo["sharpe"] - bar) / (lo["sharpe"] - hi["sharpe"])
+                cap = math.exp(math.log(lo["cash"]) + f * (math.log(hi["cash"]) - math.log(lo["cash"])))
+                break
+    beyond = cap is None and bool(s0 and not isnan(s0) and s0 > 0) and rows[-1]["sharpe"] >= threshold * s0
+    return {"rows": rows, "threshold": threshold, "capacity": cap, "beyond_tested": beyond, "impact_coef": coef,
+            "impact_forced": not base.get("impact_coef"), "max_participation": base.get("max_participation")}
+
+
+# =============================================================================
 # 8. JSON API for the web page
 # =============================================================================
 
@@ -4847,6 +5482,30 @@ def api_metric_list(p):
     return [{"key": k, "label": lab, "group": g, "fmt": f, "tier": t, "desc": d} for k, lab, g, f, t, d in METRICS]
 
 
+def api_risk(p):
+    res, _ = _run_payload(p)
+    scen = [(x["name"], x["start"], x["end"]) for x in (p.get("scenarios") or []) if x.get("start") and x.get("end")]
+    return risk_report(res, p.get("factors") or [], int(p.get("window") or 126), int(p.get("var_window") or 500), scen)
+
+
+def api_capacity(p):
+    sets, bench, cfg, strat, portfolio, rates = _prepare(p)
+    return capacity_curve(strat, sets, cfg, p.get("levels"), p.get("start"), p.get("end"), bench, portfolio, rates,
+                          float(p.get("threshold") or 0.5), _signal_key(p, strat))
+
+
+def api_parse_factors(p):
+    return parse_factor_csv(p["text"], p.get("percent"))
+
+
+def api_load_factors(p):
+    """Keep an uploaded factor table under a name; returns its columns and date range."""
+    name = p["name"]
+    FACTORS[name] = {"dates": list(p["dates"]), "columns": {k: [NAN if v is None else float(v) for v in vals]
+                                                           for k, vals in p["columns"].items()}}
+    return {"name": name, "columns": list(p["columns"]), "start": p["dates"][0], "end": p["dates"][-1], "n": len(p["dates"])}
+
+
 def api_lint(p):
     return lint(p["code"], p.get("kind", "strategy"), p.get("name"))
 
@@ -4870,7 +5529,8 @@ def api_check_module(p):
 
 API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
-    "check_module": api_check_module,
+    "check_module": api_check_module, "risk": api_risk, "capacity": api_capacity,
+    "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,
     "inspect": api_inspect, "run": api_run, "metrics": api_metrics,

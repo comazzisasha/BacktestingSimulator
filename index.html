@@ -846,6 +846,40 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       </div>
     </section>
 
+    <section class="panel" id="risk" data-opt="risk" aria-labelledby="h-risk">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-risk">Risk Report</h2><p>Where the returns come from & what could hurt: a factor regression with autocorrelation-robust t-statistics, rolling beta, each holding’s share of the risk, historical stress windows & Value at Risk for the final holdings.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="riskForm" novalidate>
+          <div class="field"><label for="rkFactors">Factors</label><input type="text" id="rkFactors" name="factors" list="rkFactorList" placeholder="SPY, TLT, IWM-SPY" autocomplete="off" spellcheck="false" translate="no" aria-describedby="rkFactors-help rkFactors-err"><datalist id="rkFactorList"></datalist><p class="ferr" id="rkFactors-err" hidden></p></div>
+          <p class="help" id="rkFactors-help">Loaded tickers (their return above the risk-free rate), <code translate="no">A-B</code> for the return of A minus B (e.g. <code translate="no">IWM-SPY</code> for small vs large), or columns of a factor file. Empty skips the regression.</p>
+          <div id="rkSets" class="row"></div>
+          <div class="row"><label class="btn small" for="rkFile">Add Factor File…</label><input type="file" id="rkFile" name="factor-file" accept=".csv,text/csv" class="sr"><span class="help" style="margin:0">Daily factor returns, e.g. Fama-French from Ken French’s data library (unzip the CSV first).</span></div>
+          <div class="grid2">
+            <div class="field"><label for="rkWindow">Rolling Window (days)</label><input type="text" inputmode="numeric" id="rkWindow" name="rolling-window" value="126" autocomplete="off" aria-describedby="rkWindow-err"><p class="ferr" id="rkWindow-err" hidden></p></div>
+            <div class="field"><label for="rkVarWin">VaR History (days)</label><input type="text" inputmode="numeric" id="rkVarWin" name="var-window" value="500" autocomplete="off" aria-describedby="rkVarWin-err"><p class="ferr" id="rkVarWin-err" hidden></p></div>
+            <div class="field"><label for="rkStart">Stress Window From</label><input type="date" id="rkStart" name="stress-start"></div>
+            <div class="field"><label for="rkEnd">To</label><input type="date" id="rkEnd" name="stress-end" aria-describedby="rkEnd-err"><p class="ferr" id="rkEnd-err" hidden></p></div>
+          </div>
+          <p class="help">Ten well-known market stress windows are always included; add your own above.</p>
+          <div class="row"><button class="btn primary" id="rkRun" type="submit">Build Risk Report</button></div>
+        </form>
+        <div class="out" id="rkOut" aria-live="polite"><p class="out-empty">Runs your current strategy once, then analyses its returns & final holdings.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="capacity" data-opt="capacity" aria-labelledby="h-cap">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-cap">Capacity</h2><p>How much money the strategy can run before its own trading eats the edge. Re-runs it at larger account sizes with square-root market impact & the participation limit, and finds the size where the Sharpe ratio drops too far.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="capForm" novalidate>
+          <div class="field"><label for="capLv">Account Sizes ($)</label><input type="text" id="capLv" name="sizes" value="10k, 100k, 1M, 10M, 100M, 1B" autocomplete="off" spellcheck="false" aria-describedby="capLv-help capLv-err"><p class="ferr" id="capLv-err" hidden></p></div>
+          <p class="help" id="capLv-help">A list; <code translate="no">k</code>, <code translate="no">M</code> & <code translate="no">B</code> work. Uses your impact coefficient & participation limit (impact coefficient 1 if it is off).</p>
+          <div class="field"><label for="capThr">Capacity Is Where Sharpe Falls To</label><select id="capThr" name="threshold"><option value="0.75">75% of the small-account Sharpe</option><option value="0.5" selected>50% of the small-account Sharpe</option><option value="0.25">25% of the small-account Sharpe</option></select></div>
+          <div class="row"><button class="btn primary" id="capRun" type="submit">Estimate Capacity</button></div>
+        </form>
+        <div class="out" id="capOut" aria-live="polite"><p class="out-empty">Needs instruments with trading volume.</p></div>
+      </div>
+    </section>
+
     <section class="panel" id="costs" data-opt="costs" aria-labelledby="h-cost">
       <div class="panel-h"><div class="toolhead"><h2 id="h-cost">Cost Sensitivity</h2><p>Re-run the backtest at rising trading costs. Strategies that trade often can look great at zero cost & lose money at realistic ones; this shows where the edge runs out.</p></div></div>
       <div class="panel-b toolgrid">
@@ -1000,7 +1034,7 @@ const LOCALE = (() => {
   }
   return 'en-US';
 })();
-const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'subperiods', 'costs', 'permutation', 'analytics'];
+const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'risk', 'capacity', 'subperiods', 'costs', 'permutation', 'analytics'];
 
 const RECOMMENDED = [
   ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
@@ -1088,7 +1122,7 @@ const trials = {
 // Choices are remembered in this browser, separately for panels, statistics & tools.
 const PANELS = [['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
   ['roll', 'Rolling Sharpe Ratio', 'std'], ['vol', 'Rolling Volatility', 'extra']];
-const TOOLS = [['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
+const TOOLS = [['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
   ['analytics', 'Instrument Analytics', 'std']];
 const shown = {
   is(kind, key, tier) { if (tier === 'core') return true; const o = store.get('show.' + kind, {}); return key in o ? !!o[key] : tier === 'std'; },
@@ -1259,6 +1293,7 @@ const rates = new Map();       // interest-rate series (e.g. FRED DTB3): name ->
 const dataInfo = new Map();    // what Python reported on load: dividends, data-quality findings ...
 function addInstrument(rec) {
   if (rec.kind === 'rate') { rates.set(rec.ticker, rec); py.forgetRate(rec.ticker); return; }
+  if (rec.kind === 'factors') { factorSets.set(rec.ticker, rec); if (py.loadedFactors) py.loadedFactors.delete(rec.ticker); renderFactorSets(); return; }
   const d = rec.data;
   instruments.set(rec.ticker, { ...rec, start: d.dates[0], end: d.dates[d.dates.length - 1], n: d.dates.length, last: d.close[d.close.length - 1] });
   py.forget(rec.ticker); dataInfo.delete(rec.ticker);
@@ -1342,7 +1377,7 @@ const py = {
   canStop() { return this.mode === 'worker'; },
   async restart() {
     for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
-    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear(); pool.stop(); pyHolds = null;
+    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear(); this.loadedFactors = new Set(); pool.stop(); pyHolds = null;
     this.ready = (async () => { this._spawn(); await this._post(this.initMsg(), 180000); })();
     return this.ready;
   },
@@ -2840,6 +2875,178 @@ async function runCosts(ev) {
   finally { busy(false); await loadingOff(btn); }
 }
 
+/* --------------------------------------------------------- risk report -- */
+// Uploaded factor tables (e.g. Fama-French daily factors) are kept like data files: kind 'factors'.
+const factorSets = new Map();
+function factorTickers(specs) {
+  const out = [];
+  for (const sp of specs) {
+    if (sp.includes(':')) continue;
+    const up = sp.toUpperCase();
+    if (instruments.has(up)) { out.push(up); continue; }
+    for (let i = 0; i < up.length; i++) if (up[i] === '-' && instruments.has(up.slice(0, i).trim()) && instruments.has(up.slice(i + 1).trim())) { out.push(up.slice(0, i).trim(), up.slice(i + 1).trim()); break; }
+  }
+  return out;
+}
+async function ensureFactors(specs, client = py) {
+  client.loadedFactors = client.loadedFactors || new Set();
+  for (const name of new Set(specs.filter(s => s.includes(':')).map(s => s.split(':')[0]))) {
+    const rec = factorSets.get(name); if (!rec || client.loadedFactors.has(name)) continue;
+    await client.call('load_factors', { name, dates: rec.dates, columns: rec.columns }); client.loadedFactors.add(name);
+  }
+  await client.ensure(factorTickers(specs));
+}
+function renderFactorSets() {
+  const box = $('#rkSets'); if (!box) return;
+  box.innerHTML = [...factorSets.values()].map(f => `<span class="chip" translate="no"><b>${esc(f.ticker)}</b>&nbsp;${Object.keys(f.columns).filter(c => c !== 'RF').map(c => `<button class="linkbtn" type="button" data-factor="${esc(f.ticker + ':' + c)}" title="Add ${esc(f.ticker + ':' + c)} to the factors">${esc(c)}</button>`).join(' ')}` +
+    `${f.columns.RF ? ' <span class="muted">+ RF</span>' : ''} <button class="linkbtn" type="button" data-factor-del="${esc(f.ticker)}" aria-label="Remove factor file ${esc(f.ticker)}">✕</button></span>`).join('');
+  $('#rkFactorList').innerHTML = [...sortedTickers(), ...[...factorSets.values()].flatMap(f => Object.keys(f.columns).filter(c => c !== 'RF').map(c => f.ticker + ':' + c))].map(v => `<option value="${esc(v)}"></option>`).join('');
+}
+function addFactorSpec(spec) {
+  const el = $('#rkFactors'), cur = el.value.split(',').map(x => x.trim()).filter(Boolean);
+  if (!cur.includes(spec)) el.value = [...cur, spec].join(', ');
+}
+async function addFactorFile(file) {
+  try {
+    await py.ready;
+    const parsed = await py.call('parse_factors', { text: await file.text() });
+    const stem = file.name.replace(/\.[^.]+$/, '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const name = /research_data_(5_)?factors/.test(stem) ? (Object.keys(parsed.columns).includes('RMW') ? 'ff5' : 'ff3') : stem.slice(0, 24) || 'factors';
+    const rec = { ticker: name, kind: 'factors', name, source: 'upload', filename: file.name, dates: parsed.dates, columns: parsed.columns, percent: parsed.percent };
+    await idb.put(rec); addInstrument(rec);
+    const cols = Object.keys(parsed.columns).filter(c => c !== 'RF');
+    if (!$('#rkFactors').value.trim()) for (const c of cols) addFactorSpec(name + ':' + c);
+    toast(`Added factor file ${name}: ${cols.join(', ')}${parsed.columns.RF ? ' (its RF column is the risk-free rate)' : ''}, ${fmt.date(parsed.dates[0])} – ${fmt.date(parsed.dates[parsed.dates.length - 1])}${parsed.percent ? ', converted from percent' : ''}.`);
+  } catch (e) { toast(`${file.name}: ${(e.info && e.info.message) || e.message}`); }
+}
+function htmlTable(caption, head, rows, cls = '') {
+  return `<div class="tablebox" tabindex="0" aria-label="${esc(caption)}"><table class="${cls}"><caption class="sr">${esc(caption)}</caption><thead><tr>${head.map((h, i) => `<th scope="col"${i ? ' class="n"' : ''}>${h}</th>`).join('')}</tr></thead><tbody>` +
+    rows.map(r => `<tr>${r.map((c, i) => (i ? `<td class="n">${c}</td>` : `<td>${c}</td>`)).join('')}</tr>`).join('') + '</tbody></table></div>';
+}
+async function runRisk(ev) {
+  ev.preventDefault();
+  const specs = $('#rkFactors').value.split(',').map(x => x.trim()).filter(Boolean);
+  const a = $('#rkStart').value, b = $('#rkEnd').value;
+  if (!validate([['rkWindow', between(20, 1000, 'days', true, 126)], ['rkVarWin', between(60, 5000, 'days', true, 500)],
+    ['rkEnd', () => ((a && !b) || (!a && b) ? 'Enter both dates, or neither.' : a && b && b <= a ? 'The window must end after it starts.' : null)]])) return;
+  const base = await freshPayload(); const out = $('#rkOut'); const btn = $('#rkRun');
+  store.set('riskFactors', $('#rkFactors').value);
+  loadingOn(btn); busy(true, 'Building the risk report…');
+  try {
+    await ensurePayload(base); await ensureFactors(specs);
+    const r = await py.call('risk', { ...base, factors: specs, window: parseNumber($('#rkWindow').value), var_window: parseNumber($('#rkVarWin').value),
+      scenarios: a && b ? [{ name: `Your window (${fmt.date(a)} – ${fmt.date(b)})`, start: a, end: b }] : [] });
+    renderRisk(r);
+  } catch (e) { toolError(out, e); }
+  finally { busy(false); await loadingOff(btn); }
+}
+function renderRisk(r) {
+  const out = $('#rkOut'); out.innerHTML = ''; const E = r.errors || {};
+  const add = html => { const d = document.createElement('div'); d.className = 'stack'; d.innerHTML = html; out.appendChild(d); return d; };
+  const why = k => (E[k] ? `<p class="help">${esc(E[k])}</p>` : '');
+  const pv = (p, t) => `${fmt.pval(p)}${p < 0.05 ? (t > 0 ? ' ▲' : ' ▼') : ''}`;
+  // 1. factors
+  if (r.factors) {
+    const f = r.factors, a0 = f.rows[0];
+    const sig = a0.p_hac < 0.05 ? (a0.coef > 0 ? 'positive & significant' : 'negative & significant') : 'not significantly different from zero';
+    add(`<h3 class="subhead">Factor Regression</h3><p style="margin:0">Alpha <b>${fmt.pct(a0.coef, 2, true)}</b> a year, ${sig} (Newey-West t ${fmt.num(a0.t_hac)}, p ${fmt.pval(a0.p_hac)}). The factors explain <b>${fmt.pct(f.r2, 0)}</b> of the daily variance (adjusted R² ${fmt.pct(f.adj_r2, 0)}); what’s left has volatility ${fmt.pct(f.resid_vol, 1)} a year. ${fmt.int(f.n)} days; excess returns over the ${esc(f.rf_source)}.</p>` +
+      htmlTable('Factor regression', ['Term', 'Estimate', 't (OLS)', 't (Newey-West)', 'p (Newey-West)'],
+        f.rows.map((x, i) => [i ? `Beta to <span translate="no">${esc(x.name)}</span>` : 'Alpha (ann.)', i ? fmt.num(x.coef, 3) : fmt.pct(x.coef, 2, true), fmt.num(x.t), fmt.num(x.t_hac), pv(x.p_hac, x.t_hac)])) +
+      `<p class="help">Newey-West t-statistics (${fmt.int(f.hac_lags)} lags) allow for autocorrelated & changing volatility in the residuals; when they are much smaller than the OLS ones, trust them. p-values are two-sided, from Student’s t with ${fmt.int(f.df)} degrees of freedom.</p>` +
+      `<div class="two">` + htmlTable('Return attribution', ['Source', 'Beta', 'Factor Return', 'Contribution (ann.)'],
+        [...f.attribution.map(x => [x.name === 'alpha' ? 'Alpha' : `<span translate="no">${esc(x.name)}</span>`, x.beta == null ? '—' : fmt.num(x.beta, 3), x.factor_return == null ? '—' : fmt.pct(x.factor_return, 2, true), `<span class="${sign(x.return)}">${fmt.pct(x.return, 2, true)}</span>`]),
+          ['<b>Mean excess return</b>', '', '', `<b>${fmt.pct(f.mean_excess, 2, true)}</b>`]]) +
+      htmlTable('Variance decomposition', ['Source', 'Share of Variance'], f.variance.map(x => [x.name === 'idiosyncratic' ? 'Idiosyncratic (not explained)' : `<span translate="no">${esc(x.name)}</span>`, fmt.pct(x.share, 1)])) + '</div>' +
+      `<p class="help">Contributions are beta × the factor’s average return (arithmetic, ×252) & add up to the mean excess return. Variance shares add up to 100%; a factor’s share can be negative when it hedges another.</p>`);
+  } else add(`<h3 class="subhead">Factor Regression</h3>${E.factors ? why('factors') : '<p class="help" style="margin:0">Add factors above, e.g. the benchmark, to see alpha & betas.</p>'}`);
+  // 2. rolling beta
+  if (r.rolling) {
+    const ro = r.rolling, valid = ro.beta.filter(v => v != null);
+    const box = add(`<h3 class="subhead">Rolling Beta to <span translate="no">${esc(ro.benchmark)}</span></h3><p style="margin:0">Over ${fmt.int(ro.window)}-day windows, beta ranged from ${fmt.num(Math.min(...valid))} to ${fmt.num(Math.max(...valid))}; latest ${fmt.num(valid[valid.length - 1])}.</p><div class="chart mid"><canvas role="img" aria-label="Rolling beta & correlation to the benchmark"></canvas></div>`);
+    const P = palette(); kill('rkbeta');
+    const o = baseOptions(ro.dates, P, v => fmt.num(v)); o.plugins.legend = legendTop(P);
+    charts.rkbeta = new Chart(box.querySelector('canvas'), { data: { datasets: [line('Beta', ro.beta, P.strat, { borderWidth: 2 }), line('Correlation', ro.corr, P.bench, { borderWidth: 1.2, borderDash: [4, 3] })] }, options: o });
+  } else add(why('rolling'));
+  // 3. risk decomposition
+  if (r.decomposition) {
+    const d = r.decomposition.final;
+    add(`<h3 class="subhead">Where the Risk Is (Final Holdings)</h3><p style="margin:0">Expected volatility <b>${fmt.pct(d.vol, 1)}</b> a year from the last ${fmt.int(r.decomposition.window)} days of returns; gross exposure ${fmt.pct(d.gross, 0)}, net ${fmt.pct(d.net, 0)}${d.assets.length > 1 ? `, diversification ratio ${fmt.num(d.diversification)} (1 = none)` : ''}.</p>` +
+      htmlTable('Risk contribution by instrument', ['Instrument', 'Weight', 'Volatility', 'Marginal', 'Contribution', 'Share of Risk'],
+        d.assets.map(x => [`<span translate="no">${esc(x.ticker)}</span>`, fmt.pct(x.weight, 1), fmt.pct(x.vol, 1), fmt.num(x.marginal, 3), fmt.pct(x.contribution, 2), fmt.pct(x.share, 1)])) +
+      `<p class="help">Contribution = weight × marginal risk; contributions add up to the portfolio’s volatility. A holding with a small weight can carry a large share of the risk.</p>`);
+  } else add(why('decomposition'));
+  // 4. stress
+  if (r.stress) {
+    const st = r.stress, rows = st.scenarios.map(x => [esc(x.name) + `<br><span class="muted tnum">${fmt.date(x.start)} – ${fmt.date(x.end)}</span>`,
+      x.strategy == null ? '<span class="muted">not running</span>' : `<span class="${sign(x.strategy)}">${fmt.pct(x.strategy, 1, true)}</span>`,
+      x.strategy_mdd == null ? '—' : fmt.pct(x.strategy_mdd, 1),
+      x.holdings == null ? `<span class="muted">no data</span>` : `<span class="${sign(x.holdings)}">${fmt.pct(x.holdings, 1, true)}</span>${x.coverage < 0.999 ? `<br><span class="muted">${fmt.pct(x.coverage, 0)} of holdings</span>` : ''}`,
+      x.benchmark == null ? '—' : `<span class="${sign(x.benchmark)}">${fmt.pct(x.benchmark, 1, true)}</span>`]);
+    let h = `<h3 class="subhead">Stress Tests</h3>` + (rows.length ? htmlTable('Stress windows', ['Window', 'Strategy Then', 'Its Max DD', 'Final Holdings Replayed', 'Benchmark'], rows) : '<p class="help">None of the stress windows is covered by the data.</p>') +
+      `<p class="help">“Final holdings replayed” applies each instrument’s total return over the window to the weights held on the last day: what the current book would lose if that window happened again.</p>`;
+    if (st.shocks.length) h += `<p style="margin:0">Beta to <span translate="no">${esc(st.benchmark)}</span> of the final holdings: <b>${fmt.num(st.beta.portfolio_beta)}</b>. A ${st.shocks.map(x => `${fmt.pct(x.shock, 0)} day costs about ${fmt.pct(-x.pnl, 1)} (${fmt.money(-x.pnl_money)})`).join('; a ')}.</p>`;
+    add(h);
+  } else add(why('stress'));
+  // 5. VaR
+  if (r.var) {
+    const v = r.var, cell = (x, k) => `${fmt.pct(x[k], 2)}<br><span class="muted">${fmt.money(x.money[k])}</span>`;
+    add(`<h3 class="subhead">Value at Risk (Final Holdings)</h3><p style="margin:0">On ${fmt.money(v.equity)} of equity, from the last ${fmt.int(v.window)} days. The holdings’ daily P&L has skew ${fmt.num(v.skew)} & excess kurtosis ${fmt.num(v.kurtosis)}${Math.abs(v.kurtosis) > 1 ? ': fatter tails than a normal distribution, so the normal VaR understates the risk' : ''}.</p>` +
+      htmlTable('Value at Risk', ['Confidence', 'Historical', 'Normal', 'Cornish-Fisher', 'Expected Shortfall', `${v.horizon}-Day Historical`, `${v.horizon}-Day Normal`],
+        v.levels.map(x => [fmt.pct(x.level, 0), cell(x, 'hist'), cell(x, 'normal'), cell(x, 'cornish_fisher'), cell(x, 'hist_es'), cell(x, 'hist_h'), cell(x, 'normal_h')])) +
+      `<p style="margin:0">${v.backtest.map(b => `At ${fmt.pct(b.level, 0)}, the strategy’s own returns broke a rolling ${fmt.int(v.backtest_window)}-day historical VaR on <b>${fmt.int(b.breaches)}</b> of ${fmt.int(b.days)} days (${fmt.num(b.expected, 1)} expected; Kupiec p ${fmt.pval(b.p_value)}${b.p_value < 0.05 ? (b.breaches > b.expected ? ': too many, the VaR is too low' : ': too few, the VaR is too high') : ': consistent'}).`).join(' ')}</p>` +
+      `<p class="help">Expected shortfall is the average loss on days beyond the VaR. Component VaR by instrument (normal, ${fmt.pct(v.levels[v.levels.length - 1].level, 0)}): ${v.levels[v.levels.length - 1].components.map(c => `<span translate="no">${esc(c.ticker)}</span> ${fmt.pct(c.var, 2)}`).join(', ')}.</p>`);
+  } else add(why('var'));
+}
+
+/* ------------------------------------------------------------ capacity -- */
+function parseMoneyList(raw) {
+  const out = [];
+  for (const part of String(raw).split(/[,;\s]+/).filter(Boolean)) {
+    const m = part.replace(/[$_]/g, '').match(/^(\d+(?:\.\d+)?)([kmb]n?)?$/i); if (!m) return null;
+    out.push(+m[1] * ({ k: 1e3, m: 1e6, mn: 1e6, b: 1e9, bn: 1e9 }[(m[2] || '').toLowerCase()] || 1));
+  }
+  return out;
+}
+const moneyShort = v => (v >= 1e9 ? fmt.num(v / 1e9, v % 1e9 ? 1 : 0) + 'B' : v >= 1e6 ? fmt.num(v / 1e6, v % 1e6 ? 1 : 0) + 'M' : v >= 1e3 ? fmt.num(v / 1e3, v % 1e3 ? 1 : 0) + 'k' : fmt.int(v));
+async function runCapacity(ev) {
+  ev.preventDefault();
+  const lv = parseMoneyList($('#capLv').value);
+  if (!validate([['capLv', () => (!lv || lv.length < 2 ? 'Enter two or more sizes, e.g. 10k, 1M, 100M.' : lv.length > 12 ? 'Use 12 sizes or fewer.' : lv.some(v => v < 100 || v > 1e13) ? 'Use sizes from $100 to $10 trillion.' : null)]])) return;
+  const base = await freshPayload(); const out = $('#capOut'); const btn = $('#capRun');
+  loadingOn(btn); busy(true, 'Estimating capacity…');
+  try {
+    await ensurePayload(base);
+    const r = await py.call('capacity', { ...base, levels: lv, threshold: parseFloat($('#capThr').value) });
+    renderCapacity(r);
+  } catch (e) { toolError(out, e); }
+  finally { busy(false); await loadingOff(btn); }
+}
+function renderCapacity(r) {
+  const out = $('#capOut'); out.innerHTML = ''; const rows = r.rows, s0 = rows[0].sharpe;
+  const top = '$' + moneyShort(rows[rows.length - 1].cash), small = '$' + moneyShort(rows[0].cash);
+  let s = r.beyond_tested ? `The Sharpe ratio stays above ${fmt.pct(r.threshold, 0)} of its ${small} value (${fmt.num(s0)}) up to ${top}, the largest size tested: capacity is beyond that.`
+    : r.capacity != null ? `Estimated capacity: about <b>$${moneyShort(r.capacity)}</b>, where the Sharpe ratio falls to ${fmt.pct(r.threshold, 0)} of its ${small} value (${fmt.num(s0)}).`
+      : s0 > 0 ? `The Sharpe ratio is already below ${fmt.pct(r.threshold, 0)} of its ${small} value at the next size tested.`
+        : `The Sharpe ratio at ${small} isn’t positive, so there is no capacity to estimate.`;
+  s += ` Impact coefficient ${fmt.num(r.impact_coef, 2)}${r.impact_forced ? ' (turned on for this test)' : ''}, participation limit ${r.max_participation ? fmt.pct(r.max_participation, 0) + ' of a day’s volume' : 'off'}.`;
+  const p = document.createElement('p'); p.style.margin = '0'; p.innerHTML = s; out.appendChild(p);
+  const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = '<canvas role="img" aria-label="Sharpe ratio & CAGR at each account size"></canvas>'; out.appendChild(box);
+  const P = palette(); kill('capacity');
+  charts.capacity = new Chart(box.firstChild, { type: 'line', data: { datasets: [
+    { label: 'Sharpe', data: rows.map(x => ({ x: x.cash, y: x.sharpe })), borderColor: P.strat, backgroundColor: P.strat, pointRadius: 3, borderWidth: 2, yAxisID: 'y' },
+    { label: 'CAGR', data: rows.map(x => ({ x: x.cash, y: x.cagr })), borderColor: P.bench, backgroundColor: P.bench, pointRadius: 3, borderWidth: 1.5, borderDash: [4, 3], yAxisID: 'y2' },
+  ] }, options: { animation: false, responsive: true, maintainAspectRatio: false,
+    plugins: { legend: legendTop(P), tooltip: { ...tipStyle(P), callbacks: { title: it => '$' + moneyShort(it[0].parsed.x), label: c => ` ${c.dataset.label}: ${c.dataset.label === 'CAGR' ? fmt.pct(c.parsed.y, 2, true) : fmt.num(c.parsed.y)}` } } },
+    scales: { x: { type: 'logarithmic', title: { display: true, text: 'Starting cash ($, log scale)', color: P.fg3 }, grid: { color: P.grid }, ticks: { color: P.fg3, callback: v => (Math.log10(v) % 1 === 0 ? moneyShort(v) : '') } },
+      y: { position: 'left', grid: { color: P.grid }, ticks: { color: P.fg3 }, title: { display: true, text: 'Sharpe', color: P.fg3 } },
+      y2: { position: 'right', grid: { display: false }, ticks: { color: P.fg3, callback: v => fmt.pct(v, 0) }, title: { display: true, text: 'CAGR', color: P.fg3 } } } } });
+  const t = document.createElement('div');
+  t.innerHTML = htmlTable('Results at each account size', ['Starting Cash', 'CAGR', 'Sharpe', 'Max DD', 'Costs (% of Cash)', 'Median Participation', '95th Pct Participation', 'Partial Fills'],
+    rows.map(x => ['$' + moneyShort(x.cash), fmt.pct(x.cagr, 2, true), fmt.num(x.sharpe), fmt.pct(x.max_drawdown, 1), fmt.pct(x.costs_pct, 2), fmt.pct(x.participation_median, 3), fmt.pct(x.participation_p95, 3), fmt.int(x.partial_fills)])) +
+    '<p class="help">Participation is each fill’s share of that day’s traded volume. Costs include commissions, slippage, the spread & market impact.</p>';
+  out.appendChild(t);
+}
+
 async function runPerm(ev) {
   ev.preventDefault();
   if (!validate([['permN', between(50, 5000, '', true, 500)], ['permSeed', between(0, 1e9, '', true, 7)]])) return;
@@ -3431,7 +3638,7 @@ function wire() {
   $('#marketForm').addEventListener('submit', e => { e.preventDefault(); runBacktest(); });
   $('#settingsForm').addEventListener('submit', e => { e.preventDefault(); saveSettings(); runBacktest(); });
   $('#settingsBox').addEventListener('toggle', () => url.write());
-  $('#stopBtn').onclick = async () => { sweepCancel = true; wfCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'wfRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
+  $('#stopBtn').onclick = async () => { sweepCancel = true; wfCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'wfRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun', 'rkRun', 'capRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
   $('#template').onchange = loadSelectedTemplate;
   $('#resetBtn').onclick = loadSelectedTemplate;
   $('#errReset').onclick = () => { loadSelectedTemplate(); editor.ta.focus(); };
@@ -3546,6 +3753,13 @@ function wire() {
   $('#splitForm').addEventListener('submit', runSplit);
   $('#subForm').addEventListener('submit', runSub);
   $('#costForm').addEventListener('submit', runCosts);
+  $('#riskForm').addEventListener('submit', runRisk); $('#capForm').addEventListener('submit', runCapacity);
+  $('#rkFile').addEventListener('change', async e => { for (const f of e.target.files) await addFactorFile(f); e.target.value = ''; });
+  $('#rkSets').addEventListener('click', e => {
+    const a = e.target.closest('[data-factor]'); if (a) { addFactorSpec(a.dataset.factor); return; }
+    const d = e.target.closest('[data-factor-del]'); if (!d) return; const n = d.dataset.factorDel, rec = factorSets.get(n);
+    factorSets.delete(n); idb.del(n); renderFactorSets(); toast(`Removed factor file ${n}.`, { label: 'Undo', run: async () => { await idb.put(rec); addInstrument(rec); } });
+  });
   $('#permForm').addEventListener('submit', runPerm);
   $('#anForm').addEventListener('submit', runAnalytics);
   $('#anAll').onclick = () => { $$('#anList input').forEach(i => { i.checked = true; }); $('#anList-err').hidden = true; };
@@ -3629,7 +3843,7 @@ async function boot() {
   const wanted = qs && templates.some(t => t.id === qs) ? 'tpl:' + qs : draft ? draft.template : 'tpl:sma_cross';
   fillTemplateSelect(wanted);
   if (!$('#template').value) $('#template').value = 'tpl:sma_cross';
-  files.render(); renderModules(); ghRestore(); showPane(store.get('pane', 'problems')); setPaneOpen(store.get('paneOpen', true));
+  files.render(); renderModules(); ghRestore(); $('#rkFactors').value = store.get('riskFactors', 'SPY'); showPane(store.get('pane', 'problems')); setPaneOpen(store.get('paneOpen', true));
   if (draft && draft.code && draft.template === $('#template').value) { files.setStrategy(draft.code); const s = currentSource(); $('#about').textContent = s.about; $('#delBtn').hidden = s.kind !== 'mine'; }
   else loadSelectedTemplate();
 
@@ -3640,7 +3854,7 @@ async function boot() {
   const prefer = { ...(settings || {}) };
   if (q.get('ticker')) prefer.instrument = q.get('ticker').toUpperCase();
   if (q.has('bench')) prefer.benchmark = (q.get('bench') || '').toUpperCase();
-  fillInstrumentSelects(prefer); fillRateSelect(); summarizeSettings();
+  fillInstrumentSelects(prefer); fillRateSelect(); summarizeSettings(); renderFactorSets();
   const from = q.get('from') || (settings && settings.start), to = q.get('to') || (settings && settings.end);
   if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) $('#start').value = from;
   if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) $('#end').value = to;
