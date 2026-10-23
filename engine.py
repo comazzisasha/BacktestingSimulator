@@ -1260,6 +1260,21 @@ class Panel:
             self.live.append(live)
         self._aligned = {}
 
+    def impact_inputs(self, np):
+        """20-day average volume and daily volatility before each bar, per instrument, as
+        (calendar bars x instruments) arrays: what the square-root impact model needs."""
+        if "impact" not in self._aligned:
+            adv = np.full((self.n, self.k), np.nan)
+            sig = np.full((self.n, self.k), np.nan)
+            for a, ds in enumerate(self.sets):
+                av = ds.cached(("adv", 20), lambda: _trailing_mean(ds.volume, 20))
+                sv = ds.cached(("sigma", 20), lambda: _trailing_vol(ds.close, 20))
+                for t, j in enumerate(self.nat[a]):
+                    if j >= 0:
+                        adv[t, a], sig[t, a] = av[j], sv[j]
+            self._aligned["impact"] = (adv, sig)
+        return self._aligned["impact"]
+
     def mark(self, a, t):
         """Instrument a's latest close on calendar day t (NaN before it starts trading)."""
         j = self.nat[a][t]
@@ -1639,17 +1654,28 @@ class PortfolioContext(_StrategyClock):
         self.state = {}
         self.start_index = start
         self.tickers = list(panel.tickers)
-        self.assets = {tk: AssetContext(panel, a, run) for a, tk in enumerate(panel.tickers)}
+        self._assets = {tk: AssetContext(panel, a, run) for a, tk in enumerate(panel.tickers)}
+        self._all_synced = -1
 
     def _sync(self, t):
-        for a in self.assets.values():
-            a._sync(t)
+        pass                    # instruments catch up to today when the strategy looks at them
+
+    @property
+    def assets(self):
+        t = self._run.t
+        if self._all_synced != t:
+            for a in self._assets.values():
+                a._sync(t)
+            self._all_synced = t
+        return self._assets
 
     def __getitem__(self, ticker):
         try:
-            return self.assets[ticker]
+            a = self._assets[ticker]
         except KeyError:
             raise KeyError("%r is not in this portfolio (%s)" % (ticker, ", ".join(self.tickers)))
+        a._sync(self._run.t)
+        return a
 
     def __iter__(self):
         return iter(self.tickers)
@@ -1901,6 +1927,13 @@ class Account:
         self.margin_calls = []
         self._val = [NAN] * k                # valuation prices during an execution
         self._eq = None                      # equity at those prices (None = recompute)
+        self._closes = [panel.aligned(a, "close") for a in range(k)]   # = panel.mark(a, t)
+        self._divs = {}                      # calendar bar -> [(asset, dividend per share)]
+        index = {d: t for t, d in enumerate(panel.dates)}
+        for a, ds in enumerate(panel.sets):
+            for j, d in enumerate(ds.dividends):
+                if d:
+                    self._divs.setdefault(index[ds.dates[j]], []).append((a, d))
         self.spread_paid = 0.0
         self.impact_paid = 0.0
         self.partial_fills = 0               # market orders cut by the participation limit
@@ -1909,15 +1942,14 @@ class Account:
         self.arrival_t = None                # bar whose close is the arrival price of current fills
 
     def begin_bar(self, t):
-        """Reset the per-bar participation allowance."""
+        """Start a bar: the participation allowance is worked out when the first order needs it."""
         self._t = t
-        cap = self.cfg.max_participation
-        if cap > 0:
-            p = self.panel
-            self._vol_left = [cap * p.sets[a].volume[p.nat[a][t]] if p.live[a][t] and p.sets[a].volume[p.nat[a][t]] > 0
-                              else math.inf for a in range(self.k)]
-        else:
-            self._vol_left = None
+        self._vol_left = None
+
+    def _allowance(self):
+        cap, p, t = self.cfg.max_participation, self.panel, self._t
+        self._vol_left = [cap * p.sets[a].volume[p.nat[a][t]] if p.live[a][t] and p.sets[a].volume[p.nat[a][t]] > 0
+                          else math.inf for a in range(self.k)]
 
     def impact(self, a, qty):
         """Square-root market impact as a fraction of price for trading qty shares now."""
@@ -1940,9 +1972,9 @@ class Account:
     # ---- valuation ----------------------------------------------------------
     def equity_marked(self, t):
         eq = self.cash
-        for a, sh in enumerate(self.shares):
+        for sh, cl in zip(self.shares, self._closes):
             if sh:
-                eq += sh * self.panel.mark(a, t)
+                eq += sh * cl[t]
         return eq
 
     def _equity_val(self):
@@ -1984,7 +2016,7 @@ class Account:
             x = self.cash * (rate + cfg.margin_spread) * days / 360.0
             self.carry["interest_paid"] -= x
         fee_total = 0.0
-        for a, sh in enumerate(self.shares):
+        for a, sh in enumerate(self.shares if min(self.shares) < 0 else ()):
             if sh < 0:
                 fee = cfg.borrow_fees.get(p.tickers[a], cfg.borrow_fee)
                 if fee:
@@ -1998,17 +2030,15 @@ class Account:
 
     def pay_dividends(self, t):
         """Holders on the ex-date receive the dividend; short sellers pay it."""
-        p = self.panel
-        for a, sh in enumerate(self.shares):
-            if sh and p.live[a][t]:
-                d = p.sets[a].dividends[p.nat[a][t]]
-                if d:
-                    amt = sh * d
-                    self.cash += amt
-                    self._eq = None
-                    self.asset_cash[a] += amt
-                    self.asset_dividends[a] += amt
-                    self.carry["dividends_received" if amt > 0 else "dividends_paid"] += abs(amt)
+        for a, d in self._divs.get(t, ()):
+            sh = self.shares[a]
+            if sh:
+                amt = sh * d
+                self.cash += amt
+                self._eq = None
+                self.asset_cash[a] += amt
+                self.asset_dividends[a] += amt
+                self.carry["dividends_received" if amt > 0 else "dividends_paid"] += abs(amt)
 
     # ---- order sizing -------------------------------------------------------
     def rebalance(self, weights, px, t):
@@ -2028,6 +2058,11 @@ class Account:
             w = {a: v * f for a, v in w.items()}
             self.scaled += 1
         slip, cb, fixed = cfg.slippage_bps / 1e4, cfg.commission_bps / 1e4, cfg.commission_fixed
+        np = _numpy() if len(w) >= VECTOR_MIN else None
+        if np is not None:
+            plan, later = self._plan_vectorized(np, w, px, t, eq)
+            rest = self._execute_plan(plan, eq, t, report=False)
+            return later, rest
         plan, later = [], {}
         for a, wa in w.items():
             p = px[a]
@@ -2055,6 +2090,49 @@ class Account:
             plan.append([a, dq, p, False])
         rest = self._execute_plan(plan, eq, t, report=False)
         return later, rest
+
+    def _plan_vectorized(self, np, w, px, t, eq):
+        """The sizing loop of rebalance() over all instruments at once. Every element is
+        computed with the same operations in the same order, so the plan is bit-identical."""
+        cfg, panel = self.cfg, self.panel
+        later = {}
+        idx, wv = [], []
+        for a, wa in w.items():
+            if px[a] is None:
+                if panel.nat[a][t] >= 0 or wa == 0:
+                    later[a] = wa
+            else:
+                idx.append(a)
+                wv.append(wa)
+        if not idx:
+            return [], later
+        ia = np.array(idx)
+        wa = np.array(wv, dtype=float)
+        p = np.array([px[a] for a in idx], dtype=float)
+        sh = np.array([self.shares[a] for a in idx], dtype=float)
+        slip, half, cb, fixed = cfg.slippage_bps / 1e4, cfg.spread_bps / 2e4, cfg.commission_bps / 1e4, cfg.commission_fixed
+        diff = wa * eq - sh * p
+        with np.errstate(divide="ignore", invalid="ignore"):
+            qty = diff / p
+            if cfg.impact_coef:
+                adv, sig = panel.impact_inputs(np)
+                av, sg = adv[t, ia], sig[t, ia]
+                ok = (qty > 0) & ~np.isnan(av) & ~np.isnan(sg) & (av > 0)
+                imp = np.where(ok, cfg.impact_coef * sg * np.sqrt(np.where(ok, qty / np.where(ok, av, 1.0), 0.0)), 0.0)
+            else:
+                imp = np.zeros(len(idx))
+            unit = p * (1 + slip + half + imp) * (1 + cb)
+            buy = np.maximum(0.0, (diff - fixed) / unit)
+        dq = np.where(wa == 0, -sh, np.where(diff > 0, buy, qty))
+        target = sh + dq
+        keep = ~((sh != 0) & (target != 0) & ((sh > 0) == (target > 0)) & (np.abs(diff) < cfg.rebalance_band * eq))
+        if not cfg.fractional:
+            target = np.trunc(target)
+        dq = target - sh
+        if not cfg.allow_short:
+            dq = np.where(sh + dq < 0, -sh, dq)
+        plan = [[a, float(d), float(x), False] for a, d, x, k in zip(idx, dq.tolist(), p.tolist(), keep.tolist()) if k]
+        return plan, later
 
     def share_orders(self, orders, px, t, maker=False, kind="market"):
         """Execute share orders {asset: ('delta' | 'target', value)}. Returns those that
@@ -2087,7 +2165,11 @@ class Account:
     def _volume_cap(self, a, dq, rest):
         """Trim dq to what is left of this bar's participation allowance; the rest is
         recorded as a target for the next bar (a multi-day fill)."""
-        if self._vol_left is None or abs(dq) <= self._vol_left[a] + 1e-9:
+        if self.cfg.max_participation <= 0:
+            return dq
+        if self._vol_left is None:
+            self._allowance()
+        if abs(dq) <= self._vol_left[a] + 1e-9:
             if self._vol_left is not None:
                 self._vol_left[a] = max(0.0, self._vol_left[a] - abs(dq))
             return dq
@@ -2395,12 +2477,16 @@ def align_benchmark(dates, bench, s, e, total_return=True):
 
 def _equal_weight_benchmark(panel, s, e, total_return=True):
     """Equal-weight portfolio of every listed instrument, rebalanced daily."""
+    key = ("equal_weight", s, e, total_return)
+    if key in panel._aligned:
+        return panel._aligned[key]
     col = "total_return" if total_return else "close"
     series = [panel.aligned(a, col) for a in range(panel.k)]
     out = [1.0]
     for t in range(s + 1, e + 1):
-        rets = [x[t] / x[t - 1] - 1 for x in series if not isnan(x[t - 1]) and not isnan(x[t])]
+        rets = [x[t] / x[t - 1] - 1 for x in series if x[t - 1] == x[t - 1] and x[t] == x[t]]
         out.append(out[-1] * (1 + (sum(rets) / len(rets) if rets else 0.0)))
+    panel._aligned[key] = out
     return out
 
 
@@ -2590,7 +2676,18 @@ def _carry(carry, t_dec, weights, w_at, orders):
     return carry
 
 
-def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_output=True, rates=None):
+SIGNAL_CACHE = {}   # signals(data) results by (code, params, data, seed): reused when only settings change
+
+
+def _remember(cache, key, value, limit=8):
+    if len(cache) >= limit:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
+    return value
+
+
+def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_output=True, rates=None,
+             signal_key=None):
     """Run a single-instrument strategy over ds and return a Result.
 
     Timing: on every bar the strategy sees data up to and including that bar's
@@ -2598,11 +2695,26 @@ def backtest(strategy, ds, cfg=None, start=None, end=None, bench=None, capture_o
     close with execution='close'), so a strategy can never trade on information
     it could not have had.
     """
-    return _run_backtest(strategy, Panel([ds]), cfg, start, end, bench, False, capture_output, rates)
+    return _run_backtest(strategy, Panel([ds]), cfg, start, end, bench, False, capture_output, rates, signal_key)
+
+
+_PANELS = {}
+
+
+def shared_panel(datasets):
+    """A Panel for these instruments, reused while their data is unchanged (sweeps run
+    the same instruments hundreds of times). Keyed by the data fingerprints."""
+    key = tuple((id(ds), ds.fingerprint()) for ds in datasets)
+    p = _PANELS.get(key)
+    if p is None:
+        if len(_PANELS) >= 8:
+            _PANELS.pop(next(iter(_PANELS)))
+        p = _PANELS[key] = Panel(datasets)
+    return p
 
 
 def backtest_portfolio(strategy, datasets, cfg=None, start=None, end=None, bench=None,
-                       capture_output=True, rates=None):
+                       capture_output=True, rates=None, signal_key=None):
     """Run a portfolio strategy over several instruments on their shared calendar.
 
     on_bar(ctx) returns {ticker: target weight}; signals(data) returns
@@ -2610,10 +2722,10 @@ def backtest_portfolio(strategy, datasets, cfg=None, start=None, end=None, bench
     per ticker. Without a benchmark, the benchmark is an equal-weight portfolio of
     the same instruments rebalanced daily.
     """
-    return _run_backtest(strategy, Panel(datasets), cfg, start, end, bench, True, capture_output, rates)
+    return _run_backtest(strategy, shared_panel(datasets), cfg, start, end, bench, True, capture_output, rates, signal_key)
 
 
-def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_output, rates):
+def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_output, rates, signal_key=None):
     if cfg is None:
         cfg = Config()
     elif isinstance(cfg, dict):
@@ -2655,11 +2767,21 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     position = [] if not portfolio else None
     weights = [[] for _ in range(k)]
     asset_pnl = [[] for _ in range(k)]
+    shares_hist, cash_hist = [], []
     try:
         row, sig = None, None
         if strategy.signals is not None:
-            raw = strategy.signals(PanelView(panel) if portfolio else DataView(panel.sets[0]))
-            row, sig = signal_rows(raw, panel, portfolio)
+            key = None if signal_key is None else (signal_key, cfg.seed, cfg.total_return, portfolio,
+                                                   tuple(ds.fingerprint() for ds in panel.sets))
+            if key in SIGNAL_CACHE:
+                row, sig, printed = SIGNAL_CACHE[key]
+                out_buf.write(printed)
+            else:
+                mark = out_buf.tell()
+                raw = strategy.signals(PanelView(panel) if portfolio else DataView(panel.sets[0]))
+                row, sig = signal_rows(raw, panel, portfolio)
+                if key is not None:
+                    _remember(SIGNAL_CACHE, key, (row, sig, out_buf.getvalue()[mark:]))
         if strategy.init is not None:
             run.t = s
             ctx._sync(s)
@@ -2704,31 +2826,41 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
                 acct.liquidate(t)
                 acct.cash = 0.0
                 eq = 0.0
-            marks = [panel.mark(a, t) for a in range(k)]
-            g = sum(abs(sh * marks[a]) for a, sh in enumerate(acct.shares) if sh)
-            if mm > 0 and not wiped and g > 0 and eq < mm * g:
-                target = eq * min(cfg.max_leverage, 0.8 / mm)
-                acct.margin_calls.append({"date": panel.dates[t], "equity": eq, "gross": g})
-                acct.liquidate(t, 1 - target / g, "margin call")
-                eq = acct.equity_marked(t)
-                marks = [panel.mark(a, t) for a in range(k)]
-                g = sum(abs(sh * marks[a]) for a, sh in enumerate(acct.shares) if sh)
-            equity.append(eq)
-            lv = sum(sh * marks[a] for a, sh in enumerate(acct.shares) if sh > 0)
-            sv = sum(-sh * marks[a] for a, sh in enumerate(acct.shares) if sh < 0)
-            gross_l.append(g / eq if eq > 0 else 0.0)
-            net_l.append((lv - sv) / eq if eq > 0 else 0.0)
-            long_l.append(lv / eq if eq > 0 else 0.0)
-            short_l.append(sv / eq if eq > 0 else 0.0)
-            for a in range(k):
-                sh = acct.shares[a]
-                weights[a].append(sh * marks[a] / eq if eq > 0 and sh else 0.0)
-                asset_pnl[a].append(acct.asset_cash[a] + (sh * marks[a] if sh else 0.0))
             if portfolio:
-                exposure.append(gross_l[-1])
+                # Series are computed once after the loop from these snapshots. A margin call
+                # needs borrowed cash or a short, so the gross check is skipped without either.
+                if mm > 0 and not wiped and (acct.cash < 0 or min(acct.shares) < 0):
+                    g = sum(abs(sh * panel.mark(a, t)) for a, sh in enumerate(acct.shares) if sh)
+                    if g > 0 and eq < mm * g:
+                        target = eq * min(cfg.max_leverage, 0.8 / mm)
+                        acct.margin_calls.append({"date": panel.dates[t], "equity": eq, "gross": g})
+                        acct.liquidate(t, 1 - target / g, "margin call")
+                        eq = acct.equity_marked(t)
+                equity.append(eq)
+                shares_hist.append(acct.shares[:])
+                cash_hist.append(acct.asset_cash[:])
             else:
-                position.append(acct.shares[0])
-                exposure.append(acct.shares[0] * marks[0] / eq if eq > 0 else 0.0)
+                c = panel.mark(0, t)
+                sh = acct.shares[0]
+                g = abs(sh * c) if sh else 0
+                if mm > 0 and not wiped and g > 0 and eq < mm * g:
+                    target = eq * min(cfg.max_leverage, 0.8 / mm)
+                    acct.margin_calls.append({"date": panel.dates[t], "equity": eq, "gross": g})
+                    acct.liquidate(t, 1 - target / g, "margin call")
+                    eq = acct.equity_marked(t)
+                    sh = acct.shares[0]
+                    g = abs(sh * c) if sh else 0
+                equity.append(eq)
+                lv = sh * c if sh > 0 else 0
+                sv = -sh * c if sh < 0 else 0
+                gross_l.append(g / eq if eq > 0 else 0.0)
+                net_l.append((lv - sv) / eq if eq > 0 else 0.0)
+                long_l.append(lv / eq if eq > 0 else 0.0)
+                short_l.append(sv / eq if eq > 0 else 0.0)
+                weights[0].append(sh * c / eq if eq > 0 and sh else 0.0)
+                asset_pnl[0].append(acct.asset_cash[0] + (sh * c if sh else 0.0))
+                position.append(sh)
+                exposure.append(sh * c / eq if eq > 0 else 0.0)
             if t == e or wiped:
                 continue
 
@@ -2761,6 +2893,9 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     finally:
         sys.stdout = old_stdout
 
+    if portfolio:
+        weights, asset_pnl, gross_l, net_l, long_l, short_l = _portfolio_series(panel, s, shares_hist, cash_hist, equity)
+        exposure = gross_l
     for a in range(k):
         if acct.open_trades[a] is not None:
             m = panel.mark(a, e)
@@ -2797,8 +2932,66 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         spread_paid=acct.spread_paid, impact_paid=acct.impact_paid, partial_fills=acct.partial_fills,
         book_stats=dict(run.book_stats, open=len(run.book)),
         logs=logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
-        signals=sig,
+        signals=sig, signal_key=signal_key,
     )
+
+
+USE_NUMPY = True   # tests switch this off to check the pure-Python path gives the same numbers
+# Rebalances with at least this many targets size orders with NumPy. Below it, a plain loop
+# is faster (NumPy calls carry a fixed overhead, large under WebAssembly). Results are identical.
+VECTOR_MIN = 200
+
+
+def _numpy():
+    """NumPy if it is installed (and allowed), else None."""
+    if not USE_NUMPY:
+        return None
+    try:
+        import numpy
+        return numpy
+    except ImportError:
+        return None
+
+
+def _portfolio_series(panel, s, shares_hist, cash_hist, equity):
+    """Per-instrument weights and P&L, and gross/net/long/short exposure, for every bar
+    from the share and cash snapshots taken at each close."""
+    n, k = len(equity), panel.k
+    closes = [panel.aligned(a, "close")[s:s + n] for a in range(k)]
+    np = _numpy()
+    if np is not None:
+        sh = np.array(shares_hist, dtype=float)
+        mk = np.array(closes, dtype=float).T
+        val = np.where(sh != 0, sh * np.nan_to_num(mk), 0.0)
+        eq = np.array(equity, dtype=float)
+        ok = eq > 0
+        safe = np.where(ok, eq, 1.0)[:, None]
+        w = np.where(ok[:, None] & (sh != 0), val / safe, 0.0)
+        pnl = np.array(cash_hist, dtype=float) + val
+        lv = np.where(val > 0, val, 0.0).sum(axis=1)
+        sv = np.where(val < 0, -val, 0.0).sum(axis=1)
+        div = np.where(ok, eq, np.inf)
+        return ([w[:, a].tolist() for a in range(k)], [pnl[:, a].tolist() for a in range(k)],
+                ((lv + sv) / div).tolist(), ((lv - sv) / div).tolist(), (lv / div).tolist(), (sv / div).tolist())
+    weights, pnl = [[] for _ in range(k)], [[] for _ in range(k)]
+    gross, net, long_, short = [], [], [], []
+    for t in range(n):
+        eq, row, cash = equity[t], shares_hist[t], cash_hist[t]
+        lv = sv = 0.0
+        for a in range(k):
+            x = row[a]
+            v = x * closes[a][t] if x else 0.0
+            if v > 0:
+                lv += v
+            elif v < 0:
+                sv -= v
+            weights[a].append(v / eq if eq > 0 and x else 0.0)
+            pnl[a].append(cash[a] + v)
+        gross.append((lv + sv) / eq if eq > 0 else 0.0)
+        net.append((lv - sv) / eq if eq > 0 else 0.0)
+        long_.append(lv / eq if eq > 0 else 0.0)
+        short.append(sv / eq if eq > 0 else 0.0)
+    return weights, pnl, gross, net, long_, short
 
 
 def _price_only(ds):
@@ -3791,12 +3984,17 @@ def lookahead_check(strategy, ds, full_signals, samples=8, budget=None):
         if budget is not None and done >= 2 and time.time() - t0 > budget:
             break
         done += 1
+        quiet, sys.stdout = sys.stdout, io.StringIO()    # the re-runs' print() output isn't wanted
+        try:
+            sub_raw = strategy.signals(PanelView(ds, k + 1) if portfolio else DataView(ds, k + 1))
+        finally:
+            sys.stdout = quiet
         if portfolio:
-            _, sub = signal_rows(strategy.signals(PanelView(ds, k + 1)), ds, True, k + 1)
+            _, sub = signal_rows(sub_raw, ds, True, k + 1)
             name = lambda r: None if r is None else {ds.tickers[x]: v for x, v in r.items()}  # noqa: E731
             a, b = sub[k], full_signals[k]
         else:
-            sub = list(strategy.signals(DataView(ds, k + 1)))
+            sub = list(sub_raw)
             a, b = sub[k] if len(sub) > k else None, full_signals[k]
         if not _same_weight(a, b):
             bad.append({"date": ds.dates[k], "with_future": name(b) if portfolio else b,
@@ -3905,14 +4103,23 @@ def _prepare(p):
     return sets, bench, cfg, strat, portfolio, rates
 
 
+def _signal_key(p):
+    import hashlib
+    return hashlib.sha256((p["code"] + "\0" + json.dumps(p.get("params"), sort_keys=True)).encode()).hexdigest()
+
+
 def _run_payload(p, strat=None, cfg=None):
     sets, bench, cfg0, strat0, portfolio, rates = _prepare(p)
     strat, cfg = strat or strat0, cfg or cfg0
+    key = _signal_key(p)
     if portfolio:
-        res = backtest_portfolio(strat, sets, cfg, p.get("start"), p.get("end"), bench, rates=rates)
+        res = backtest_portfolio(strat, sets, cfg, p.get("start"), p.get("end"), bench, rates=rates, signal_key=key)
     else:
-        res = backtest(strat, sets[0], cfg, p.get("start"), p.get("end"), bench, rates=rates)
+        res = backtest(strat, sets[0], cfg, p.get("start"), p.get("end"), bench, rates=rates, signal_key=key)
     return res, strat
+
+
+LOOKAHEAD_CACHE = {}
 
 
 def _downsample(n, limit=600):
@@ -4044,7 +4251,9 @@ def api_run(p):
     t3 = time.perf_counter()
     if res.signals is not None:
         data = res.panel if res.portfolio else res.panel.sets[0]
-        out["lookahead"] = lookahead_check(strat, data, res.signals, budget=float(p.get("lookahead_budget", 4.0)))
+        lk = (res.signal_key, res.config.seed, res.portfolio, tuple(ds.fingerprint() for ds in res.panel.sets))
+        out["lookahead"] = LOOKAHEAD_CACHE.get(lk) or _remember(LOOKAHEAD_CACHE, lk, lookahead_check(
+            strat, data, res.signals, budget=float(p.get("lookahead_budget", 4.0))))
     out["timing"] = {"backtest": t1 - t0, "statistics": t2 - t1, "charts": t3 - t2, "lookahead": time.perf_counter() - t3}
     LAST_RUN["res"] = res
     return out

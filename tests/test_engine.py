@@ -915,6 +915,75 @@ def test_portfolio_signal_formats_agree():
     assert all(r == results[0] for r in results), "dict of lists, list of dicts and a matrix are the same weights"
 
 
+def test_portfolio_series_numpy_and_python_agree():
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        print("skip  numpy/python series check (needs numpy)")
+        return
+    t = load_templates()
+    sets = {tk: bundled(tk) for tk in ("AAPL", "MSFT", "NVDA", "AMZN", "JPM", "XOM", "KO", "XLF", "XLE", "XLV", "XLK", "SPY", "TLT", "GLD")}
+    for tid in ("pf_long_short", "pf_momentum", "pf_risk_parity"):
+        strat = engine.Strategy.from_code(t[tid])
+        data = [sets[x] for x in strat.universe if x in sets] or list(sets.values())
+        cfg = engine.Config(allow_short=True, max_leverage=1.5)
+        out = []
+        for flag in (True, False):
+            engine.USE_NUMPY = flag
+            try:
+                out.append(engine.backtest_portfolio(engine.Strategy.from_code(t[tid]), data, cfg))
+            finally:
+                engine.USE_NUMPY = True
+        a, b = out
+        assert a.equity == b.equity, tid
+        for name in ("gross", "net", "long", "short"):
+            assert max(abs(x - y) for x, y in zip(getattr(a, name), getattr(b, name))) < 1e-12, (tid, name)
+        for tk in a.weights:
+            assert max(abs(x - y) for x, y in zip(a.weights[tk], b.weights[tk])) < 1e-12
+            assert max(abs(x - y) for x, y in zip(a.asset_pnl[tk], b.asset_pnl[tk])) < 1e-6
+
+
+def test_vectorized_rebalance_is_bit_identical():
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        print("skip  vectorized rebalance check (needs numpy)")
+        return
+    rng = random.Random(9)
+    days = engine.session_days("2019-01-02", "2021-12-31")
+    sets = []
+    for k in range(20):
+        px, rows = 20 + 80 * rng.random(), []
+        for i, d in enumerate(days):
+            if k % 5 == 3 and i % 17 == 0:
+                continue                                    # some instruments miss days
+            nxt = px * (1 + rng.gauss(0.0002, 0.02))
+            rows.append((d, px, max(px, nxt) * 1.01, min(px, nxt) * 0.99, nxt, rng.randint(20000, 500000)))
+            px = nxt
+        start = 40 * (k % 4)                                # and some list later
+        d, o, h, l, c, v = zip(*rows[start:])
+        sets.append(engine.DataSet("R%02d" % k, d, c, o, h, l, v))
+    code = ("def on_bar(ctx):\n    r = random.random()\n"
+            "    return {t: random.uniform(-0.12, 0.12) for t in ctx.tickers if ctx[t].listed and random.random() < 0.8}\n")
+    configs = [dict(allow_short=True), dict(allow_short=True, max_leverage=2.0, spread_bps=8, impact_coef=1.0, commission_bps=3),
+               dict(fractional=False, cash=250000.0, commission_fixed=1.0, rebalance_band=0.0),
+               dict(allow_short=False, rebalance_band=0.05, slippage_bps=5, impact_coef=0.5, execution="close")]
+    engine.VECTOR_MIN = 16                                  # exercise the NumPy path with 20 instruments
+    for cfg in configs:
+        out = []
+        for flag in (True, False):
+            engine.USE_NUMPY = flag
+            try:
+                out.append(engine.backtest_portfolio(engine.Strategy.from_code(code), sets, engine.Config(seed=3, **cfg)))
+            finally:
+                engine.USE_NUMPY = True
+        a, b = out
+        assert len(a.fills) > 500, cfg
+        assert a.equity == b.equity, cfg
+        assert [(f["i"], f["ticker"], f["qty"], f["price"]) for f in a.fills] == [(f["i"], f["ticker"], f["qty"], f["price"]) for f in b.fills], cfg
+    engine.VECTOR_MIN = 200
+
+
 def test_portfolio_errors_are_readable():
     for code, msg in (("def on_bar(ctx):\n    return {'NOPE': 1}\n", "not in the portfolio"),
                       ("def on_bar(ctx):\n    return [1, 2, 3]\n", "3 weights for 2 instruments"),
@@ -987,6 +1056,27 @@ def test_json_output_replaces_only_nonfinite_numbers():
     out = json.loads(engine.to_json(x))
     assert out == {"a": None, "b": [1.5, None, None], "3": [1, 2],
                    "log": 'ratio: NaN, "quoted" \\ Infinity -Infinity', "nested": {"z": [None]}}
+
+
+def test_signal_cache_reuses_signals_when_only_settings_change():
+    engine.DATA.clear()
+    engine.SIGNAL_CACHE.clear()
+    engine.DATA["DEMO-STOCK"] = DEMO
+    code = ("def signals(data):\n    print('computing')\n    s = qt.sma(data.close, 50)\n"
+            "    return [1.0 if c > m else 0.0 for c, m in zip(data.close, s)]\n")
+    base = {"ticker": "DEMO-STOCK", "code": code}
+    a = json.loads(engine.handle("run", json.dumps(dict(base, config={"slippage_bps": 0}))))["result"]
+    n = len(engine.SIGNAL_CACHE)
+    b = json.loads(engine.handle("run", json.dumps(dict(base, config={"slippage_bps": 20}))))["result"]
+    assert len(engine.SIGNAL_CACHE) == n == 1, "same code, params & data: signals computed once"
+    assert b["metrics"]["final_equity"] < a["metrics"]["final_equity"], "costs still apply on a cache hit"
+    assert a["logs"].count("computing") == 1 and b["logs"].count("computing") == 1, "printed output replays"
+    fresh = engine.backtest(engine.Strategy.from_code(code), DEMO, engine.Config(slippage_bps=20))
+    assert abs(fresh.equity[-1] - b["metrics"]["final_equity"]) < 1e-6
+    json.loads(engine.handle("run", json.dumps(dict(base, params={"x": 1}, config={"slippage_bps": 20}))))
+    assert len(engine.SIGNAL_CACHE) == 2, "different parameters: new signals"
+    json.loads(engine.handle("run", json.dumps(dict(base, config={"slippage_bps": 20, "seed": 7}))))
+    assert len(engine.SIGNAL_CACHE) == 3, "a different random seed: new signals"
 
 
 def test_json_api_roundtrip():
