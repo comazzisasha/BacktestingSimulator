@@ -218,6 +218,10 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--border); background: var(--sunk); color: var(--fg-2); white-space: nowrap; }
 .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .badge.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
+.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 4px 12px; }
+.checks .check { white-space: nowrap; }
+fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
+.rank-bars { position: relative; width: 100%; }
 .surf-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
 .surf-two h3 { margin: 0 0 6px; }
 .surf-c { position: relative; width: 100%; aspect-ratio: 1 / 0.9; max-height: 460px; }
@@ -924,6 +928,20 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       </div>
     </section>
 
+    <section class="panel" id="ranking" data-opt="ranking" aria-labelledby="h-rank">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-rank">Strategy Ranking</h2><p>Backtest every built-in strategy with its default parameters on your instrument, date range & settings, and rank them by one statistic. Picking the best of many on the same data flatters the winner, so the result also says how much of its lead could be luck.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="rankForm" novalidate>
+          <div class="field"><label for="rnBy">Rank By</label><select id="rnBy" name="rank-by"><option value="sharpe" selected>Sharpe ratio</option><option value="cagr">CAGR</option><option value="total_return">Total return</option><option value="sortino">Sortino ratio</option><option value="calmar">Calmar ratio</option><option value="max_drawdown">Max drawdown (shallowest first)</option><option value="volatility">Volatility (lowest first)</option><option value="information_ratio">Information ratio</option><option value="alpha">Alpha</option><option value="psr">Probabilistic Sharpe</option></select></div>
+          <fieldset class="field"><legend class="label">Strategies</legend><div class="checks" id="rnGroups"></div></fieldset>
+          <p class="help" id="rnWhere"></p>
+          <div class="row"><button class="btn primary" id="rnRun" type="submit">Rank Strategies</button><button class="btn" id="rnStop" type="button" hidden>Cancel</button><span class="muted tnum" id="rnCount" aria-live="polite"></span></div>
+          <div class="bar" id="rnBar" hidden role="progressbar" aria-label="Ranking progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </form>
+        <div class="out" id="rnOut" aria-live="polite"><p class="out-empty">Runs each strategy once, in parallel where your browser allows.</p></div>
+      </div>
+    </section>
+
     <section class="panel" id="risk" data-opt="risk" aria-labelledby="h-risk">
       <div class="panel-h"><div class="toolhead"><h2 id="h-risk">Risk Report</h2><p>Where the returns come from & what could hurt: a factor regression with autocorrelation-robust t-statistics, rolling beta, each holding’s share of the risk, historical stress windows & Value at Risk for the final holdings.</p></div></div>
       <div class="panel-b toolgrid">
@@ -1219,7 +1237,7 @@ const LOCALE = (() => {
   }
   return 'en-US';
 })();
-const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'surface', 'risk', 'capacity', 'options', 'subperiods', 'costs', 'permutation', 'analytics'];
+const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'surface', 'ranking', 'risk', 'capacity', 'options', 'subperiods', 'costs', 'permutation', 'analytics'];
 
 const RECOMMENDED = [
   ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
@@ -1307,7 +1325,7 @@ const trials = {
 // Choices are remembered in this browser, separately for panels, statistics & tools.
 const PANELS = [['relative', 'Relative Performance', 'std'], ['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
   ['roll', 'Rolling Sharpe Ratio', 'std'], ['vol', 'Rolling Volatility', 'extra']];
-const TOOLS = [['surface', 'Start/End Surfaces', 'std'], ['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['options', 'Options Overlay', 'extra'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
+const TOOLS = [['surface', 'Start/End Surfaces', 'std'], ['ranking', 'Strategy Ranking', 'std'], ['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['options', 'Options Overlay', 'extra'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
   ['analytics', 'Instrument Analytics', 'std']];
 const shown = {
   is(kind, key, tier) { if (tier === 'core') return true; const o = store.get('show.' + kind, {}); return key in o ? !!o[key] : tier === 'std'; },
@@ -3707,6 +3725,126 @@ function wireSurfaceCanvas(cv, ctx) {
   });
 }
 
+/* ---------------------------------------------------- strategy ranking -- */
+// Every built-in strategy (and optionally your saved ones) backtested once with its default
+// parameters, then ranked in Python, which also deflates the winner's Sharpe ratio for the
+// number of strategies tried & measures the probability of backtest overfitting among them.
+let rankCancel = false, rankRunning = false, rankLast = null;
+const universeOf = code => { const m = code.match(/^UNIVERSE\s*=\s*\[([^\]]*)\]/m); return m ? [...m[1].matchAll(/["']([^"']+)["']/g)].map(x => x[1]) : null; };
+function rankCandidates() {
+  const on = new Set($$('#rnGroups input:checked').map(i => i.value)), out = [];
+  for (const t of templates) if (on.has(t.group)) out.push({ id: 'tpl:' + t.id, name: t.name, group: t.group, code: t.code });
+  if (on.has('__mine')) for (const [n, code] of Object.entries(myStrategies())) out.push({ id: 'mine:' + n, name: n, group: 'My Strategies', code });
+  return out;
+}
+function renderRankGroups() {
+  const box = $('#rnGroups'); if (!box || !templates) return;
+  const groups = [...new Set(templates.map(t => t.group))], off = new Set(store.get('rankOff', []));
+  const count = g => templates.filter(t => t.group === g).length, mine = Object.keys(myStrategies()).length;
+  box.innerHTML = groups.map(g => checkbox('rank-group', g, `${g} (${count(g)})`, !off.has(g))).join('') + (mine ? checkbox('rank-group', '__mine', `My strategies (${mine})`, !off.has('__mine')) : '');
+  rankWhere();
+}
+function rankWhere() {
+  const el = $('#rnWhere'); if (!el) return;
+  const t = $('#instrument').value, pf = $$('#rnGroups input:checked').some(i => i.value === 'Portfolio');
+  el.innerHTML = `Single-instrument strategies run on <b translate="no">${esc(t || '—')}</b>${pf ? '; portfolio strategies on their own <code translate="no">UNIVERSE</code>' : ''}, with your benchmark, date range & settings. Strategies that short need <b>Allow shorting</b> on, or they run long-only.`;
+}
+async function runRanking(ev) {
+  ev.preventDefault();
+  if (rankRunning) return;
+  const cands = rankCandidates(), out = $('#rnOut'), btn = $('#rnRun'), bar = $('#rnBar');
+  if (cands.length < 2) { out.innerHTML = '<p class="ferr">Pick at least two strategies to rank.</p>'; return; }
+  await py.ready;
+  const common = { benchmark: benchSpec(), modules: files.payload(), config: readConfig(), start: $('#start').value || null, end: $('#end').value || null, returns: true, blocks: PBO_BLOCKS };
+  const ticker = $('#instrument').value;
+  const jobs = cands.map(c => {
+    const u = universeOf(c.code);
+    if (!u) return { ...c, kind: 'single', market: ticker, payload: { ...common, code: c.code, ticker } };
+    const have = u.filter(x => instruments.has(x)), miss = u.filter(x => !instruments.has(x));
+    return { ...c, kind: 'portfolio', market: `${fmt.int(have.length)} instruments`, payload: { ...common, code: c.code, tickers: have }, missing: have.length < 2 ? miss : null };
+  });
+  rankCancel = false; rankRunning = true; loadingOn(btn); busy(true, 'Ranking strategies…');
+  $('#rnStop').hidden = false; bar.hidden = false; progress(bar, 0);
+  try {
+    const res = await pool.map(jobs, async (client, j) => {
+      if (j.missing) return { error: `Needs ${j.missing.join(', ')} on the Data tab.` };
+      try { await ensurePayload(j.payload, client); return await client.call('metrics', j.payload); }
+      catch (e) { if (e instanceof PyError || /No data is loaded/.test(e.message)) return { error: (e.info && e.info.message) || e.message }; throw e; }
+    }, { cancelled: () => rankCancel, onDone: n => { progress(bar, n / jobs.length); $('#rnCount').textContent = `${fmt.int(n)} of ${fmt.int(jobs.length)}`; } });
+    const runs = jobs.map((j, i) => {
+      const r = res[i]; if (!r) return null;
+      if (r.error) return { id: j.id, name: j.name, group: j.group, error: r.error };
+      return { id: j.id, name: j.name, group: j.group, metrics: r.full, returns: r.returns, dates: r.dates, blocks: r.blocks, ann: r.ann };
+    }).filter(Boolean);
+    rankLast = { runs, jobs, cancelled: rankCancel, skipped: jobs.length - runs.length };
+    await rerank();
+  } catch (e) { toolError(out, e); }
+  finally { rankRunning = false; busy(false); $('#rnStop').hidden = true; bar.hidden = true; $('#rnCount').textContent = ''; await loadingOff(btn); }
+}
+async function rerank() {
+  if (!rankLast) return;
+  const stat = $('#rnBy').value;
+  try { renderRanking(await py.call('rank', { runs: rankLast.runs, stat, rf: readConfig().risk_free })); }
+  catch (e) { toolError($('#rnOut'), e); }
+}
+// The first sentence of an error, for the "didn't run" line.
+const rankErr = msg => { const line = String(msg).split('\n')[0], m = line.match(/^.*?[.!?](?=\s|$)/); const t = m ? m[0] : line; return t.length > 160 ? t.slice(0, 157) + '…' : t; };
+function renderRanking(r) {
+  const out = $('#rnOut'); out.innerHTML = ''; const L = rankLast, P = palette();
+  const meta = METRICS.find(m => m.key === r.stat) || { label: r.stat, fmt: 'num' };
+  const F = (v, k = r.stat) => { const m = METRICS.find(x => x.key === k); const f = m ? m.fmt : 'num'; return v == null ? '—' : f === 'pct' ? fmt.pct(v, 1, k === 'cagr' || k === 'total_return' || k === 'alpha') : f === 'int' ? fmt.int(v) : f === 'money' ? fmt.money(v) : fmt.num(v); };
+  const ranked = r.rows.filter(x => x.rank != null), sel = r.selection, jobOf = id => L.jobs.find(j => j.id === id);
+  const add = html => { const d = document.createElement('div'); d.className = 'stack'; d.innerHTML = html; out.appendChild(d); return d; };
+  if (!ranked.length) { add(`<p class="ferr">No strategy produced a ${esc(meta.label.toLowerCase())}.</p>`); }
+  else {
+    const top = ranked[0], bh = r.rows.find(x => x.id === 'tpl:buy_hold');
+    const by = $('#rnBy').selectedOptions[0].textContent.replace(/\s*\(.*\)$/, ''), byNoun = /^[A-Z]{2}/.test(by) || /^(Sharpe|Sortino|Calmar|Probabilistic)/.test(by) ? by : by.toLowerCase();
+    let s = `${L.cancelled ? `<b>Cancelled</b>: ${fmt.int(L.runs.length)} of ${fmt.int(L.jobs.length)} strategies finished. ` : ''}${r.lower_better ? 'Lowest' : 'Best'} ${byNoun}: <b>${esc(top.name)}</b> (${F(top.value)})${bh && bh.rank ? `; buy & hold ranks ${fmt.int(bh.rank)} of ${fmt.int(ranked.length)} (${F(bh.value)})` : ''}.`;
+    if (sel.dsr != null) s += ` Allowing for ${fmt.int(sel.trials)} strategies tried, its <b>Deflated Sharpe</b> is ${fmt.pct(sel.dsr, 0)}: the chance its Sharpe ratio (${fmt.num(top.metrics.sharpe)}) reflects skill rather than the luck of the best of ${fmt.int(sel.trials)} (hurdle ${fmt.num(sel.sr_hurdle)})${sel.dsr < 0.95 ? ', below the usual 95% bar' : ''}.`;
+    if (sel.pbo != null) s += ` Probability of backtest overfitting among the ${fmt.int(sel.pbo_configs)} on the same dates: <b>${fmt.pct(sel.pbo, 0)}</b> (picking the best Sharpe on half the history, how often it lands in the bottom half on the other half).`;
+    add(`<p style="margin:0">${s}</p>`);
+    const box = add(`<div class="chart rank-bars" style="height:${Math.max(160, 22 * ranked.length + 40)}px"><canvas role="img" aria-label="${esc(meta.label)} of each strategy, best first"></canvas></div>`);
+    kill('rank');
+    charts.rank = new Chart(box.querySelector('canvas'), { type: 'bar', data: { labels: ranked.map(x => x.name), datasets: [{ label: meta.label, data: ranked.map(x => x.value),
+      backgroundColor: ranked.map(x => (x.id === 'tpl:buy_hold' ? P.bench : x.value >= 0 || r.lower_better ? P.strat : P.loss)), borderRadius: 3, barPercentage: 0.8 }] },
+      options: { indexAxis: 'y', animation: false, responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false }, tooltip: { ...tipStyle(P), callbacks: { label: c => ` ${meta.label}: ${F(c.parsed.x)}` } } },
+        scales: { x: { grid: { color: P.grid }, ticks: { color: P.fg3, callback: v => F(v) } }, y: { grid: { display: false }, ticks: { color: P.fg2, autoSkip: false, font: { size: 11 } } } } } });
+    // the top five's growth, rebased to 100
+    const five = ranked.slice(0, 5).map(x => ({ x, run: L.runs.find(y => y.id === x.id) })).filter(o => o.run && o.run.returns);
+    if (five.length) {
+      const longest = five.reduce((a, o) => (o.run.dates.length > a.run.dates.length ? o : a), five[0]).run.dates;
+      const idx = longest.length > 600 ? [...Array(600).keys()].map(k => Math.round(k * (longest.length - 1) / 599)) : longest.map((_, k) => k);
+      const colors = [P.strat, P.bench, P.gain, P.loss, P.fg2];
+      const series = five.map((o, k) => {
+        const pos = new Map(o.run.dates.map((d, i) => [d, i])); const eq = [100]; for (const x of o.run.returns) eq.push(eq[eq.length - 1] * (1 + x));
+        return line(o.x.name, idx.map(i => { const p2 = pos.get(longest[i]); return p2 == null ? null : eq[p2]; }), colors[k], { borderWidth: k ? 1.3 : 2, borderDash: k > 1 ? [4, 3] : [] });
+      });
+      const b2 = add(`<h3 class="subhead">Growth of 100: the top ${fmt.int(five.length)}</h3><div class="chart mid"><canvas role="img" aria-label="Growth of 100 for the five best-ranked strategies"></canvas></div>`);
+      kill('rankEq'); const o = baseOptions(idx.map(i => longest[i]), P, v => fmt.num(v, 0)); o.plugins.legend = legendTop(P);
+      charts.rankEq = new Chart(b2.querySelector('canvas'), { data: { datasets: series }, options: o });
+    }
+  }
+  const cols = ['cagr', 'sharpe', 'max_drawdown', 'volatility', 'n_trades', 'exposure'].filter(k => k !== r.stat);
+  const head = ['Rank', 'Strategy', esc(meta.label), ...cols.map(k => esc((METRICS.find(m => m.key === k) || { label: k }).label)), 'Market', '<span class="sr">Open</span>'];
+  const rows = r.rows.map(x => [x.rank == null ? '—' : fmt.int(x.rank), `${esc(x.name)} <span class="muted">${esc(x.group || '')}</span>`, `<b>${F(x.value)}</b>`, ...cols.map(k => F(x.metrics[k], k)),
+    `<span translate="no">${esc((jobOf(x.id) || {}).market || '')}</span>`, `<button class="btn small" type="button" data-open-strategy="${esc(x.id)}">Open</button>`]);
+  const t = add(`<div class="tablebox" tabindex="0" aria-label="Strategy ranking"><table><caption class="sr">Strategy ranking</caption><thead><tr>${head.map((h, i) => `<th scope="col"${i === 1 ? '' : ' class="n"'}>${h}</th>`).join('')}</tr></thead><tbody>` +
+    rows.map(rw => `<tr>${rw.map((c, i) => (i === 1 ? `<th scope="row">${c}</th>` : `<td class="n">${c}</td>`)).join('')}</tr>`).join('') + '</tbody></table></div>' +
+    (r.failed.length ? `<p class="help">Didn’t run: ${r.failed.map(f => `<b>${esc(f.name)}</b> (${esc(rankErr(f.error))})`).join('; ')}.</p>` : '') +
+    `<p class="help">Default parameters, no tuning. Every strategy counts as one trial in the Deflated Sharpe; PBO uses Sharpe ratios over ${fmt.int(PBO_BLOCKS)} blocks of the shared dates. <b>Open</b> loads a strategy on the Backtest tab.</p>` +
+    `<div class="row"><button class="btn small" type="button" id="rnCsv">Download CSV</button></div>`);
+  $('#rnCsv').onclick = () => {
+    const keys = ['cagr', 'total_return', 'sharpe', 'sortino', 'volatility', 'max_drawdown', 'calmar', 'n_trades', 'exposure'].filter(k => k !== r.stat);
+    const q = v => `"${String(v).replace(/"/g, '""')}"`;
+    const lines = [['rank', 'strategy', 'group', 'market', r.stat, ...keys].join(',')].concat(r.rows.map(x => [x.rank == null ? '' : x.rank, q(x.name), q(x.group || ''), q((jobOf(x.id) || {}).market || ''), x.value == null ? '' : x.value, ...keys.map(k => (x.metrics[k] == null ? '' : x.metrics[k]))].join(',')));
+    downloadFile(`quantlab_ranking_${r.stat}.csv`, lines.join('\n') + '\n', 'text/csv');
+  };
+  t.addEventListener('click', e => {
+    const b = e.target.closest('button[data-open-strategy]'); if (!b) return;
+    $('#template').value = b.dataset.openStrategy; loadSelectedTemplate(); location.hash = '#backtest'; runBacktest();
+  });
+}
+
 async function runPerm(ev) {
   ev.preventDefault();
   if (!validate([['permN', between(50, 5000, '', true, 500)], ['permSeed', between(0, 1e9, '', true, 7)]])) return;
@@ -4762,7 +4900,7 @@ function showTab(name) {
   dockEditor(name === 'edit');
   if (name === 'edit' && changed) requestAnimationFrame(() => editor.ta.focus({ preventScroll: true }));
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (name === 'tools') { toolContext(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
+  if (name === 'tools') { toolContext(); renderRankGroups(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
   if (name === 'data') { renderFutList(); renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
   if (name === 'history') { renderRuns(); renderAudit(); }
   if (name === 'paper') { renderPaperList(); const b = store.get('bridge', {}); $('#bridgeUrl').value = b.url || ''; $('#bridgeSecret').value = bridgeConfig().secret; }
@@ -4788,7 +4926,7 @@ function wire() {
   $('#marketForm').addEventListener('submit', e => { e.preventDefault(); runBacktest(); });
   $('#settingsForm').addEventListener('submit', e => { e.preventDefault(); saveSettings(); runBacktest(); });
   $('#settingsBox').addEventListener('toggle', () => url.write());
-  $('#stopBtn').onclick = async () => { sweepCancel = true; wfCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'wfRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun', 'rkRun', 'capRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
+  $('#stopBtn').onclick = async () => { sweepCancel = true; wfCancel = true; surfCancel = true; rankCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'wfRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun', 'rkRun', 'capRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
   $('#template').onchange = loadSelectedTemplate;
   $('#resetBtn').onclick = loadSelectedTemplate;
   $('#errReset').onclick = () => { loadSelectedTemplate(); editor.ta.focus(); };
@@ -4933,6 +5071,10 @@ function wire() {
   $('#subForm').addEventListener('submit', runSub);
   $('#costForm').addEventListener('submit', runCosts);
   $('#riskForm').addEventListener('submit', runRisk); $('#capForm').addEventListener('submit', runCapacity);
+  $('#rankForm').addEventListener('submit', runRanking); $('#rnStop').onclick = () => { rankCancel = true; };
+  $('#rnBy').addEventListener('change', rerank);
+  $('#rnGroups').addEventListener('change', () => { store.set('rankOff', $$('#rnGroups input').filter(i => !i.checked).map(i => i.value)); rankWhere(); });
+  $('#instrument').addEventListener('change', rankWhere);
   $('#surfForm').addEventListener('submit', runSurface); $('#sfStop').onclick = () => { surfCancel = true; };
   $('#sfMin').addEventListener('change', () => { if (surfLast) renderSurface(); });
   $$('input[name="sf-view"]').forEach(r => r.addEventListener('change', () => { store.set('surfView', r.value); if (surfLast) renderSurface(); }));
@@ -5030,9 +5172,9 @@ function wire() {
   $('#univCode').onclick = () => setPicked(codeInfo.universe || []);
   $('#univAll').onclick = () => setPicked(sortedTickers().filter(t => !instruments.get(t).synthetic));
   $('#univNone').onclick = () => setPicked([]);
-  window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning || surfRunning) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning || surfRunning || rankRunning) { e.preventDefault(); e.returnValue = ''; } });
 
-  const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } if (surfLast) renderSurface(); };
+  const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } if (surfLast) renderSurface(); if (rankLast) rerank(); };
   try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rerender); } catch (e) { /* old browser */ }
   new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 }
@@ -5059,7 +5201,7 @@ async function boot() {
     $('#resMeta').innerHTML = 'Browsers block pages opened straight from disk from reading <code translate="no">engine.py</code>. In the project folder run <code translate="no">python -m http.server</code>, then open <a href="http://localhost:8000">http://localhost:8000</a>.';
     return;
   }
-  templates = parseTemplates(tplText); engineHash = hash53(engineSrc);
+  templates = parseTemplates(tplText); engineHash = hash53(engineSrc); renderRankGroups();
   const draft = store.get('draft', null); const qs = q.get('strategy');
   const wanted = qs && templates.some(t => t.id === qs) ? 'tpl:' + qs : draft ? draft.template : 'tpl:sma_cross';
   fillTemplateSelect(wanted);
