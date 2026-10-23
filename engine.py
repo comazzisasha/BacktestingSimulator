@@ -1129,7 +1129,8 @@ def read_csv_table(text):
 
 CSV_COLUMNS = {
     # the same names, in the same order of preference, as parseCSV() in index.html
-    "date": ("date", "observation_date", "ex/eff date", "ex-date", "ex date", "ex-dividend date", "timestamp", "time"),
+    "date": ("date", "observation_date", "ex/eff date", "ex-date", "ex_date", "ex date", "ex-dividend date", "ex_dividend_date",
+             "timestamp", "time"),
     "close": ("close/last", "close", "price", "last"),
     "adj_close": ("adj close", "adj. close", "adj_close", "adjusted close", "adjclose"),
     "open": ("open",), "high": ("high",), "low": ("low",), "volume": ("volume", "vol."),
@@ -1359,9 +1360,12 @@ def parse_events_csv(text):
     if kind not in ("dividends", "splits"):
         raise ValueError("Expected a dividend or split history, got %s" % kind)
     di, vi = _col(header, "date"), _col(header, "dividend" if kind == "dividends" else "split")
+    ti = header.index("type") if kind == "dividends" and "type" in header else None   # Nasdaq: Cash, or stock & other kinds
     out = []
     for row in rows:
         if max(di, vi) >= len(row):
+            continue
+        if ti is not None and ti < len(row) and row[ti].strip().lower() not in ("cash", ""):
             continue
         day = _iso_date(row[di])
         val = _num(row[vi]) if kind == "dividends" else _split_ratio(row[vi])
@@ -3948,7 +3952,8 @@ METRICS = [
     ("avg_long", "Long exposure (avg.)", "Carry & exposure", "pct", "extra", "Mean long market value / equity."),
     ("avg_short", "Short exposure (avg.)", "Carry & exposure", "pct", "extra", "Mean short market value / equity."),
     ("max_gross", "Gross exposure (max)", "Carry & exposure", "pct", "extra", "Highest gross exposure at any close."),
-    ("dividends_net", "Dividends", "Carry & exposure", "money", "std", "Dividends received on longs minus dividends paid on shorts."),
+    ("dividends_received", "Dividends received", "Carry & exposure", "money", "std", "Cash dividends paid to the account on shares held at the close before each ex-date."),
+    ("dividends_net", "Dividends (net)", "Carry & exposure", "money", "std", "Dividends received on longs minus dividends paid on shorts."),
     ("interest_net", "Interest on cash", "Carry & exposure", "money", "std", "Interest earned on cash minus interest paid on borrowed cash (ACT/360)."),
     ("borrow_paid", "Borrow fees", "Carry & exposure", "money", "extra", "Fees paid to borrow shares for short positions."),
     ("carry_total", "Net carry", "Carry & exposure", "money", "extra", "Dividends + interest - borrow fees."),
@@ -4408,6 +4413,7 @@ def summarize(res, rf=None, trials=None):
     m.update(execution_stats(res))
     m.update(exposure_stats(res))
     c = res.carry
+    m["dividends_received"] = c["dividends_received"]
     m["dividends_net"] = c["dividends_received"] - c["dividends_paid"]
     m["interest_net"] = c["interest_earned"] - c["interest_paid"]
     m["borrow_paid"] = c["borrow_paid"]
@@ -4952,19 +4958,20 @@ def lookahead_check(strategy, ds, full_signals, samples=8, budget=None):
     return {"checked": done, "planned": len(picks), "violations": bad}
 
 
-def instrument_stats(datasets, start=None, end=None, rf=0.0):
+def instrument_stats(datasets, start=None, end=None, rf=0.0, total_return=True):
     """Per-instrument buy-and-hold stats plus a correlation matrix of daily returns
-    on the dates all instruments share."""
+    on the dates all instruments share; dividends reinvested unless total_return is False."""
     rows = []
+    series = {ds.ticker: ds.total_return_index() if total_return else ds.close for ds in datasets}
     for ds in datasets:
         try:
             s, e = _resolve_range(ds.dates, start, end, "%s data" % ds.ticker)
         except ValueError:
             continue
-        eq = ds.close[s:e + 1]
+        eq = series[ds.ticker][s:e + 1]
         m = performance(ds.dates[s:e + 1], eq, rf)
         rows.append({"ticker": ds.ticker, "start": ds.dates[s], "end": ds.dates[e], "bars": e - s + 1,
-                     "last": eq[-1], "total_return": m["total_return"], "cagr": m["cagr"],
+                     "last": ds.close[e], "total_return": m["total_return"], "cagr": m["cagr"],
                      "volatility": m.get("volatility"), "sharpe": m.get("sharpe"),
                      "max_drawdown": m["max_drawdown"], "skew": m.get("skew"),
                      "best_day": m.get("best_day"), "worst_day": m.get("worst_day")})
@@ -4980,7 +4987,7 @@ def instrument_stats(datasets, start=None, end=None, rf=0.0):
     if len(common) >= 3:
         rets = {}
         for ds in used:
-            closes = [ds.close[ds.index[d]] for d in common]
+            closes = [series[ds.ticker][ds.index[d]] for d in common]
             rets[ds.ticker] = daily_returns(closes)
             step = max(1, len(common) // 600)
             rebased[ds.ticker] = [100 * closes[j] / closes[0] for j in range(0, len(common), step)]
@@ -6699,7 +6706,7 @@ def api_permutation(p):
 
 def api_analytics(p):
     sets = [_get(t) for t in p["tickers"] if t in DATA]
-    return instrument_stats(sets, p.get("start"), p.get("end"), float(p.get("rf", 0.0)))
+    return instrument_stats(sets, p.get("start"), p.get("end"), float(p.get("rf", 0.0)), p.get("total_return", True) is not False)
 
 
 def api_metric_list(p):

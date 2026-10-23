@@ -218,6 +218,8 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--border); background: var(--sunk); color: var(--fg-2); white-space: nowrap; }
 .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .badge.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
+.divcell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.divwait { margin: 0; padding: 10px 16px 14px; }
 .badge.ok { color: var(--gain); }
 button.badge { cursor: pointer; font: inherit; font-size: 12px; }
 pre.diff .add { color: var(--gain); }
@@ -608,7 +610,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
               <div class="row" style="gap:4px 18px">
                 <label class="check"><input type="checkbox" id="cfgFrac" name="fractional" checked> Fractional shares</label>
                 <label class="check"><input type="checkbox" id="cfgShort" name="short"> Allow shorting</label>
-                <label class="check"><input type="checkbox" id="cfgTR" name="total-return" checked> Pay dividends (total return)</label>
+                <label class="check" title="Pay cash dividends into the account on ex-dates & reinvest them in the benchmark. Off: price return only."><input type="checkbox" id="cfgTR" name="total-return" checked> Include dividends</label>
               </div>
               <h3 class="subhead">Market Impact &amp; Fills</h3>
               <div class="grid3">
@@ -1085,7 +1087,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
   <section class="view stack" id="view-data" aria-labelledby="h-data" hidden>
     <div class="viewhead"><h1 id="h-data">Data</h1><p>Manage the price histories your backtests run on.</p></div>
     <section class="panel" aria-labelledby="h-add">
-      <div class="panel-h"><div class="toolhead"><h2 id="h-add">Add Data</h2><p>Drop CSV files: prices from Nasdaq.com or Yahoo Finance, dividend & split histories (e.g. <code translate="no">SPY_dividends.csv</code>), or an interest-rate series such as FRED’s <code translate="no">DTB3.csv</code>. They’re parsed in your browser & stored there; nothing is uploaded.</p></div></div>
+      <div class="panel-h"><div class="toolhead"><h2 id="h-add">Add Data</h2><p>Drop CSV files: prices from Nasdaq.com or Yahoo Finance, dividend histories (e.g. <code translate="no">KRSB_dividends.csv</code> with <code translate="no">ex_date,amount</code>, Nasdaq’s Dividend History export or Yahoo’s Dividends download), split histories, or an interest-rate series such as FRED’s <code translate="no">DTB3.csv</code>. They’re parsed in your browser & stored there; nothing is uploaded.</p></div></div>
       <div class="panel-b">
         <label class="drop" id="drop" for="fileInput">
           <strong>Drop CSV Files Here</strong>
@@ -1099,6 +1101,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
     <section class="panel" aria-labelledby="h-inst">
       <div class="panel-h"><h2 id="h-inst">Loaded Instruments</h2><span class="muted" id="instCount"></span></div>
       <div class="panel-b scroll"><table id="instTable"></table></div>
+      <p class="help divwait" id="divWaiting" aria-live="polite" hidden></p>
     </section>
 
     <section class="panel" aria-labelledby="h-fut">
@@ -1318,11 +1321,23 @@ const idb = {
   async open() {
     if (this.db) return this.db;
     this.db = await new Promise((resolve, reject) => {
-      const req = indexedDB.open('quantlab', 2);
-      req.onupgradeneeded = () => {
+      const req = indexedDB.open('quantlab', 3);
+      req.onupgradeneeded = e => {
         const db = req.result;
         if (!db.objectStoreNames.contains('instruments')) db.createObjectStore('instruments', { keyPath: 'ticker' });
         if (!db.objectStoreNames.contains('runs')) db.createObjectStore('runs', { keyPath: 'id' });   // run history (v2)
+        if (!db.objectStoreNames.contains('dividends')) {   // v3: dividends per ticker, apart from the prices
+          const divs = db.createObjectStore('dividends', { keyPath: 'ticker' });
+          if (e.oldVersion >= 1) {   // move dividends that v2 kept inside the instrument records
+            const cur = req.transaction.objectStore('instruments').openCursor();
+            cur.onsuccess = () => {
+              const c = cur.result; if (!c) return;
+              const rec = c.value, ev = rec.events;
+              if (ev && ev.dividends) { divs.put({ ticker: rec.ticker, events: ev.dividends, filename: null, added: null }); const rest = { ...ev }; delete rest.dividends; c.update({ ...rec, events: rest }); }
+              c.continue();
+            };
+          }
+        }
       };
       req.onsuccess = () => resolve(req.result);
       req.onerror = () => reject(req.error);
@@ -1372,7 +1387,8 @@ function splitCSVLine(line) {
 // Column names & parsing rules match engine.py (CSV_COLUMNS, _iso_date, _num) exactly;
 // tests/test_engine.py runs this function under Node to prove both give the same data.
 const CSV_COLUMNS = {
-  date: ['date', 'observation_date', 'ex/eff date', 'ex-date', 'ex date', 'ex-dividend date', 'timestamp', 'time'],
+  date: ['date', 'observation_date', 'ex/eff date', 'ex-date', 'ex_date', 'ex date', 'ex-dividend date', 'ex_dividend_date',
+    'timestamp', 'time'],
   close: ['close/last', 'close', 'price', 'last'],
   adj_close: ['adj close', 'adj. close', 'adj_close', 'adjusted close', 'adjclose'],
   open: ['open'], high: ['high'], low: ['low'], volume: ['volume', 'vol.'],
@@ -1556,6 +1572,11 @@ async function loadBundled() {
   }));
 }
 async function loadUploads() { for (const rec of await idb.all()) addInstrument(rec); }
+// Dividend histories, per ticker, kept apart from the prices (IndexedDB 'dividends'): {ticker, events: [[ex_date, amount], …], filename, added}.
+// They attach whenever that ticker's prices are loaded, so a file can arrive before its prices.
+const dividendSets = new Map();
+async function loadDividends() { for (const rec of await idb.all('dividends')) dividendSets.set(rec.ticker, rec); }
+const dividendEvents = t => (dividendSets.has(t) ? dividendSets.get(t).events : ((instruments.get(t) || {}).events || {}).dividends || null);
 function sortedTickers() { return [...instruments.values()].sort((a, b) => (a.synthetic - b.synthetic) || a.ticker.localeCompare(b.ticker)).map(r => r.ticker); }
 
 /* -------------------------------------------------------- python bridge -- */
@@ -1610,7 +1631,7 @@ const py = {
       const rec = instruments.get(t);
       if (!rec) throw new Error(`No data is loaded for ${t}. Add it on the Data tab.`);
       const ev = rec.events || {};
-      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, fundamentals: ev.fundamentals || null, calendar: store.get('calendars', {})[t] || null, currency: store.get('currencies', {})[t] || null, asset_kind: store.get('kinds', {})[t] || null });
+      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: dividendEvents(t), splits: ev.splits || null, fundamentals: ev.fundamentals || null, calendar: store.get('calendars', {})[t] || null, currency: store.get('currencies', {})[t] || null, asset_kind: store.get('kinds', {})[t] || null });
       dataInfo.set(t, info); this.loaded.add(t);
     }
   },
@@ -2620,7 +2641,9 @@ function renderResults(r) {
   const onWhat = r.portfolio ? `a ${fmt.int(r.tickers.length)}-instrument portfolio` : r.ticker;
   $('#resTitle').textContent = `${r.strategyName} on ${onWhat}`;
   if (currentTab === 'backtest' || currentTab === 'edit') document.title = `${r.strategyName} on ${r.portfolio ? 'portfolio' : r.ticker} · QuantLab`;
-  $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${r.cached ? 'unchanged setup, result reused' : fmt.num(r.elapsed / 1000, 2) + ' s'}`;
+  const noDivs = Object.entries(r.data || {}).filter(([, d]) => !d.dividends && d.price_basis === 'price').map(([t]) => t);
+  const divNote = r.config.total_return === false ? 'price-only (dividends off)' : noDivs.length ? `price-only for ${noDivs.length <= 3 ? noDivs.join(', ') : fmt.int(noDivs.length) + ' instruments'} (no dividend data)` : 'dividends included';
+  $('#resMeta').textContent = `${fmt.date(m.start)} – ${fmt.date(m.end)} · ${fmt.int(m.bars)} bars · ${fmt.num(m.years, 1)} years · vs ${benchName} · ${divNote} · ${r.cached ? 'unchanged setup, result reused' : fmt.num(r.elapsed / 1000, 2) + ' s'}`;
   const chips = [`<span class="chip">${r.mode === 'signals' ? 'signals(data)' : 'on_bar(ctx)'}</span>`];
   if (r.portfolio) chips.push(`<span class="chip" translate="no" title="${esc(r.tickers.join(', '))}">${esc(r.tickers.length <= 6 ? r.tickers.join(' · ') : r.tickers.slice(0, 5).join(' · ') + ` +${r.tickers.length - 5}`)}</span>`);
   const priceOnly = Object.values(r.data || {}).filter(d => !d.dividends && d.price_basis === 'price').length;
@@ -3471,7 +3494,8 @@ async function runAnalytics(ev) {
   const btn = $('#anRun'); loadingOn(btn); busy(true, 'Analyzing…');
   try {
     await py.ensure(tickers);
-    const r = await py.call('analytics', { tickers, start: $('#anStart').value || null, end: $('#anEnd').value || null, rf: readConfig().risk_free });
+    const cfg = readConfig();
+    const r = await py.call('analytics', { tickers, start: $('#anStart').value || null, end: $('#anEnd').value || null, rf: cfg.risk_free, total_return: cfg.total_return });
     out.innerHTML = '';
     let h = '<div class="scroll"><table class="metrics"><caption class="sr">Buy-and-hold statistics</caption><thead><tr><th scope="col">Ticker</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Last</th><th scope="col" class="n">Total</th><th scope="col" class="n">CAGR</th><th scope="col" class="n">Volatility</th><th scope="col" class="n">Sharpe</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Worst Day</th><th scope="col" class="n">Skew</th></tr></thead><tbody>';
     for (const x of r.rows) h += `<tr><th scope="row" translate="no"><b>${esc(x.ticker)}</b></th><td class="tnum">${fmt.date(x.start)}</td><td class="tnum">${fmt.date(x.end)}</td><td class="n">${fmt.price(x.last)}</td><td class="n ${sign(x.total_return)}">${fmt.pct(x.total_return, 1, true)}</td><td class="n ${sign(x.cagr)}">${fmt.pct(x.cagr, 2, true)}</td><td class="n">${fmt.pct(x.volatility, 1)}</td><td class="n">${fmt.num(x.sharpe)}</td><td class="n">${fmt.pct(x.max_drawdown, 1)}</td><td class="n">${fmt.pct(x.worst_day, 1)}</td><td class="n">${fmt.num(x.skew)}</td></tr>`;
@@ -3501,7 +3525,7 @@ function tickerFromEventsFilename(name) {
   return tickerFromFilename(stem + '.csv');
 }
 async function handleFiles(files) {
-  let added = 0;
+  let added = 0; const attached = [];
   for (const f of files) {
     if (!/\.(csv|tsv|txt|parquet|pq)$/i.test(f.name) && f.type !== 'text/csv') { toast(`${f.name} isn’t a CSV, TSV, TXT or Parquet file.`); continue; }
     try {
@@ -3514,8 +3538,12 @@ async function handleFiles(files) {
       }
       if (kind === 'prices') {
         const data = parseCSV(text); const t = tickerFromFilename(f.name);
-        if (t) { await saveUpload(t, guessName(t), data, f.name, true); added++; }
+        if (t) { if (await saveUpload(t, guessName(t), data, f.name, true)) attached.push(t); added++; }
         else pendingFiles.push({ kind, file: f.name, data, id: newId() });
+      } else if (kind === 'dividends') {
+        const events = await parseDividends(text), t = tickerFromEventsFilename(f.name);
+        if (t) await saveDividends(t, events, f.name);
+        else pendingFiles.push({ kind, file: f.name, events, id: newId() });
       } else if (kind === 'rates') {
         await saveRate((tickerFromFilename(f.name) || 'RATE'), text, f.name);
       } else if (kind === 'fundamentals' && CSV_COLUMNS.ticker.some(n => csvHeader(text).includes(n))) {
@@ -3527,7 +3555,7 @@ async function handleFiles(files) {
       }
     } catch (e) { toast(`${f.name}: ${e.message}`); }
   }
-  if (added) toast(`Added ${fmt.int(added)} instrument${added === 1 ? '' : 's'}.`);
+  if (added) toast(`Added ${fmt.int(added)} instrument${added === 1 ? '' : 's'}.${attached.length ? ` Attached the dividends kept for ${attached.join(', ')}.` : ''}`);
   renderPending();
 }
 // Point-in-time fundamentals -> the instruments' records. A file with a Ticker column covers several.
@@ -3565,6 +3593,33 @@ async function attachEvents(ticker, kind, text, filename) {
   fillInstrumentSelects(); renderInstTable();
   toast(`${ticker}: added ${what} from ${filename}.${ok ? '' : ' This browser can’t store it; it will be gone after a reload.'}`);
 }
+// Dividend history (ex_date & amount; Nasdaq's export; Yahoo's Date,Dividends) -> [[ex_date, amount], …], cash dividends only.
+async function parseDividends(text) {
+  await py.ready;
+  const parsed = await py.call('parse_csv', { text });
+  if (parsed.kind !== 'dividends') throw new Error('expected a dividend history');
+  if (!parsed.events.length) throw new Error('no cash dividends found. It needs an ex-date & an amount on each row.');
+  return parsed.events;
+}
+async function saveDividends(ticker, events, filename) {
+  const rec = { ticker, events, filename: filename || null, added: new Date().toISOString() };
+  dividendSets.set(ticker, rec); const ok = await idb.put(rec, 'dividends');
+  const keep = ok ? '' : ' This browser can’t store it; it will be gone after a reload.';
+  const src = filename ? ` from ${filename}` : '';
+  if (!instruments.has(ticker)) { renderInstTable(); toast(`Kept ${fmt.int(events.length)} dividends for ${ticker}${src}. They’ll be attached when you add ${ticker}’s prices.${keep}`); return; }
+  py.forget(ticker); dataInfo.delete(ticker); renderInstTable();
+  await py.ensure([ticker]);
+  const info = dataInfo.get(ticker), outside = events.length - info.dividend_count;
+  renderInstTable();
+  toast(`${ticker}: added ${fmt.int(info.dividend_count)} dividends (${fmt.money(info.dividend_total)} a share)${src}.${outside > 0 ? ` ${fmt.int(outside)} fall outside its price history.` : ''}${keep}`);
+}
+async function removeDividends(t) {
+  dividendSets.delete(t); await idb.del(t, 'dividends');
+  const rec = instruments.get(t);
+  if (rec && rec.events && rec.events.dividends) { const events = { ...rec.events }; delete events.dividends; const next = { ...rec, events }; addInstrument(next); if (next.source === 'upload') await idb.put(next); }
+  py.forget(t); dataInfo.delete(t); renderInstTable();
+  if (instruments.has(t)) { await py.ensure([t]); renderInstTable(); }
+}
 async function saveRate(name, text, filename) {
   await py.ready;
   const parsed = await py.call('parse_csv', { text, ticker: name });
@@ -3597,6 +3652,12 @@ function renderPending() {
         `<label class="check" style="grid-column:1 / -1"><input type="checkbox" id="dc-${p.id}"${p.sep !== ',' ? ' checked' : ''}> Decimal comma (1.234,56)</label>` +
         `<button class="btn primary small" type="submit">Add Instrument</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
     }
+    if (p.kind === 'dividends') {
+      const ev = p.events;
+      return `<form data-id="${p.id}" novalidate aria-label="Name the dividend file ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">Dividends, not prices · ${fmt.int(ev.length)} cash payments · ${fmt.date(ev[0][0])} – ${fmt.date(ev[ev.length - 1][0])}</span></div>` +
+        `<div class="field"><label for="tk-${p.id}">Dividends For (Ticker)</label><input type="text" id="tk-${p.id}" name="ticker" placeholder="KRSB…" maxlength="15" autocomplete="off" spellcheck="false" autocapitalize="characters" translate="no" list="dl-${p.id}" aria-describedby="tk-${p.id}-help tk-${p.id}-err"><datalist id="dl-${p.id}">${sortedTickers().map(t => `<option value="${esc(t)}"></option>`).join('')}</datalist><p class="help" id="tk-${p.id}-help">If its prices aren’t loaded yet, the dividends are kept & attached when you add them.</p><p class="ferr" id="tk-${p.id}-err" hidden></p></div><div></div>` +
+        `<button class="btn primary small" type="submit">Save Dividends</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
+    }
     if (p.kind !== 'prices') {
       const opts = sortedTickers().map(t => `<option${t === p.guess ? ' selected' : ''}>${esc(t)}</option>`).join('');
       return `<form data-id="${p.id}" novalidate aria-label="Attach ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">${p.kind === 'dividends' ? 'Dividend history' : p.kind === 'fundamentals' ? 'Fundamentals' : 'Split history'}</span></div>` +
@@ -3615,8 +3676,10 @@ async function saveUpload(ticker, name, data, filename, quiet, events) {
   const rec = { ticker, name: name || ticker, source: 'upload', synthetic: false, data, filename, events: events || undefined };
   addInstrument(rec); const ok = await idb.put(rec);
   fillInstrumentSelects(); renderInstTable(); renderDownloadList();
+  const divs = dividendSets.has(ticker); checkAllData();
   if (!ok) toast(`Added ${ticker}, but this browser can’t store it. It will be gone after a reload.`);
-  else if (!quiet) toast(`Added ${ticker}.`);
+  else if (!quiet) toast(`Added ${ticker}.${divs ? ' Attached the dividends kept for it.' : ''}`);
+  return divs;
 }
 // Dividends & data-quality findings come from Python, so the table fills in as each instrument is checked.
 let qualityChecking = false;
@@ -3638,8 +3701,18 @@ function dividendBadge(t) {
   if (!info) return '<span class="muted">…</span>';
   if (info.price_basis === 'total_return') return '<span class="badge ok" title="Adjusted close used as the price">In price</span>';
   if (!info.dividends) return `<span class="badge warn" title="No dividend data: returns are price-only">None</span>`;
-  const src = info.dividends === 'adj_close' ? 'from Adj Close' : (r.events && r.events.dividends ? 'from your file' : 'from file');
-  return `<span class="badge ok" title="${fmt.int(info.dividend_count)} dividends ${src}">${fmt.int(info.dividend_count)} ${esc(src)}</span>`;
+  const mine = dividendSets.has(t) || !!(r.events && r.events.dividends);
+  const src = info.dividends === 'adj_close' ? 'from Adj Close' : mine ? 'from your file' : 'from file';
+  const n = info.dividend_count, file = (dividendSets.get(t) || {}).filename;
+  return `<span class="divcell"><span class="badge ok" title="${fmt.int(n)} dividend payment${n === 1 ? '' : 's'} ${esc(src)}${file ? ' (' + esc(file) + ')' : ''}, ${fmt.money(info.dividend_total)} a share in all">${fmt.int(n)} ${esc(src)}</span>` +
+    (mine ? `<button class="btn small danger" type="button" data-remove-div="${esc(t)}" aria-label="Remove ${esc(t)}’s dividends">Remove Dividends</button>` : '') + '</span>';
+}
+// Dividend files whose prices haven't been added yet.
+function renderDividendWaiting() {
+  const el = $('#divWaiting'); if (!el) return;
+  const wait = [...dividendSets.values()].filter(d => !instruments.has(d.ticker)).sort((a, b) => a.ticker.localeCompare(b.ticker));
+  el.hidden = !wait.length;
+  el.innerHTML = wait.length ? `Dividends waiting for prices: ${wait.map(d => `<span class="chip" translate="no"><b>${esc(d.ticker)}</b>&nbsp;${fmt.int(d.events.length)} payments <button class="linkbtn" type="button" data-remove-div="${esc(d.ticker)}" aria-label="Remove the dividends kept for ${esc(d.ticker)}">Remove</button></span>`).join(' ')}. They’re attached when you add each ticker’s prices.` : '';
 }
 function qualityBadge(t) {
   const info = dataInfo.get(t);
@@ -3654,12 +3727,12 @@ const openQuality = new Set();
 function qualityDetail(t) {
   const q = dataInfo.get(t).quality;
   const items = Object.values(q.issues).map(x => `<li><b>${esc(x.title)}</b> (${fmt.int(x.count)}): ${x.examples.slice(0, 4).map(e => `${fmt.date(e.date)}: ${esc(e.detail)}`).join('; ')}${x.count > 4 ? '…' : ''}</li>`).join('');
-  return `<tr class="detail"><td colspan="10">Checked against the ${esc(q.calendar)} calendar. Nothing was changed or removed unless it says so.<ul>${items}</ul></td></tr>`;
+  return `<tr class="detail"><td colspan="13">Checked against the ${esc(q.calendar)} calendar. Nothing was changed or removed unless it says so.<ul>${items}</ul></td></tr>`;
 }
 function renderInstTable() {
   const list = sortedTickers();
   if (!qualityChecking) $('#instCount').textContent = `${fmt.int(list.length)} instrument${list.length === 1 ? '' : 's'}`;
-  if (!list.length) { $('#instTable').innerHTML = '<tbody><tr><td class="muted">No instruments yet. Drop a CSV file above to add one.</td></tr></tbody>'; return; }
+  if (!list.length) { $('#instTable').innerHTML = '<tbody><tr><td class="muted">No instruments yet. Drop a CSV file above to add one.</td></tr></tbody>'; renderDividendWaiting(); return; }
   let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Last Close</th><th scope="col">Type</th><th scope="col">Calendar</th><th scope="col">Currency</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
   for (const t of list) {
     const r = instruments.get(t);
@@ -3672,6 +3745,7 @@ function renderInstTable() {
     if (openQuality.has(t) && dataInfo.has(t)) h += qualityDetail(t);
   }
   $('#instTable').innerHTML = h + '</tbody>';
+  renderDividendWaiting();
 }
 // The calendar sets how statistics are annualized: trading days a year x bars per day.
 const CAL_NAMES = { NYSE: 'NYSE (252)', weekdays: 'Weekdays (260)', '24/7': 'Every day (365)' };
@@ -4167,8 +4241,8 @@ function openDoc(html, filename) {
 /* ----------------------------------------------------------- workspace -- */
 async function exportWorkspace() {
   const local = {}; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('ql.') && k !== 'ql.ghToken') local[k.slice(3)] = JSON.parse(localStorage.getItem(k)); } } catch (e) { /* storage unavailable */ }
-  const recs = await idb.all(); const runs = $('#wsRuns').checked ? await idb.all('runs') : [];
-  const ws = { format: 'quantlab-workspace', version: 1, exported: new Date().toISOString(), engine: engineHash, local, instruments: recs, runs };
+  const recs = await idb.all(); const runs = $('#wsRuns').checked ? await idb.all('runs') : []; const dividends = await idb.all('dividends');
+  const ws = { format: 'quantlab-workspace', version: 1, exported: new Date().toISOString(), engine: engineHash, local, instruments: recs, dividends, runs };
   downloadFile(`quantlab-workspace-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(ws), 'application/json');
   toast(`Exported ${fmt.int(Object.keys(local.mine || {}).length)} strategies, ${fmt.int(recs.length)} uploaded files & ${fmt.int(runs.length)} runs.`);
 }
@@ -4200,6 +4274,7 @@ async function applyWorkspace() {
     else if (k === 'trials') store.set('trials', { ...trials.all(), ...v });
     else store.set(k, v);
   }
+  for (const rec of ws.dividends || []) { dividendSets.set(rec.ticker, rec); await idb.put(rec, 'dividends'); }
   for (const rec of ws.instruments || []) { await idb.put(rec); addInstrument(rec); }
   for (const run of ws.runs || []) await idb.put(run, 'runs');
   fillTemplateSelect($('#template').value); fillInstrumentSelects(); fillRateSelect(); restoreSettings(); summarizeSettings(); renderInstTable(); renderRateTable(); renderDownloadList(); files.render(); renderModules();
@@ -4636,6 +4711,13 @@ function wire() {
       } catch (err) { setFieldError('tk-' + p.id, err.message); }
       return;
     }
+    if (p.kind === 'dividends') {
+      const t = $('#tk-' + p.id).value.trim().toUpperCase();
+      if (!/^[A-Z0-9.^=\-]{1,15}$/.test(t)) { setFieldError('tk-' + p.id, 'Enter the ticker these dividends belong to, such as KRSB (letters, digits, “.” or “-”).'); $('#tk-' + p.id).focus(); return; }
+      pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending();
+      try { await saveDividends(t, p.events, p.file); } catch (err) { toast(`${p.file}: ${err.message}`); }
+      return;
+    }
     if (p.kind !== 'prices') {
       const t = $('#tk-' + p.id).value; if (!t) return;
       try { await (p.kind === 'fundamentals' ? attachFundamentals(p.text, p.file, t) : attachEvents(t, p.kind, p.text, p.file)); pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); } catch (err) { toast(`${p.file}: ${err.message}`); }
@@ -4667,6 +4749,17 @@ function wire() {
       toast(`Removed ${t}.`, { label: 'Undo', run: () => saveUpload(rec.ticker, rec.name, rec.data, rec.filename, false, rec.events) });
     });
   });
+  const onRemoveDividends = e => {
+    const b = e.target.closest('button[data-remove-div]'); if (!b) return;
+    const t = b.dataset.removeDiv;
+    armConfirm(b, b.classList.contains('linkbtn') ? 'Confirm' : 'Confirm Remove', async () => {
+      const keep = dividendEvents(t), rec = dividendSets.get(t);
+      await removeDividends(t);
+      toast(instruments.has(t) ? `Removed ${t}’s dividends. Its returns are price-only now.` : `Removed the dividends kept for ${t}.`,
+        { label: 'Undo', run: () => saveDividends(t, keep, rec && rec.filename) });
+    });
+  };
+  $('#instTable').addEventListener('click', onRemoveDividends); $('#divWaiting').addEventListener('click', onRemoveDividends);
   $('#rateTable').addEventListener('click', e => {
     const b = e.target.closest('button[data-remove-rate]'); if (!b) return; const t = b.dataset.removeRate;
     armConfirm(b, 'Confirm Remove', async () => { rates.delete(t); py.forgetRate(t); await idb.del(t); renderRateTable(); fillRateSelect(); saveSettings(); toast(`Removed ${t}.`); });
@@ -4717,7 +4810,7 @@ async function boot() {
 
   const pyReady = py.start(engineSrc);
   pyReady.then(() => { lint.schedule(0); complete.data(); }, () => {});
-  await Promise.all([loadUploads(), loadBundled(), ensureChartLib().catch(() => toast('Charts couldn’t load. Numbers & tables still work; reload to try again.'))]);
+  await Promise.all([loadUploads(), loadDividends(), loadBundled(), ensureChartLib().catch(() => toast('Charts couldn’t load. Numbers & tables still work; reload to try again.'))]);
   if (window.Chart) { Chart.defaults.font.family = cssVar('--f-sans'); Chart.defaults.font.size = 12; }
   const prefer = { ...(settings || {}) };
   if (q.get('ticker')) prefer.instrument = q.get('ticker').toUpperCase();
