@@ -62,6 +62,9 @@ The Research Tools tab has a **Risk Report** (multi-factor regression on loaded 
 rolling beta; each holding's share of the risk; ten historical stress windows replayed on the final
 holdings; historical, normal and Cornish-Fisher VaR with a Kupiec back-test) and a **Capacity** curve
 that re-runs the strategy at growing account sizes with square-root impact and participation limits.
+An optional **Options Overlay** tool adds covered calls, protective puts or a collar to a strategy's long
+position and shows a delta-hedged option's volatility P&L. Option prices are modelled (Black-Scholes on
+trailing realized volatility or a loaded volatility index), not market quotes.
 
 ## Paper trading
 

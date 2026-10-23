@@ -2186,6 +2186,128 @@ def test_audit_hashes_match_the_page():
     assert json.loads(out[2])["ok"]
 
 
+# --------------------------------------------------------- options overlays -----
+
+def _scipy_bs(S, K, T, r, sig, kind):
+    from scipy import stats
+    d1 = (math.log(S / K) + (r + sig * sig / 2) * T) / (sig * math.sqrt(T))
+    d2 = d1 - sig * math.sqrt(T)
+    if kind == "call":
+        return S * stats.norm.cdf(d1) - K * math.exp(-r * T) * stats.norm.cdf(d2)
+    return K * math.exp(-r * T) * stats.norm.cdf(-d2) - S * stats.norm.cdf(-d1)
+
+
+def test_black_scholes_prices_parity_and_greeks():
+    for S, K, T, r, sig in [(100, 105, 21 / 252, 0.03, 0.2), (50, 40, 1.0, 0.0, 0.6), (100, 95, 0.25, 0.05, 0.15)]:
+        c, p = engine.bs(S, K, T, r, sig, "call"), engine.bs(S, K, T, r, sig, "put")
+        assert approx(c["price"], _scipy_bs(S, K, T, r, sig, "call"), 1e-7)
+        assert approx(p["price"], _scipy_bs(S, K, T, r, sig, "put"), 1e-7)
+        assert approx(c["price"] - p["price"], S - K * math.exp(-r * T), 1e-9), "put-call parity"
+        h = 1e-4 * S
+        up, dn = engine.bs(S + h, K, T, r, sig, "call")["price"], engine.bs(S - h, K, T, r, sig, "call")["price"]
+        assert abs(c["delta"] - (up - dn) / (2 * h)) < 1e-6
+        assert abs(c["gamma"] - (up - 2 * c["price"] + dn) / (h * h)) < 1e-4
+        assert approx(c["gamma"], p["gamma"]) and approx(c["delta"] - p["delta"], 1.0)
+        dv = (engine.bs(S, K, T, r, sig + 1e-5, "call")["price"] - engine.bs(S, K, T, r, sig - 1e-5, "call")["price"]) / 2e-5
+        assert abs(c["vega"] - dv) < 1e-4
+        dt = 1e-6
+        assert abs(c["theta"] - (engine.bs(S, K, T - dt, r, sig, "call")["price"] - c["price"]) / dt) < 1e-2
+    assert engine.bs(100, 90, 0, 0.0, 0.2, "call")["price"] == 10 and engine.bs(100, 90, 0, 0.0, 0.2, "put")["price"] == 0
+
+
+def _const_iv(level=20.0, ds=DEMO):
+    """A volatility index at `level` percent on ds's dates."""
+    iv = engine.make_data([level] * ds.n, ticker="IVX")
+    iv.dates = list(ds.dates)
+    engine.DATA["IVX"] = iv
+
+
+def test_covered_call_overlay_matches_an_independent_ledger():
+    _const_iv(20.0)
+    res = run(load_templates()["buy_hold"])
+    ds, s, A = DEMO, res.start, engine.res_ann(res)
+    r = res.config.cash_rate if res.config.cash_rate is not None else res.config.risk_free
+    days = 21
+    o = engine.options_overlay(res, "covered_call", otm=0.05, days=days, iv="IVX", iv_mult=1.0, cost=0.02)
+    # independent ledger: sell calls on the shares held every `days` bars, settle at expiry
+    cash, legs, prem_total, n = 0.0, None, 0.0, len(res.equity)
+    for i in range(n):
+        S = ds.close[s + i]
+        if legs and i >= legs[2]:
+            cash -= legs[1] * max(S - legs[0], 0.0)
+            legs = None
+        if legs is None and i < n - 1 and i % days == 0 and res.position[i] > 0:
+            K, q = S * 1.05, res.position[i]
+            px = _scipy_bs(S, K, days / A, r, 0.20, "call")
+            cash += q * px * (1 - 0.02)
+            prem_total += q * px
+            legs = (K, q, min(i + days, n - 1))
+        mark = -legs[1] * _scipy_bs(S, legs[0], (legs[2] - i) / A, r, 0.20, "call") if legs and legs[2] > i else 0.0
+        assert abs(o["overlay_pnl"][i] - (cash + mark)) < 1e-6 * max(1.0, abs(cash)), i
+    assert approx(o["premium"], prem_total, 1e-9) and o["expired"] == len(o["rolls"]) - (1 if legs else 0)
+    assert o["assigned"] > 0 and o["equity"][-1] == res.equity[-1] + o["overlay_pnl"][-1]
+    assert {"sharpe", "max_drawdown"} <= set(o["with_overlay"]) and o["base"]["total_return"] == engine.performance(
+        res.dates, res.equity, res.config.risk_free, res.bench_equity, ann=A)["total_return"]
+
+
+def test_protective_put_caps_losses_and_collar_combines_both():
+    _const_iv(20.0)
+    res = run(load_templates()["buy_hold"])
+    put = engine.options_overlay(res, "protective_put", put_otm=0.0, days=21, iv="IVX", cost=0.0)
+    for roll in [x for x in put["rolls"] if "settle" in x]:
+        held, K = roll["shares"], roll["strikes"][0]
+        assert approx(roll["settle"], held * max(K - roll["settle_price"], 0.0), 1e-9), "an at-the-money put pays K - S"
+    assert put["premium"] < 0 and put["settlements"] > 0
+    collar = engine.options_overlay(res, "collar", otm=0.05, put_otm=0.05, days=21, iv="IVX", cost=0.0)
+    cc = engine.options_overlay(res, "covered_call", otm=0.05, days=21, iv="IVX", cost=0.0)
+    pp = engine.options_overlay(res, "protective_put", put_otm=0.05, days=21, iv="IVX", cost=0.0)
+    assert all(abs(a - (b + c)) < 1e-6 for a, b, c in zip(collar["overlay_pnl"], cc["overlay_pnl"], pp["overlay_pnl"])), \
+        "a collar is the call and the put together"
+    try:
+        engine.options_overlay(res, "straddle")
+        raise AssertionError("unknown overlay accepted")
+    except ValueError:
+        pass
+
+
+def test_delta_hedged_pnl_tracks_implied_minus_realized():
+    rng = random.Random(7)
+    px, sig = [100.0], 0.2
+    for _ in range(2520):
+        px.append(px[-1] * math.exp(-0.5 * sig * sig / 252 + sig / math.sqrt(252) * rng.gauss(0, 1)))
+    ds = engine.make_data(px, ticker="GBM")
+    iv = engine.make_data([20.0] * len(px), ticker="IVX")
+    iv.dates = list(ds.dates)
+    engine.DATA["IVX"] = iv
+    fair = engine.delta_hedged(ds, kind="call", days=21, iv="IVX", iv_mult=1.0, notional=10000, ann=252)
+    rich = engine.delta_hedged(ds, kind="call", days=21, iv="IVX", iv_mult=1.25, notional=10000, ann=252)
+    cheap_long = engine.delta_hedged(ds, kind="call", days=21, iv="IVX", iv_mult=0.8, notional=10000, ann=252, side=+1)
+    assert abs(fair["final"]) < 0.15 * abs(rich["final"]), "at fair implied vol a hedged option earns about nothing"
+    assert rich["final"] > 0 and cheap_long["final"] > 0, "selling rich vol / buying cheap vol earns when hedged"
+    for d in (fair, rich, cheap_long):
+        assert all(abs(t - (a + b)) < 1e-9 for t, a, b in zip(d["total"], d["option"], d["hedge"]))
+        assert len(d["total"]) == len(d["dates"])
+        assert abs(d["final"] - d["final_estimate"]) < 0.1 * abs(rich["final"]), "gamma-theta estimate explains the P&L"
+    put = engine.delta_hedged(ds, kind="put", days=21, iv="IVX", iv_mult=1.25, notional=10000, ann=252)
+    assert put["final"] > 0
+    assert all(abs(p["realized_vol"] - 0.2) < 0.15 for p in rich["periods"] if p["realized_vol"] == p["realized_vol"])
+
+
+def test_options_api():
+    engine.DATA["DEMO-STOCK"] = DEMO
+    out = json.loads(engine.handle("options", json.dumps({
+        "ticker": "DEMO-STOCK", "code": load_templates()["buy_hold"],
+        "options": {"kind": "covered_call", "otm": 0.03, "days": 21}})))
+    assert out["ok"], out
+    r = out["result"]
+    assert len(r["dates"]) == len(r["equity"]) == len(r["base_equity"]) == len(r["iv"])
+    assert r["rolls"] and r["delta_hedged"]["periods"] and len(r["delta_hedged"]["dates"]) == len(r["delta_hedged"]["total"])
+    engine.DATA["DEMO-BOND"] = BOND
+    bad = json.loads(engine.handle("options", json.dumps({
+        "tickers": ["DEMO-STOCK", "DEMO-BOND"], "code": load_templates()["pf_equal_weight"]})))
+    assert not bad["ok"] and "single-instrument" in bad["error"]["message"]
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

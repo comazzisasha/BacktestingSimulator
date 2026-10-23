@@ -5941,6 +5941,192 @@ def verify_audit_log(entries):
 
 
 # =============================================================================
+# 7d. Options overlays (modelled prices: Black-Scholes with an implied-volatility proxy)
+# =============================================================================
+
+def norm_pdf(x):
+    return math.exp(-0.5 * x * x) / math.sqrt(2 * math.pi)
+
+
+def bs(S, K, T, r, sigma, kind="call", q=0.0):
+    """Black-Scholes price and Greeks of a European option: {price, delta, gamma, vega, theta}
+    (theta per year). At or after expiry the price is the payoff."""
+    if T <= 1e-12 or sigma <= 0:
+        intrinsic = max(S - K, 0.0) if kind == "call" else max(K - S, 0.0)
+        d = (1.0 if S > K else 0.0) if kind == "call" else (-1.0 if S < K else 0.0)
+        return {"price": intrinsic, "delta": d, "gamma": 0.0, "vega": 0.0, "theta": 0.0}
+    st = sigma * math.sqrt(T)
+    d1 = (math.log(S / K) + (r - q + 0.5 * sigma * sigma) * T) / st
+    d2 = d1 - st
+    dq, dr = math.exp(-q * T), math.exp(-r * T)
+    if kind == "call":
+        price = S * dq * norm_cdf(d1) - K * dr * norm_cdf(d2)
+        delta = dq * norm_cdf(d1)
+        theta = -S * dq * norm_pdf(d1) * sigma / (2 * math.sqrt(T)) - r * K * dr * norm_cdf(d2) + q * S * dq * norm_cdf(d1)
+    else:
+        price = K * dr * norm_cdf(-d2) - S * dq * norm_cdf(-d1)
+        delta = -dq * norm_cdf(-d1)
+        theta = -S * dq * norm_pdf(d1) * sigma / (2 * math.sqrt(T)) + r * K * dr * norm_cdf(-d2) - q * S * dq * norm_cdf(-d1)
+    return {"price": price, "delta": delta, "gamma": dq * norm_pdf(d1) / (S * st), "vega": S * dq * norm_pdf(d1) * math.sqrt(T), "theta": theta}
+
+
+def implied_vol_series(ds, source="realized", multiplier=1.1, window=21, ann=TRADING_DAYS):
+    """Implied volatility per bar of ds: trailing realized volatility x multiplier (the usual
+    premium of implied over realized), or the close of a loaded volatility index such as
+    VIX (in percent), as of each bar."""
+    if source == "realized":
+        r = [NAN] + [ds.close[t] / ds.close[t - 1] - 1 for t in range(1, ds.n)]
+        sd = rolling_std(r[1:], window, ddof=1)
+        out = [NAN] + [v * math.sqrt(ann) * multiplier if not isnan(v) else NAN for v in sd]
+        return out
+    ix = DATA.get(source)
+    if ix is None:
+        raise ValueError("No volatility index %s is loaded." % source)
+    out, j, cur = [], -1, NAN
+    for d in ds.dates:
+        while j + 1 < ix.n and ix.dates[j + 1] <= d:
+            j += 1
+            cur = ix.close[j] / 100.0
+        out.append(cur * multiplier if not isnan(cur) else NAN)
+    return out
+
+
+def _legs(kind, otm, put_otm):
+    """[(option type, strike as a multiple of spot, +1 bought / -1 sold)] for an overlay."""
+    if kind == "covered_call":
+        return [("call", 1 + otm, -1)]
+    if kind == "protective_put":
+        return [("put", 1 - put_otm, +1)]
+    if kind == "collar":
+        return [("call", 1 + otm, -1), ("put", 1 - put_otm, +1)]
+    raise ValueError("overlay must be covered_call, protective_put or collar")
+
+
+def options_overlay(res, kind="covered_call", otm=0.05, put_otm=0.05, days=21, iv="realized", iv_mult=1.1,
+                    vol_window=21, cost=0.03):
+    """Write calls on / buy puts under the shares a single-instrument strategy holds.
+
+    Every `days` bars, options expiring `days` bars later are opened on the shares held at
+    that close (long positions only), priced by Black-Scholes at the implied-volatility proxy,
+    paying `cost` x premium to trade; they are marked daily and cash-settled at expiry. The
+    overlay's P&L is added to the strategy's equity. Modelled prices, not market quotes."""
+    if res.portfolio:
+        raise ValueError("Options overlays work on single-instrument backtests.")
+    ds, panel, s = res.panel.sets[0], res.panel, res.start
+    A = res_ann(res)
+    n = len(res.equity)
+    ivs = implied_vol_series(ds, iv, iv_mult, vol_window, A)
+    r = res.config.cash_rate if res.config.cash_rate is not None else res.config.risk_free
+    legs = _legs(kind, otm, put_otm)
+    cash = 0.0
+    book = []          # open legs: {type, K, sign, qty, expiry_bar, open_i}
+    pnl = [0.0] * n
+    rolls = []
+    for i in range(n):
+        t = s + i
+        S = ds.close[t]
+        # expiries first
+        if book and i >= book[0]["expiry"]:
+            settle = 0.0
+            for lg in book:
+                pay = max(S - lg["K"], 0.0) if lg["type"] == "call" else max(lg["K"] - S, 0.0)
+                settle += lg["sign"] * lg["qty"] * pay
+            cash += settle
+            rolls[-1].update(settle=settle, settle_price=S, assigned=any(
+                (lg["type"] == "call" and S > lg["K"]) or (lg["type"] == "put" and S < lg["K"]) for lg in book))
+            rolls[-1]["pnl"] = rolls[-1]["premium"] + settle - rolls[-1]["costs"]
+            book = []
+        if not book and i < n - 1 and i % days == 0:
+            sh = res.position[i]
+            sig = ivs[t]
+            if sh > 0 and not isnan(sig) and sig > 0:
+                T = days / A
+                prem = costs = 0.0
+                opened = []
+                for typ, mult, sign in legs:
+                    K = S * mult
+                    px = bs(S, K, T, r, sig, typ)["price"]
+                    prem += -sign * sh * px
+                    costs += cost * sh * px
+                    opened.append({"type": typ, "K": K, "sign": sign, "qty": sh, "expiry": min(i + days, n - 1)})
+                cash += prem - costs
+                book = opened
+                rolls.append({"date": res.dates[i], "spot": S, "iv": sig, "shares": sh, "premium": prem, "costs": costs,
+                              "strikes": [lg["K"] for lg in opened], "expiry": res.dates[opened[0]["expiry"]]})
+        mark = 0.0
+        for lg in book:
+            T = max(lg["expiry"] - i, 0) / A
+            sig = ivs[t] if not isnan(ivs[t]) else rolls[-1]["iv"]
+            mark += lg["sign"] * lg["qty"] * bs(S, lg["K"], T, r, sig, lg["type"])["price"]
+        pnl[i] = cash + mark
+    equity = [e + x for e, x in zip(res.equity, pnl)]
+    base = performance(res.dates, res.equity, res.config.risk_free, res.bench_equity, ann=A)
+    over = performance(res.dates, equity, res.config.risk_free, res.bench_equity, ann=A)
+    done = [x for x in rolls if "settle" in x]
+    return {"kind": kind, "days": days, "iv_source": iv, "iv_mult": iv_mult, "equity": equity, "overlay_pnl": pnl,
+            "rolls": rolls, "base": base, "with_overlay": over,
+            "premium": sum(x["premium"] for x in rolls), "settlements": sum(x.get("settle", 0.0) for x in rolls),
+            "costs": sum(x["costs"] for x in rolls), "assigned": sum(1 for x in done if x["assigned"]), "expired": len(done),
+            "iv": [ivs[s + i] for i in range(n)]}
+
+
+def delta_hedged(ds, start=None, end=None, kind="call", otm=0.0, days=21, iv="realized", iv_mult=1.1, vol_window=21,
+                 r=0.0, notional=10000.0, ann=None, side=-1):
+    """Sell (side=-1) or buy an option on `notional` of ds every `days` bars and delta-hedge it
+    with the underlying at every close. Splits the P&L into the option's and the hedge's, and
+    compares it with the gamma-theta estimate sum(0.5 x gamma x S^2 x (implied var x dt -
+    realized return^2)): a short option earns when implied volatility exceeds realized."""
+    A = ann or periods_per_year(ds)
+    s, e = _resolve_range(ds.dates, start, end, ds.ticker)
+    ivs = implied_vol_series(ds, iv, iv_mult, vol_window, A)
+    opt_pnl = hedge_pnl = est = 0.0
+    total, opt_series, hedge_series, est_series = [0.0], [0.0], [0.0], [0.0]
+    leg = None
+    periods = []
+    for t in range(s, e + 1):
+        S = ds.close[t]
+        if leg is not None:
+            T = max(leg["expiry"] - t, 0) / A
+            q = bs(S, leg["K"], T, r, leg["iv"], kind)
+            dv = side * leg["qty"] * (q["price"] - leg["value"])
+            dh = -leg["hedge"] * (S - leg["S"])          # the hedge holds -side x delta x qty shares
+            g = leg["greeks"]
+            rr = S / leg["S"] - 1
+            est_t = -side * leg["qty"] * 0.5 * g["gamma"] * leg["S"] ** 2 * (leg["iv"] ** 2 / A - rr * rr)
+            opt_pnl += dv
+            hedge_pnl += dh
+            est += est_t
+            leg["period"]["option"] += dv
+            leg["period"]["hedge"] += dh
+            leg["period"]["estimate"] += est_t
+            leg.update(value=q["price"], S=S, greeks=q, hedge=side * q["delta"] * leg["qty"])
+            if t >= leg["expiry"]:
+                leg["period"]["realized_vol"] = stdev(leg["rets"] + [rr]) * math.sqrt(A) if len(leg["rets"]) > 1 else NAN
+                leg = None
+            else:
+                leg["rets"].append(rr)
+        if t > s:
+            total.append(opt_pnl + hedge_pnl)
+            opt_series.append(opt_pnl)
+            hedge_series.append(hedge_pnl)
+            est_series.append(est)
+        if leg is None and t < e and (t - s) % days == 0 and not isnan(ivs[t]) and ivs[t] > 0:
+            K = S * (1 + otm)
+            q = bs(S, K, days / A, r, ivs[t], kind)
+            qty = notional / S
+            per = {"date": ds.dates[t], "spot": S, "strike": K, "iv": ivs[t], "premium": -side * qty * q["price"],
+                   "option": 0.0, "hedge": 0.0, "estimate": 0.0}
+            periods.append(per)
+            leg = {"K": K, "iv": ivs[t], "qty": qty, "expiry": min(t + days, e), "value": q["price"], "S": S, "greeks": q,
+                   "hedge": side * q["delta"] * qty, "period": per, "rets": []}
+    for per in periods:
+        per["total"] = per["option"] + per["hedge"]
+    return {"dates": ds.dates[s:e + 1], "total": total, "option": opt_series, "hedge": hedge_series, "estimate": est_series,
+            "periods": periods, "notional": notional, "side": "short" if side < 0 else "long", "kind": kind,
+            "final": total[-1], "final_estimate": est_series[-1]}
+
+
+# =============================================================================
 # 8. JSON API for the web page
 # =============================================================================
 
@@ -6582,6 +6768,28 @@ def api_verify_audit(p):
     return verify_audit_log(p["entries"])
 
 
+def api_options(p):
+    """Options overlay on the strategy, and a delta-hedged option on its instrument."""
+    res, _ = _run_payload(p)
+    o = p.get("options") or {}
+    kw = dict(days=int(o.get("days", 21)), iv=o.get("iv", "realized"), iv_mult=float(o.get("iv_mult", 1.1)),
+              vol_window=int(o.get("vol_window", 21)))
+    over = options_overlay(res, o.get("kind", "covered_call"), float(o.get("otm", 0.05)), float(o.get("put_otm", 0.05)),
+                           cost=float(o.get("cost", 0.03)), **kw)
+    idx = _downsample(len(res.dates))
+    out = {k: v for k, v in over.items() if k not in ("equity", "overlay_pnl", "iv")}
+    out.update(dates=[res.dates[i] for i in idx], equity=[over["equity"][i] for i in idx], base_equity=[res.equity[i] for i in idx],
+               iv=[over["iv"][i] for i in idx], rolls=over["rolls"][-500:])
+    ds = res.panel.sets[0]
+    r = res.config.cash_rate if res.config.cash_rate is not None else res.config.risk_free
+    dh = delta_hedged(ds, res.dates[0], res.dates[-1], o.get("hedge_kind", "call"), float(o.get("hedge_otm", 0.0)),
+                      r=r, notional=res.config.cash, ann=res_ann(res), **kw)
+    j = _downsample(len(dh["dates"]))
+    out["delta_hedged"] = {k: ([dh[k][i] for i in j] if isinstance(dh[k], list) and k != "periods" else dh[k]) for k in dh}
+    out["delta_hedged"]["periods"] = dh["periods"][-500:]
+    return out
+
+
 def api_check_module(p):
     return {"problem": module_name_problem(p.get("name"))}
 
@@ -6589,7 +6797,8 @@ def api_check_module(p):
 API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
-    "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit, "risk": api_risk, "capacity": api_capacity,
+    "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit,
+    "options": api_options, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

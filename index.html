@@ -928,6 +928,29 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       </div>
     </section>
 
+    <section class="panel" id="options" data-opt="options" aria-labelledby="h-opt">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-opt">Options Overlay</h2><p>Write calls on the shares your strategy holds, buy puts under them, or both (a collar), and see what it does to returns & drawdowns. Also shows a delta-hedged option on the same instrument: whether selling volatility paid. Option prices are <b>modelled</b> with Black-Scholes, not market quotes.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="optForm" novalidate>
+          <div class="field"><label for="optKind">Overlay</label><select id="optKind" name="overlay"><option value="covered_call" selected>Covered call (sell calls)</option><option value="protective_put">Protective put (buy puts)</option><option value="collar">Collar (sell calls, buy puts)</option></select></div>
+          <div class="grid2">
+            <div class="field" id="optOtmF"><label for="optOtm">Call Strike (% above price)</label><input type="text" inputmode="decimal" id="optOtm" name="call-otm" value="5" autocomplete="off" aria-describedby="optOtm-err"><p class="ferr" id="optOtm-err" hidden></p></div>
+            <div class="field" id="optPutF"><label for="optPut">Put Strike (% below price)</label><input type="text" inputmode="decimal" id="optPut" name="put-otm" value="5" autocomplete="off" aria-describedby="optPut-err"><p class="ferr" id="optPut-err" hidden></p></div>
+            <div class="field"><label for="optDays">Expiry (trading days)</label><input type="text" inputmode="numeric" id="optDays" name="expiry-days" value="21" autocomplete="off" aria-describedby="optDays-err"><p class="ferr" id="optDays-err" hidden></p></div>
+            <div class="field"><label for="optCost">Trading Cost (% of premium)</label><input type="text" inputmode="decimal" id="optCost" name="option-cost" value="3" autocomplete="off" aria-describedby="optCost-err"><p class="ferr" id="optCost-err" hidden></p></div>
+          </div>
+          <div class="field"><label for="optIv">Implied Volatility</label><select id="optIv" name="iv-source" aria-describedby="optIv-help"><option value="realized" selected>Trailing realized volatility × premium</option></select></div>
+          <div class="grid2">
+            <div class="field"><label for="optMult">Premium Multiplier</label><input type="text" inputmode="decimal" id="optMult" name="iv-multiplier" value="1.1" autocomplete="off" aria-describedby="optMult-err"><p class="ferr" id="optMult-err" hidden></p></div>
+            <div class="field"><label for="optWin">Realized Vol Window (days)</label><input type="text" inputmode="numeric" id="optWin" name="vol-window" value="21" autocomplete="off" aria-describedby="optWin-err"><p class="ferr" id="optWin-err" hidden></p></div>
+          </div>
+          <p class="help" id="optIv-help">Implied volatility usually runs above realized; 1.1 adds 10%. Or pick a loaded volatility index (e.g. <code translate="no">^VIX</code>, in percent) to price with its level that day, times the multiplier.</p>
+          <div class="row"><button class="btn primary" id="optRun" type="submit">Test Overlay</button></div>
+        </form>
+        <div class="out" id="optOut" aria-live="polite"><p class="out-empty">Single-instrument strategies; options are written on long positions only.</p></div>
+      </div>
+    </section>
+
     <section class="panel" id="costs" data-opt="costs" aria-labelledby="h-cost">
       <div class="panel-h"><div class="toolhead"><h2 id="h-cost">Cost Sensitivity</h2><p>Re-run the backtest at rising trading costs. Strategies that trade often can look great at zero cost & lose money at realistic ones; this shows where the edge runs out.</p></div></div>
       <div class="panel-b toolgrid">
@@ -1165,7 +1188,7 @@ const LOCALE = (() => {
   }
   return 'en-US';
 })();
-const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'risk', 'capacity', 'subperiods', 'costs', 'permutation', 'analytics'];
+const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'risk', 'capacity', 'options', 'subperiods', 'costs', 'permutation', 'analytics'];
 
 const RECOMMENDED = [
   ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
@@ -1253,7 +1276,7 @@ const trials = {
 // Choices are remembered in this browser, separately for panels, statistics & tools.
 const PANELS = [['relative', 'Relative Performance', 'std'], ['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
   ['roll', 'Rolling Sharpe Ratio', 'std'], ['vol', 'Rolling Volatility', 'extra']];
-const TOOLS = [['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
+const TOOLS = [['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['options', 'Options Overlay', 'extra'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
   ['analytics', 'Instrument Analytics', 'std']];
 const shown = {
   is(kind, key, tier) { if (tier === 'core') return true; const o = store.get('show.' + kind, {}); return key in o ? !!o[key] : tier === 'std'; },
@@ -3342,6 +3365,70 @@ function renderCapacity(r) {
   out.appendChild(t);
 }
 
+/* ------------------------------------------------------------- options -- */
+function optKindChanged() {
+  const k = $('#optKind').value;
+  $('#optOtmF').hidden = k === 'protective_put'; $('#optPutF').hidden = k === 'covered_call';
+}
+function fillIvSources() {
+  const el = $('#optIv'), cur = el.value;
+  el.innerHTML = '<option value="realized">Trailing realized volatility × premium</option>' +
+    sortedTickers().map(t => `<option value="${esc(t)}" translate="no">${esc(t)} (volatility index)</option>`).join('');
+  el.value = [...el.options].some(o => o.value === cur) ? cur : 'realized';
+}
+async function runOptions(ev) {
+  ev.preventDefault();
+  const k = $('#optKind').value;
+  const rules = [['optDays', between(2, 252, 'days', true, 21)], ['optCost', between(0, 50, '%', false, 3)], ['optMult', between(0.1, 5, '', false, 1.1)], ['optWin', between(5, 252, 'days', true, 21)]];
+  if (k !== 'protective_put') rules.unshift(['optOtm', between(-20, 50, '%', false, 5)]);
+  if (k !== 'covered_call') rules.unshift(['optPut', between(-20, 50, '%', false, 5)]);
+  if (!validate(rules)) return;
+  const base = await freshPayload(); const out = $('#optOut'); const btn = $('#optRun');
+  if ((base.tickers || []).length > 1) { out.innerHTML = '<p class="out-empty">Options overlays work on single-instrument strategies. Pick one instrument on the Backtest tab.</p>'; return; }
+  loadingOn(btn); busy(true, 'Pricing options…');
+  try {
+    const iv = $('#optIv').value;
+    await ensurePayload(base); if (iv !== 'realized') await py.ensure([iv]);
+    const r = await py.call('options', { ...base, options: { kind: k, otm: parseNumber($('#optOtm').value) / 100, put_otm: parseNumber($('#optPut').value) / 100,
+      days: parseNumber($('#optDays').value), cost: parseNumber($('#optCost').value) / 100, iv, iv_mult: parseNumber($('#optMult').value), vol_window: parseNumber($('#optWin').value) } });
+    renderOptions(r);
+  } catch (e) { toolError(out, e); }
+  finally { busy(false); await loadingOff(btn); }
+}
+function renderOptions(r) {
+  const out = $('#optOut'); out.innerHTML = '';
+  const add = html => { const d = document.createElement('div'); d.className = 'stack'; d.innerHTML = html; out.appendChild(d); return d; };
+  const B = r.base, W = r.with_overlay, P = palette();
+  const name = { covered_call: 'covered calls', protective_put: 'protective puts', collar: 'the collar' }[r.kind];
+  if (!r.rolls.length) { add('<p style="margin:0">No options were opened: the strategy held no long position on any roll date (or the volatility source had no value yet).</p>'); }
+  else {
+    const net = r.premium + r.settlements - r.costs;
+    let box = add(`<p style="margin:0">With ${name}, CAGR goes from <b>${fmt.pct(B.cagr, 2, true)}</b> to <b>${fmt.pct(W.cagr, 2, true)}</b>, volatility from ${fmt.pct(B.volatility, 1)} to ${fmt.pct(W.volatility, 1)}, Sharpe from ${fmt.num(B.sharpe)} to ${fmt.num(W.sharpe)} & the worst drawdown from ${fmt.pct(B.max_drawdown, 1)} to ${fmt.pct(W.max_drawdown, 1)}. ` +
+      `Over ${fmt.int(r.rolls.length)} rolls: premium ${r.premium >= 0 ? 'received' : 'paid'} ${fmt.money(Math.abs(r.premium))}, settlements ${fmt.money(r.settlements)}, trading costs ${fmt.money(r.costs)}; net <span class="${sign(net)}">${fmt.money(net)}</span>. ${fmt.int(r.assigned)} of ${fmt.int(r.expired)} expiries finished in the money.</p>` +
+      `<div class="chart mid"><canvas role="img" aria-label="Equity with & without the options overlay"></canvas></div>`);
+    kill('opt'); const o = baseOptions(r.dates, P, v => fmt.money(v)); o.scales.y.ticks.callback = v => fmt.moneyAxis(v); o.plugins.legend = legendTop(P);
+    charts.opt = new Chart(box.querySelector('canvas'), { data: { datasets: [line('With overlay', r.equity, P.strat, { borderWidth: 2 }), line('Strategy alone', r.base_equity, P.bench, { borderWidth: 1.3, borderDash: [5, 3] })] }, options: o });
+    const keys = [['total_return', 'Total Return', v => fmt.pct(v, 1, true)], ['cagr', 'CAGR', v => fmt.pct(v, 2, true)], ['volatility', 'Volatility', v => fmt.pct(v, 1)], ['sharpe', 'Sharpe', v => fmt.num(v)], ['sortino', 'Sortino', v => fmt.num(v)],
+      ['max_drawdown', 'Max Drawdown', v => fmt.pct(v, 1)], ['skew', 'Skew', v => fmt.num(v)], ['worst_month', 'Worst Month', v => fmt.pct(v, 1, true)], ['best_month', 'Best Month', v => fmt.pct(v, 1, true)]];
+    const last = r.rolls.slice(-12).reverse();
+    add(`<div class="two">` + htmlTable('Statistics with & without the overlay', ['Statistic', 'Strategy Alone', 'With Overlay'], keys.map(([k2, lab, f]) => [lab, f(B[k2]), f(W[k2])])) +
+      htmlTable('Latest rolls', ['Opened', 'Price', 'Implied Vol', 'Strike(s)', 'Premium', 'Settled', 'Option P&L'],
+        last.map(x => [fmt.date(x.date), fmt.num(x.spot, 2), fmt.pct(x.iv, 1), x.strikes.map(v => fmt.num(v, 2)).join(' / '), fmt.money(x.premium), x.settle == null ? 'open' : fmt.money(x.settle), x.pnl == null ? '—' : `<span class="${sign(x.pnl)}">${fmt.money(x.pnl)}</span>`])) + '</div>' +
+      `<p class="help">Options on the shares held at each roll close, expiring ${fmt.int(r.days)} trading days later, cash-settled at that close & marked daily at the model price. Implied volatility: ${r.iv_source === 'realized' ? `trailing realized × ${fmt.num(r.iv_mult, 2)}` : `<span translate="no">${esc(r.iv_source)}</span> × ${fmt.num(r.iv_mult, 2)}`}. No early assignment, dividends, skew or bid-ask beyond the trading cost: treat the result as a model, not a fill record.</p>`);
+  }
+  const dh = r.delta_hedged;
+  if (dh && dh.periods.length) {
+    const wins = dh.periods.filter(p => p.total > 0).length;
+    const box = add(`<h3 class="subhead">Delta-Hedged ${dh.kind === 'call' ? 'Call' : 'Put'} (Volatility P&L)</h3><p style="margin:0">Selling an at-the-money ${dh.kind} on ${fmt.money(dh.notional)} of the instrument every ${fmt.int(r.days)} days & hedging its delta at each close made <b class="${sign(dh.final)}">${fmt.money(dh.final)}</b> (${fmt.int(wins)} of ${fmt.int(dh.periods.length)} periods positive). A hedged short option earns when implied volatility beats the volatility that follows; the gamma-theta estimate of that is ${fmt.money(dh.final_estimate)}.</p>` +
+      `<div class="chart mid"><canvas role="img" aria-label="Cumulative delta-hedged P&L, option & hedge legs"></canvas></div>`);
+    kill('optdh'); const o = baseOptions(dh.dates, P, v => fmt.money(v)); o.scales.y.ticks.callback = v => fmt.moneyAxis(v); o.plugins.legend = legendTop(P);
+    charts.optdh = new Chart(box.querySelector('canvas'), { data: { datasets: [line('Hedged total', dh.total, P.strat, { borderWidth: 2 }), line('Gamma-theta estimate', dh.estimate, P.fg3, { borderWidth: 1.2, borderDash: [2, 3] }),
+      line('Option leg', dh.option, P.bench, { borderWidth: 1, borderDash: [5, 3] }), line('Hedge leg', dh.hedge, P.fg2, { borderWidth: 1, borderDash: [1, 2] })] }, options: o });
+    add(htmlTable('Latest hedged periods', ['Opened', 'Implied Vol', 'Realized Vol', 'Premium', 'Option', 'Hedge', 'Total'],
+      dh.periods.slice(-12).reverse().map(x => [fmt.date(x.date), fmt.pct(x.iv, 1), x.realized_vol == null ? '—' : fmt.pct(x.realized_vol, 1), fmt.money(x.premium), fmt.money(x.option), fmt.money(x.hedge), `<span class="${sign(x.total)}">${fmt.money(x.total)}</span>`])));
+  }
+}
+
 async function runPerm(ev) {
   ev.preventDefault();
   if (!validate([['permN', between(50, 5000, '', true, 500)], ['permSeed', between(0, 1e9, '', true, 7)]])) return;
@@ -4516,6 +4603,8 @@ function wire() {
   $('#subForm').addEventListener('submit', runSub);
   $('#costForm').addEventListener('submit', runCosts);
   $('#riskForm').addEventListener('submit', runRisk); $('#capForm').addEventListener('submit', runCapacity);
+  $('#optForm').addEventListener('submit', runOptions); $('#optKind').addEventListener('change', optKindChanged); optKindChanged();
+  for (const t of ['focus', 'mousedown']) $('#optIv').addEventListener(t, fillIvSources);
   $('#rkFile').addEventListener('change', async e => { for (const f of e.target.files) await addFactorFile(f); e.target.value = ''; });
   $('#rkSets').addEventListener('click', e => {
     const a = e.target.closest('[data-factor]'); if (a) { addFactorSpec(a.dataset.factor); return; }
