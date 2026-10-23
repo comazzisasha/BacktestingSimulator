@@ -1,0 +1,738 @@
+{
+ "_about": "Single-instrument results from the engine before multi-asset support (commit d7ea0d7). tests/test_engine.py checks the current engine reproduces them; regenerate only on purpose.",
+ "adx_trend|close_fill": {
+  "clipped": 0,
+  "fills": 42,
+  "final": 11165.368723,
+  "trade_pnl": 1165.368723,
+  "trades": 21
+ },
+ "adx_trend|costs": {
+  "clipped": 0,
+  "fills": 42,
+  "final": 10474.353597,
+  "trade_pnl": 474.353597,
+  "trades": 21
+ },
+ "adx_trend|default": {
+  "clipped": 0,
+  "fills": 42,
+  "final": 11106.36093,
+  "trade_pnl": 1106.36093,
+  "trades": 21
+ },
+ "adx_trend|short_lev2": {
+  "clipped": 0,
+  "fills": 42,
+  "final": 11106.36093,
+  "trade_pnl": 1106.36093,
+  "trades": 21
+ },
+ "adx_trend|whole_shares": {
+  "clipped": 0,
+  "fills": 42,
+  "final": 3323.33749,
+  "trade_pnl": 323.33749,
+  "trades": 21
+ },
+ "atr_trailing|close_fill": {
+  "clipped": 0,
+  "fills": 122,
+  "final": 7034.879568,
+  "trade_pnl": -2965.120432,
+  "trades": 61
+ },
+ "atr_trailing|costs": {
+  "clipped": 0,
+  "fills": 122,
+  "final": 5864.281891,
+  "trade_pnl": -4135.718109,
+  "trades": 61
+ },
+ "atr_trailing|default": {
+  "clipped": 0,
+  "fills": 122,
+  "final": 6962.157655,
+  "trade_pnl": -3037.842345,
+  "trades": 61
+ },
+ "atr_trailing|short_lev2": {
+  "clipped": 0,
+  "fills": 122,
+  "final": 6962.157655,
+  "trade_pnl": -3037.842345,
+  "trades": 61
+ },
+ "atr_trailing|whole_shares": {
+  "clipped": 0,
+  "fills": 122,
+  "final": 2158.774606,
+  "trade_pnl": -841.225394,
+  "trades": 61
+ },
+ "bb_breakout|close_fill": {
+  "clipped": 0,
+  "fills": 100,
+  "final": 9837.858176,
+  "trade_pnl": -162.141824,
+  "trades": 50
+ },
+ "bb_breakout|costs": {
+  "clipped": 0,
+  "fills": 100,
+  "final": 8502.909479,
+  "trade_pnl": -1497.090521,
+  "trades": 50
+ },
+ "bb_breakout|default": {
+  "clipped": 0,
+  "fills": 100,
+  "final": 9774.905569,
+  "trade_pnl": -225.094431,
+  "trades": 50
+ },
+ "bb_breakout|short_lev2": {
+  "clipped": 0,
+  "fills": 100,
+  "final": 9774.905569,
+  "trade_pnl": -225.094431,
+  "trades": 50
+ },
+ "bb_breakout|whole_shares": {
+  "clipped": 0,
+  "fills": 100,
+  "final": 2965.619098,
+  "trade_pnl": -34.380902,
+  "trades": 50
+ },
+ "bb_reversion|close_fill": {
+  "clipped": 0,
+  "fills": 96,
+  "final": 13552.856204,
+  "trade_pnl": 3552.856204,
+  "trades": 48
+ },
+ "bb_reversion|costs": {
+  "clipped": 0,
+  "fills": 96,
+  "final": 12006.499128,
+  "trade_pnl": 2006.499128,
+  "trades": 48
+ },
+ "bb_reversion|default": {
+  "clipped": 0,
+  "fills": 96,
+  "final": 13709.361285,
+  "trade_pnl": 3709.361285,
+  "trades": 48
+ },
+ "bb_reversion|short_lev2": {
+  "clipped": 0,
+  "fills": 96,
+  "final": 13709.361285,
+  "trade_pnl": 3709.361285,
+  "trades": 48
+ },
+ "bb_reversion|whole_shares": {
+  "clipped": 0,
+  "fills": 96,
+  "final": 4106.751504,
+  "trade_pnl": 1106.751504,
+  "trades": 48
+ },
+ "buy_hold|close_fill": {
+  "clipped": 0,
+  "fills": 1,
+  "final": 15176.235618,
+  "trade_pnl": 5176.235618,
+  "trades": 1
+ },
+ "buy_hold|costs": {
+  "clipped": 0,
+  "fills": 1,
+  "final": 15132.216492,
+  "trade_pnl": 5132.216492,
+  "trades": 1
+ },
+ "buy_hold|default": {
+  "clipped": 0,
+  "fills": 1,
+  "final": 15153.407345,
+  "trade_pnl": 5153.407345,
+  "trades": 1
+ },
+ "buy_hold|short_lev2": {
+  "clipped": 0,
+  "fills": 1,
+  "final": 15153.407345,
+  "trade_pnl": 5153.407345,
+  "trades": 1
+ },
+ "buy_hold|whole_shares": {
+  "clipped": 0,
+  "fills": 1,
+  "final": 4542.00168,
+  "trade_pnl": 1542.00168,
+  "trades": 1
+ },
+ "coin_flip|close_fill": {
+  "clipped": 0,
+  "fills": 243,
+  "final": 13359.496137,
+  "trade_pnl": 3359.496137,
+  "trades": 122
+ },
+ "coin_flip|costs": {
+  "clipped": 0,
+  "fills": 243,
+  "final": 10192.820388,
+  "trade_pnl": 192.820388,
+  "trades": 122
+ },
+ "coin_flip|default": {
+  "clipped": 0,
+  "fills": 243,
+  "final": 14262.341222,
+  "trade_pnl": 4262.341222,
+  "trades": 122
+ },
+ "coin_flip|short_lev2": {
+  "clipped": 0,
+  "fills": 243,
+  "final": 14262.341222,
+  "trade_pnl": 4262.341222,
+  "trades": 122
+ },
+ "coin_flip|whole_shares": {
+  "clipped": 0,
+  "fills": 243,
+  "final": 4290.114506,
+  "trade_pnl": 1290.114506,
+  "trades": 122
+ },
+ "day_of_week|close_fill": {
+  "clipped": 0,
+  "fills": 2607,
+  "final": 10091.337704,
+  "trade_pnl": 91.337704,
+  "trades": 522
+ },
+ "day_of_week|costs": {
+  "clipped": 0,
+  "fills": 2607,
+  "final": 6494.002483,
+  "trade_pnl": -3505.997517,
+  "trades": 522
+ },
+ "day_of_week|default": {
+  "clipped": 0,
+  "fills": 2607,
+  "final": 10147.517664,
+  "trade_pnl": 147.517664,
+  "trades": 522
+ },
+ "day_of_week|short_lev2": {
+  "clipped": 0,
+  "fills": 2607,
+  "final": 10147.517664,
+  "trade_pnl": 147.517664,
+  "trades": 522
+ },
+ "day_of_week|whole_shares": {
+  "clipped": 0,
+  "fills": 2607,
+  "final": 3147.517664,
+  "trade_pnl": 147.517664,
+  "trades": 522
+ },
+ "donchian|close_fill": {
+  "clipped": 0,
+  "fills": 44,
+  "final": 8015.656836,
+  "trade_pnl": -1984.343164,
+  "trades": 22
+ },
+ "donchian|costs": {
+  "clipped": 0,
+  "fills": 44,
+  "final": 7502.889531,
+  "trade_pnl": -2497.110469,
+  "trades": 22
+ },
+ "donchian|default": {
+  "clipped": 0,
+  "fills": 44,
+  "final": 7982.205441,
+  "trade_pnl": -2017.794559,
+  "trades": 22
+ },
+ "donchian|short_lev2": {
+  "clipped": 0,
+  "fills": 44,
+  "final": 7982.205441,
+  "trade_pnl": -2017.794559,
+  "trades": 22
+ },
+ "donchian|whole_shares": {
+  "clipped": 0,
+  "fills": 44,
+  "final": 2396.057088,
+  "trade_pnl": -603.942912,
+  "trades": 22
+ },
+ "ema_cross|close_fill": {
+  "clipped": 0,
+  "fills": 90,
+  "final": 10841.086174,
+  "trade_pnl": 841.086174,
+  "trades": 45
+ },
+ "ema_cross|costs": {
+  "clipped": 0,
+  "fills": 90,
+  "final": 10218.449131,
+  "trade_pnl": 218.449131,
+  "trades": 45
+ },
+ "ema_cross|default": {
+  "clipped": 0,
+  "fills": 90,
+  "final": 11575.09343,
+  "trade_pnl": 1575.09343,
+  "trades": 45
+ },
+ "ema_cross|short_lev2": {
+  "clipped": 0,
+  "fills": 90,
+  "final": 11575.09343,
+  "trade_pnl": 1575.09343,
+  "trades": 45
+ },
+ "ema_cross|whole_shares": {
+  "clipped": 0,
+  "fills": 93,
+  "final": 3507.2801,
+  "trade_pnl": 507.2801,
+  "trades": 45
+ },
+ "keltner|close_fill": {
+  "clipped": 0,
+  "fills": 92,
+  "final": 10944.415962,
+  "trade_pnl": 944.415962,
+  "trades": 46
+ },
+ "keltner|costs": {
+  "clipped": 0,
+  "fills": 92,
+  "final": 9462.17134,
+  "trade_pnl": -537.82866,
+  "trades": 46
+ },
+ "keltner|default": {
+  "clipped": 0,
+  "fills": 92,
+  "final": 10755.292507,
+  "trade_pnl": 755.292507,
+  "trades": 46
+ },
+ "keltner|short_lev2": {
+  "clipped": 0,
+  "fills": 92,
+  "final": 10755.292507,
+  "trade_pnl": 755.292507,
+  "trades": 46
+ },
+ "keltner|whole_shares": {
+  "clipped": 0,
+  "fills": 92,
+  "final": 3220.19903,
+  "trade_pnl": 220.19903,
+  "trades": 46
+ },
+ "macd|close_fill": {
+  "clipped": 0,
+  "fills": 194,
+  "final": 12631.369394,
+  "trade_pnl": 2631.369394,
+  "trades": 97
+ },
+ "macd|costs": {
+  "clipped": 0,
+  "fills": 194,
+  "final": 9808.37059,
+  "trade_pnl": -191.62941,
+  "trades": 97
+ },
+ "macd|default": {
+  "clipped": 0,
+  "fills": 194,
+  "final": 12818.354543,
+  "trade_pnl": 2818.354543,
+  "trades": 97
+ },
+ "macd|short_lev2": {
+  "clipped": 0,
+  "fills": 194,
+  "final": 12818.354543,
+  "trade_pnl": 2818.354543,
+  "trades": 97
+ },
+ "macd|whole_shares": {
+  "clipped": 0,
+  "fills": 195,
+  "final": 3852.16072,
+  "trade_pnl": 852.16072,
+  "trades": 97
+ },
+ "rsi2|close_fill": {
+  "clipped": 0,
+  "fills": 118,
+  "final": 11237.278481,
+  "trade_pnl": 1237.278481,
+  "trades": 59
+ },
+ "rsi2|costs": {
+  "clipped": 0,
+  "fills": 118,
+  "final": 10129.359994,
+  "trade_pnl": 129.359994,
+  "trades": 59
+ },
+ "rsi2|default": {
+  "clipped": 0,
+  "fills": 118,
+  "final": 11963.432795,
+  "trade_pnl": 1963.432795,
+  "trades": 59
+ },
+ "rsi2|short_lev2": {
+  "clipped": 0,
+  "fills": 118,
+  "final": 11963.432795,
+  "trade_pnl": 1963.432795,
+  "trades": 59
+ },
+ "rsi2|whole_shares": {
+  "clipped": 0,
+  "fills": 118,
+  "final": 3573.037662,
+  "trade_pnl": 573.037662,
+  "trades": 59
+ },
+ "rsi_reversion|close_fill": {
+  "clipped": 0,
+  "fills": 28,
+  "final": 15165.314668,
+  "trade_pnl": 5165.314668,
+  "trades": 14
+ },
+ "rsi_reversion|costs": {
+  "clipped": 0,
+  "fills": 28,
+  "final": 14739.107381,
+  "trade_pnl": 4739.107381,
+  "trades": 14
+ },
+ "rsi_reversion|default": {
+  "clipped": 0,
+  "fills": 28,
+  "final": 15320.81345,
+  "trade_pnl": 5320.81345,
+  "trades": 14
+ },
+ "rsi_reversion|short_lev2": {
+  "clipped": 0,
+  "fills": 28,
+  "final": 15320.81345,
+  "trade_pnl": 5320.81345,
+  "trades": 14
+ },
+ "rsi_reversion|whole_shares": {
+  "clipped": 0,
+  "fills": 28,
+  "final": 4551.721286,
+  "trade_pnl": 1551.721286,
+  "trades": 14
+ },
+ "sma_cross_vector|close_fill": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12451.591875,
+  "trade_pnl": 2451.591875,
+  "trades": 5
+ },
+ "sma_cross_vector|costs": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12195.67154,
+  "trade_pnl": 2195.67154,
+  "trades": 5
+ },
+ "sma_cross_vector|default": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12365.37659,
+  "trade_pnl": 2365.37659,
+  "trades": 5
+ },
+ "sma_cross_vector|short_lev2": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12365.37659,
+  "trade_pnl": 2365.37659,
+  "trades": 5
+ },
+ "sma_cross_vector|whole_shares": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 3704.88677,
+  "trade_pnl": 704.88677,
+  "trades": 5
+ },
+ "sma_cross|close_fill": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12451.591875,
+  "trade_pnl": 2451.591875,
+  "trades": 5
+ },
+ "sma_cross|costs": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12195.67154,
+  "trade_pnl": 2195.67154,
+  "trades": 5
+ },
+ "sma_cross|default": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12365.37659,
+  "trade_pnl": 2365.37659,
+  "trades": 5
+ },
+ "sma_cross|short_lev2": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 12365.37659,
+  "trade_pnl": 2365.37659,
+  "trades": 5
+ },
+ "sma_cross|whole_shares": {
+  "clipped": 0,
+  "fills": 10,
+  "final": 3704.88677,
+  "trade_pnl": 704.88677,
+  "trades": 5
+ },
+ "stoch|close_fill": {
+  "clipped": 0,
+  "fills": 81,
+  "final": 9609.143408,
+  "trade_pnl": -390.856592,
+  "trades": 41
+ },
+ "stoch|costs": {
+  "clipped": 0,
+  "fills": 81,
+  "final": 8552.076544,
+  "trade_pnl": -1447.923456,
+  "trades": 41
+ },
+ "stoch|default": {
+  "clipped": 0,
+  "fills": 81,
+  "final": 9570.021133,
+  "trade_pnl": -429.978867,
+  "trades": 41
+ },
+ "stoch|short_lev2": {
+  "clipped": 0,
+  "fills": 81,
+  "final": 9570.021133,
+  "trade_pnl": -429.978867,
+  "trades": 41
+ },
+ "stoch|whole_shares": {
+  "clipped": 0,
+  "fills": 81,
+  "final": 2886.170532,
+  "trade_pnl": -113.829468,
+  "trades": 41
+ },
+ "trend_filter|close_fill": {
+  "clipped": 0,
+  "fills": 62,
+  "final": 13763.326153,
+  "trade_pnl": 3763.326153,
+  "trades": 31
+ },
+ "trend_filter|costs": {
+  "clipped": 0,
+  "fills": 62,
+  "final": 13161.19081,
+  "trade_pnl": 3161.19081,
+  "trades": 31
+ },
+ "trend_filter|default": {
+  "clipped": 0,
+  "fills": 62,
+  "final": 14338.07283,
+  "trade_pnl": 4338.07283,
+  "trades": 31
+ },
+ "trend_filter|short_lev2": {
+  "clipped": 0,
+  "fills": 62,
+  "final": 14338.07283,
+  "trade_pnl": 4338.07283,
+  "trades": 31
+ },
+ "trend_filter|whole_shares": {
+  "clipped": 0,
+  "fills": 63,
+  "final": 4298.2212,
+  "trade_pnl": 1298.2212,
+  "trades": 31
+ },
+ "tsmom|close_fill": {
+  "clipped": 0,
+  "fills": 16,
+  "final": 12466.16063,
+  "trade_pnl": 2466.16063,
+  "trades": 8
+ },
+ "tsmom|costs": {
+  "clipped": 0,
+  "fills": 16,
+  "final": 12459.043324,
+  "trade_pnl": 2459.043324,
+  "trades": 8
+ },
+ "tsmom|default": {
+  "clipped": 0,
+  "fills": 16,
+  "final": 12737.591413,
+  "trade_pnl": 2737.591413,
+  "trades": 8
+ },
+ "tsmom|short_lev2": {
+  "clipped": 0,
+  "fills": 16,
+  "final": 12737.591413,
+  "trade_pnl": 2737.591413,
+  "trades": 8
+ },
+ "tsmom|whole_shares": {
+  "clipped": 0,
+  "fills": 16,
+  "final": 3824.864928,
+  "trade_pnl": 824.864928,
+  "trades": 8
+ },
+ "turn_of_month|close_fill": {
+  "clipped": 0,
+  "fills": 240,
+  "final": 12355.978836,
+  "trade_pnl": 2355.978836,
+  "trades": 120
+ },
+ "turn_of_month|costs": {
+  "clipped": 0,
+  "fills": 240,
+  "final": 8672.253562,
+  "trade_pnl": -1327.746438,
+  "trades": 120
+ },
+ "turn_of_month|default": {
+  "clipped": 0,
+  "fills": 240,
+  "final": 12109.983733,
+  "trade_pnl": 2109.983733,
+  "trades": 120
+ },
+ "turn_of_month|short_lev2": {
+  "clipped": 0,
+  "fills": 240,
+  "final": 12109.983733,
+  "trade_pnl": 2109.983733,
+  "trades": 120
+ },
+ "turn_of_month|whole_shares": {
+  "clipped": 0,
+  "fills": 241,
+  "final": 3611.393362,
+  "trade_pnl": 611.393362,
+  "trades": 120
+ },
+ "vol_target|close_fill": {
+  "clipped": 0,
+  "fills": 2065,
+  "final": 14460.299406,
+  "trade_pnl": 4460.299406,
+  "trades": 1
+ },
+ "vol_target|costs": {
+  "clipped": 0,
+  "fills": 565,
+  "final": 12983.350934,
+  "trade_pnl": 2983.350934,
+  "trades": 1
+ },
+ "vol_target|default": {
+  "clipped": 0,
+  "fills": 565,
+  "final": 14531.146163,
+  "trade_pnl": 4531.146163,
+  "trades": 1
+ },
+ "vol_target|short_lev2": {
+  "clipped": 0,
+  "fills": 565,
+  "final": 14531.146163,
+  "trade_pnl": 4531.146163,
+  "trades": 1
+ },
+ "vol_target|whole_shares": {
+  "clipped": 0,
+  "fills": 582,
+  "final": 4331.756538,
+  "trade_pnl": 1331.756538,
+  "trades": 1
+ },
+ "zscore_ls|close_fill": {
+  "clipped": 0,
+  "fills": 104,
+  "final": 10039.839405,
+  "trade_pnl": 39.839405,
+  "trades": 52
+ },
+ "zscore_ls|costs": {
+  "clipped": 0,
+  "fills": 104,
+  "final": 8623.330641,
+  "trade_pnl": -1376.669359,
+  "trades": 52
+ },
+ "zscore_ls|default": {
+  "clipped": 0,
+  "fills": 104,
+  "final": 9974.338609,
+  "trade_pnl": -25.661391,
+  "trades": 52
+ },
+ "zscore_ls|short_lev2": {
+  "clipped": 0,
+  "fills": 278,
+  "final": 7204.643553,
+  "trade_pnl": -2795.356447,
+  "trades": 109
+ },
+ "zscore_ls|whole_shares": {
+  "clipped": 0,
+  "fills": 104,
+  "final": 2958.444046,
+  "trade_pnl": -41.555954,
+  "trades": 52
+ }
+}

@@ -157,6 +157,33 @@ def on_bar(ctx):
     stop = ctx.state["peak"] - PARAMS["atr_mult"] * a
     return 0.0 if ctx.price < stop else None
 
+#%% id: bracket
+#%% name: Breakout with Stop-Loss & Target
+#%% group: Breakout
+#%% about: Enter on a stop order just above the 20-day high, then exit with a bracket: a stop-loss 2 ATRs below the entry & a take-profit 3 ATRs above, whichever comes first.
+# Resting orders fill inside the next bar when its range reaches them:
+#   ctx.order(qty, stop=price)                buy when the price rises to `price`
+#   ctx.order_target_shares(0, limit=price)   sell everything at `price` or better
+# tif="gtc" keeps an order until it fills or is cancelled (the default lasts one bar),
+# and orders with the same oco name cancel each other when one of them fills.
+
+PARAMS = {"n": 20, "atr_n": 14, "stop_atr": 2.0, "target_atr": 3.0, "buffer": 0.005}
+
+def on_bar(ctx):
+    high = ctx.highest(PARAMS["n"])
+    a = ctx.atr(PARAMS["atr_n"])
+    if isnan(high) or isnan(a):
+        return None
+    if ctx.is_flat:
+        ctx.cancel_all()                                   # clear any leftover exit order
+        trigger = high * (1 + PARAMS["buffer"])
+        ctx.order(ctx.equity * 0.98 / trigger, stop=trigger)  # a day order, placed again each bar
+    elif not ctx.open_orders:                              # just filled: place the bracket once
+        entry = ctx.entry_price
+        ctx.order_target_shares(0, stop=entry - PARAMS["stop_atr"] * a, tif="gtc", oco="exit")
+        ctx.order_target_shares(0, limit=entry + PARAMS["target_atr"] * a, tif="gtc", oco="exit")
+    return None
+
 #%% id: rsi_reversion
 #%% name: RSI Oversold
 #%% group: Mean Reversion
@@ -464,3 +491,121 @@ def signals(data):
     prob = walk_forward(features(data), y, fit_predict, min_train=PARAMS["min_train"],
                         retrain_every=PARAMS["retrain"], horizon=h)
     return [1.0 if p > PARAMS["threshold"] else 0.0 for p in prob]
+
+#%% id: pf_equal_weight
+#%% name: Equal Weight, Monthly Rebalance
+#%% group: Portfolio
+#%% about: Hold every instrument in the universe at the same weight and rebalance on the first day of each month. The portfolio baseline.
+# A portfolio strategy lists its instruments in UNIVERSE (change them in the Market panel)
+# and returns {ticker: target weight}. Tickers left out of the dict go to zero.
+# ctx['SPY'] is one instrument: ctx['SPY'].close, ctx['SPY'].sma(50), ctx['SPY'].position ...
+
+UNIVERSE = ["SPY", "EFA", "EEM", "TLT", "GLD"]
+PARAMS = {}
+
+def on_bar(ctx):
+    if ctx.state.get("month") == ctx.day.month:
+        return None                              # None = keep the current holdings
+    ctx.state["month"] = ctx.day.month
+    live = [t for t in ctx.tickers if ctx[t].listed]
+    return {t: 1 / len(live) for t in live}
+
+#%% id: pf_momentum
+#%% name: Cross-Sectional Momentum (Top N)
+#%% group: Portfolio
+#%% about: Each month, rank the universe by its 12-month return (skipping the last month) and hold the best 3 equally weighted.
+# Classic "12-1" momentum: the most recent month is skipped because short-term returns
+# tend to reverse. Instruments without a full year of history are left out of the ranking.
+
+UNIVERSE = ["SPY", "IWM", "EFA", "EEM", "TLT", "IEF", "GLD", "SLV", "USO", "XLK", "XLF", "XLE", "XLV"]
+PARAMS = {"lookback": 252, "skip": 21, "top": 3}
+
+def on_bar(ctx):
+    if ctx.state.get("month") == ctx.day.month:
+        return None
+    ctx.state["month"] = ctx.day.month
+    look, skip = PARAMS["lookback"], PARAMS["skip"]
+    scores = {}
+    for t in ctx.tickers:
+        c = ctx[t].close
+        if len(c) > look:
+            scores[t] = c[-1 - skip] / c[-1 - look] - 1
+    if len(scores) < PARAMS["top"]:
+        return {}                                # not enough history yet: hold cash
+    best = sorted(scores, key=scores.get, reverse=True)[:PARAMS["top"]]
+    return {t: 1 / len(best) for t in best}
+
+#%% id: pf_risk_parity
+#%% name: Inverse-Volatility Risk Parity
+#%% group: Portfolio
+#%% about: Weight each instrument by 1 / its recent volatility so each contributes roughly the same risk; rebalanced monthly.
+# Bonds are much calmer than stocks, so they get bigger weights. This ignores
+# correlations: it's the simple "naive risk parity" most funds start from.
+
+UNIVERSE = ["SPY", "EFA", "TLT", "IEF", "GLD"]
+PARAMS = {"lookback": 63}
+
+def on_bar(ctx):
+    if ctx.state.get("month") == ctx.day.month:
+        return None
+    ctx.state["month"] = ctx.day.month
+    inv = {}
+    for t in ctx.tickers:
+        v = ctx[t].vol(PARAMS["lookback"])
+        if not isnan(v) and v > 0:
+            inv[t] = 1 / v
+    total = sum(inv.values())
+    return {t: x / total for t, x in inv.items()} if total else {}
+
+#%% id: pf_pairs
+#%% name: Pairs Trade (Stat Arb)
+#%% group: Portfolio
+#%% about: Trade the spread between XOM & the energy ETF XLE: when it is 2 std away from normal, short the rich leg & buy the cheap one. Turn on shorting in settings.
+# The spread is the log price ratio. Its z-score over the lookback says how stretched it is.
+# Entry at |z| > entry, exit when |z| < exit. Each leg gets half of the gross exposure.
+
+UNIVERSE = ["XOM", "XLE"]
+PARAMS = {"lookback": 60, "entry": 2.0, "exit": 0.5, "gross": 1.0}
+
+def signals(data):
+    a, b = UNIVERSE
+    pa, pb = data[a].close, data[b].close
+    spread = [math.log(x / y) if x == x and y == y else NAN for x, y in zip(pa, pb)]
+    z = qt.zscore(spread, PARAMS["lookback"])
+    half = PARAMS["gross"] / 2
+    rows, side = [], 0
+    for zi in z:
+        if isnan(zi):
+            side = 0
+        elif side == 0 and zi > PARAMS["entry"]:
+            side = -1                           # spread rich: short a, buy b
+        elif side == 0 and zi < -PARAMS["entry"]:
+            side = 1                            # spread cheap: buy a, short b
+        elif side != 0 and abs(zi) < PARAMS["exit"]:
+            side = 0
+        rows.append({a: side * half, b: -side * half})
+    return rows
+
+#%% id: pf_long_short
+#%% name: Long/Short Momentum (Dollar Neutral)
+#%% group: Portfolio
+#%% about: Each month buy the 3 strongest stocks & short the 3 weakest by 6-month return, with equal long & short dollars. Turn on shorting in settings.
+# Market-neutral: the long and short books are the same size, so the market's
+# direction mostly cancels and what's left is the spread between winners and losers.
+
+UNIVERSE = ["AAPL", "MSFT", "NVDA", "AMZN", "JPM", "XOM", "KO", "XLF", "XLE", "XLV", "XLK"]
+PARAMS = {"lookback": 126, "n": 3, "book": 0.5}
+
+def on_bar(ctx):
+    if ctx.state.get("month") == ctx.day.month:
+        return None
+    ctx.state["month"] = ctx.day.month
+    look, n = PARAMS["lookback"], PARAMS["n"]
+    scores = {t: ctx[t].roc(look) for t in ctx.tickers if not isnan(ctx[t].roc(look))}
+    if len(scores) < 2 * n:
+        return {}
+    ranked = sorted(scores, key=scores.get)
+    w = PARAMS["book"] / n
+    out = {t: w for t in ranked[-n:]}            # strongest: long
+    out.update({t: -w for t in ranked[:n]})      # weakest: short
+    return out

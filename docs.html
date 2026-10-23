@@ -96,11 +96,15 @@ kbd { font-family: var(--f-mono); font-size: 0.8em; border: 1px solid var(--bord
       <li><a href="#ctx">The ctx Object</a></li>
       <li><a href="#indicators">Indicators</a></li>
       <li><a href="#signals">Vectorized Signals</a></li>
+      <li><a href="#portfolios">Portfolios</a></li>
       <li><a href="#ml">Machine Learning</a></li>
       <li><a href="#execution">Execution & Costs</a></li>
       <li><a href="#statistics">Statistics</a></li>
       <li><a href="#strategies">Built-In Strategies</a></li>
       <li><a href="#tools">Research Tools</a></li>
+      <li><a href="#audit">Saving, Exporting &amp; Auditing</a></li>
+      <li><a href="#paper">Paper Trading</a></li>
+      <li><a href="#collab">Sharing &amp; Reviews</a></li>
       <li><a href="#pitfalls">Pitfalls</a></li>
       <li><a href="#running">Running It Yourself</a></li>
       <li><a href="#layout">How the Code Is Organized</a></li>
@@ -130,7 +134,7 @@ def on_bar(ctx):
     <p>Editor shortcuts: <kbd>Tab</kbd> and <kbd>Shift</kbd>+<kbd>Tab</kbd> indent, <kbd>Ctrl</kbd>+<kbd>/</kbd> toggles comments, <kbd>Ctrl</kbd>+<kbd>S</kbd> saves the strategy in this browser. Press <kbd>Esc</kbd> then <kbd>Tab</kbd> to move focus out of the editor. Your current draft is kept automatically.</p>
 
     <h2 id="data">Getting Data</h2>
-    <p>QuantLab reads the CSV export from Nasdaq.com’s historical quotes page. Columns are <code>Date, Close/Last, Volume, Open, High, Low</code>, newest row first, and prices may start with <code>$</code>. Yahoo Finance exports (<code>Date, Open, High, Low, Close, Adj Close, Volume</code>) also work. When <code>Adj Close</code> is present, all prices are scaled by it so dividends and splits are included.</p>
+    <p>QuantLab reads the CSV export from Nasdaq.com’s historical quotes page. Columns are <code>Date, Close/Last, Volume, Open, High, Low</code>, newest row first, and prices may start with <code>$</code>. Yahoo Finance exports (<code>Date, Open, High, Low, Close, Adj Close, Volume</code>) also work. The raw close is always the trading price; an <code>Adj Close</code> column is used only to work out the dividends (see below). The browser and the Python engine read files with exactly the same rules.</p>
     <ol>
       <li>Open <code>https://www.nasdaq.com/market-activity/etf/spy/historical</code>. Stocks use <code>/stocks/aapl/historical</code> instead.</li>
       <li>Choose <b>10Y</b>, the longest range offered, and download.</li>
@@ -138,7 +142,37 @@ def on_bar(ctx):
     </ol>
     <p>Uploaded files are stored in your browser (IndexedDB) and reappear the next time you open QuantLab in the same browser. To bundle files with the site for everyone, put them in <code>data/</code> and list them in <code>data/manifest.json</code>.</p>
     <p>The suggested starting set covers the main asset classes: <code>SPY QQQ IWM DIA</code> (US stocks), <code>TLT IEF SHY</code> (Treasuries), <code>GLD SLV USO</code> (commodities), <code>EFA EEM</code> (international), <code>XLK XLF XLE XLV</code> (sectors), and <code>AAPL MSFT NVDA AMZN JPM XOM KO</code> (single stocks).</p>
-    <div class="note"><p><b>Dividends.</b> Nasdaq's Close/Last is adjusted for splits but not for dividends. Buy-and-hold results for dividend payers such as SPY (about 1.3% a year) or TLT (about 3–4%) are therefore understated. Strategies and benchmarks are measured on the same prices, so comparisons between them stay fair.</p></div>
+    <h3 id="total-return">Dividends &amp; Total Return</h3>
+    <p>Nasdaq's Close/Last is adjusted for splits but <b>not for dividends</b>, so on its own it understates the return of SPY by about 1.3% a year and of bond ETFs by 3–4%. QuantLab trades on the real price and pays dividends into the account on each ex-date, so P&amp;L is total return while your signals see the prices a trader would have seen. Short positions pay the dividend. The benchmark reinvests dividends. Dividends come from:</p>
+    <ul>
+      <li>an <b>Adj Close</b> column (Yahoo Finance): the dividend on each ex-date is recovered from the step in the adjustment factor, <code>D = close[t-1] × (1 − F[t-1] / F[t])</code> with <code>F = adj / close</code>;</li>
+      <li>a <b>dividend history file</b> dropped on the Data tab, e.g. Nasdaq's Dividend History export or Yahoo's <code>Date,Dividends</code>. Name it <code>SPY_dividends.csv</code> to attach it automatically.</li>
+    </ul>
+    <p>A <b>split history</b> (<code>Date,Stock Splits</code> with values like <code>4:1</code>) is applied only if the prices jump by about the ratio at the split, i.e. they are unadjusted; already-adjusted prices are left alone. Runs on instruments without dividend data say so in the results (<b>Dividends missing</b>). The bundled files are Nasdaq downloads and carry no dividends. <b>Pay dividends</b> under Account &amp; Execution turns all of this off for price-only results.</p>
+    <h3 id="other-files">Other File Layouts &amp; Parquet</h3>
+    <p>Besides Nasdaq and Yahoo CSVs, the Data tab reads price tables with any delimiter (comma, semicolon, tab or <code>|</code>), decimal commas (<code>1.234,56</code>), European dates (<code>31.12.2024</code>) and other column names (<i>Datetime</i>, <i>Last Price</i>, <i>Settle</i>, <i>o/h/l/c/v</i> …), in <code>.csv</code>, <code>.tsv</code> or <code>.txt</code> files. When it can't tell which column is which, it asks you to map the Date, Time, Open, High, Low, Close and Volume columns. <b>Parquet</b> files are read with pandas and fastparquet, which download from the Pyodide CDN the first time (about 20&nbsp;MB). In Python, <code>engine.load_table("prices.parquet")</code> or <code>engine.load_table("prices.txt", mapping={"date": "Fecha", "close": "Cierre"})</code> does the same.</p>
+    <h3 id="calendars">Calendars, Crypto &amp; Intraday Bars</h3>
+    <p>Statistics are annualized with each instrument's bars per year: trading days a year × bars per day. Daily data that trades on weekends (crypto) uses 365 days; other daily data uses the usual 252. The <b>Calendar</b> column on the Data tab shows what was detected and lets you choose: <i>NYSE</i> (252), <i>Weekdays</i> (260, e.g. FX) or <i>Every day</i> (365). A portfolio uses the busiest calendar among its instruments. Each run records the calendars it used.</p>
+    <p><b>Intraday bars</b> load from files whose dates carry a time: <code>2024-01-02 09:30</code>, <code>2024-01-02T09:30:00Z</code>, <code>01/02/2024 1:05 PM</code>, separate <i>Date</i> and <i>Time</i> columns, or Unix seconds or milliseconds (as TradingView exports). Times are taken as written (a time-zone suffix is ignored); a midnight time counts as a daily bar. With intraday bars, indicator lengths count bars, <code>ctx.time</code> is the bar's time (<code>"09:30"</code>; <code>None</code> for daily data), annualization multiplies by the median bars per day (78 for 5-minute US equity bars), interest on cash accrues once per calendar day, dividends are paid on the first bar of their ex-date, the From/To dates include the whole day, and a daily benchmark only moves once its day has closed.</p>
+    <h3 id="futures">Futures</h3>
+    <p>Set an instrument's <b>Type</b> to <i>Future</i> on the Data tab and positions in it take no cash: the cash stays in the account as collateral and earns interest, so a futures position's return is its price change plus interest, as with a real margin account. Shorting a future pays no borrow fee, and leverage through futures borrows no cash; the notional still counts toward gross exposure, Max Leverage and margin calls. Sizes are in units of the price (index points, barrels …), so leave <i>Fractional shares</i> on, or use a multiplier-adjusted price series for whole contracts.</p>
+    <p><b>Continuous Futures</b> on the Data tab stitches single-contract files into one series. It rolls either a set number of bars before each contract's last bar (on a day both trade) or on the first day the next contract trades more volume, and back-adjusts the history at each roll: <i>ratio</i> multiplies earlier prices by new ÷ old (returns stay exact and prices positive), <i>difference</i> adds the gap (point changes stay exact; long histories can go below zero, and those bars are dropped), <i>none</i> splices raw prices so the roll gaps show up as returns. The roll happens at the roll day's close: that day's return is the old contract's. In Python: <code>engine.continuous_futures([esh, esm, esu], "ES", roll="days", days_before=5, adjust="ratio")</code>; its <code>.rolls</code> lists every roll and gap.</p>
+    <h3 id="currencies">Other Currencies</h3>
+    <p>Set an instrument's <b>Currency</b> on the Data tab when its prices aren't in the account's <b>Base Currency</b> (Account &amp; Execution; USD by default). Runs then convert its prices and dividends with a loaded FX price series: <code>EURUSD</code> (dollars per euro) multiplies, <code>USDEUR</code> divides, and Yahoo names such as <code>EURUSD=X</code> work too. Each bar uses the FX close of the same day (the previous day's for intraday bars with daily FX data); bars before the FX history starts are left out. The conversion is unhedged, so returns include the currency's moves, and the run notes say which series was used. Volume stays in shares and fundamentals in their own currency. In Python: set <code>ds.currency = "EUR"</code> and call <code>engine.in_base(ds, "USD")</code>, or <code>engine.to_base_currency(ds, fx)</code>.</p>
+    <h3 id="fundamentals">Point-in-Time Fundamentals</h3>
+    <p>Drop a CSV of fundamentals on the Data tab: a date each value became known (a column named <i>Filing Date</i>, <i>Filed</i>, <i>Available</i>, <i>Report Date</i>, <i>Announcement Date</i> or <i>Acceptance Date</i>), optionally <i>Period End</i>, one column per field (<code>EPS</code>, <code>Revenue</code>, <code>Book Value</code> …; text columns are ignored) and, for several instruments in one file, a <i>Ticker</i> or <i>Symbol</i> column. Without one, the ticker comes from the file name (<code>AAPL_fundamentals.csv</code>) or you pick it. Field names become lower case with <code>_</code>: <code>Book Value</code> → <code>book_value</code>.</p>
+<pre><code>def on_bar(ctx):
+    eps = ctx.fundamental("eps")          # NaN until the first filing is known
+    return 1.0 if ctx.price / eps &lt; 15 else 0.0
+
+def signals(data):                       # one value per bar, point in time
+    eps = data.fundamental("eps")        # portfolios: data["AAPL"].fundamental("eps")
+    ...</code></pre>
+    <p>A value counts from the first bar <i>after</i> the day it became known, because filings often come out after the close; the strategy can trade on it at the next bar's open at the earliest. A row with only a period end is assumed known 45 days later, with a warning: using period-end dates is one of the most common sources of look-ahead in fundamental backtests. Restated values are fine as separate rows with their own dates. <code>ctx.fundamentals</code> gives every loaded field at once.</p>
+    <h3 id="survivorship">Delistings &amp; Survivorship</h3>
+    <p>When an instrument's data ends before the backtest does (delisted, acquired, or a file that is simply out of date), its position is closed on the next bar at its last close, with no costs, and it can't be traded again; the run notes say so. <code>engine.Config(delisting_return=-0.3)</code> books a loss on that last price instead, as studies of delisted stocks suggest for failures. A portfolio of three or more instruments that all trade to the end of a test of three years or more gets a <b>survivorship bias</b> note: a universe picked today leaves out the names that disappeared. The cure is data that includes them.</p>
+    <h3 id="quality">Data Quality</h3>
+    <p>Every instrument is checked when it loads, and the Data tab lists what was found. Nothing is dropped silently: rows without a valid date and positive close are skipped and counted, impossible highs/lows are widened and counted, and duplicates keep the later row. The checks against the exchange calendar (NYSE holidays and special closures; every day for crypto that trades on weekends) report missing sessions and bars on closed days. Runs of identical closes are flagged as stale, and one-day moves above 12% that are also 8 standard deviations from the last 60 days are flagged as possible unadjusted splits or bad prints.</p>
 
     <h2 id="strategy-api">Writing a Strategy</h2>
     <p>Your code is ordinary Python 3.12. It must define <code>on_bar(ctx)</code>, or <code>signals(data)</code> for the <a href="#signals">vectorized style</a>. A few names are available without importing them: <code>math</code>, <code>statistics</code>, <code>random</code>, <code>datetime</code>, <code>qt</code> (indicator functions), <code>walk_forward</code> (see <a href="#ml">Machine Learning</a>), <code>isnan</code> and <code>NAN</code>. The rest of the standard library can be imported normally, and so can NumPy, pandas, SciPy and scikit-learn.</p>
@@ -162,7 +196,23 @@ def on_bar(ctx):
     <p>To think in shares instead, call these and return nothing:</p>
 <pre><code>ctx.order(10)               # buy 10 shares (negative sells)
 ctx.order_target_shares(0)  # end up with exactly 0 shares</code></pre>
-    <p>Orders that need more cash than you have are reduced to what you can afford. Sells beyond your position are reduced too, unless shorting is on. Each reduction is counted in the <b>Orders reduced</b> statistic. If on_bar returns a weight, that weight wins over any share orders from the same bar.</p>
+    <p>Orders that need more cash than you have are reduced to what you can afford. Sells beyond your position are reduced too, unless shorting is on. Each reduction is counted in the <b>Orders reduced</b> statistic. If on_bar returns a weight, that weight wins over any market orders from the same bar.</p>
+
+    <h3 id="order-types">Limit, Stop &amp; Bracket Orders</h3>
+    <p>Both order functions take options. Market orders fill at the next bar's open (or close); orders with a price rest and fill <i>inside</i> a later bar when its range reaches them.</p>
+<pre><code>ctx.order(10, limit=99.5)                    # buy at 99.5 or better
+ctx.order(10, stop=105)                      # buy once the price rises to 105
+ctx.order(10, stop=105, limit=106)           # stop-limit: triggered at 105, no higher than 106
+ctx.order(10, at="close")                    # market on the next close (at="open": on the open)
+oid = ctx.order(-5, limit=110, tif="gtc")    # good till cancelled; ctx.cancel(oid), ctx.cancel_all()
+ctx.order_target_shares(0, stop=95, tif="gtc", oco="exit")    # a bracket: whichever fills first
+ctx.order_target_shares(0, limit=110, tif="gtc", oco="exit")  # cancels the other</code></pre>
+    <ul>
+      <li><b>Fill price.</b> A buy limit fills when the bar's low reaches the limit, at the limit, or at the open if the bar opens below it. A stop triggers when the high (low, for sells) reaches it and fills at the stop, or at the open after a gap. A stop-limit that triggers above its limit fills only if the price comes back to the limit.</li>
+      <li><b>Which order first.</b> The bar is treated as a path from the open to the nearer extreme, the other extreme, then the close; orders fill in the order the path reaches them. With <b>Pessimistic</b> fills, a long position's path visits the low first and a short's the high first, so a bar that touches both a stop and a target hits the stop; a limit must trade through its price, not just touch it, and a stop-limit that gaps past its limit waits for a later bar.</li>
+      <li><b>Lifetime.</b> <code>tif="day"</code> (the default) lives for the next bar only; <code>"gtc"</code> until it fills or is cancelled. <code>ctx.open_orders</code> lists resting orders. Target orders are sized when they fill, so an exit never turns into a new position, and one with nothing left to exit is dropped.</li>
+      <li><b>Costs.</b> Market orders and triggered stops pay slippage, half the spread and impact. Limit fills provide liquidity and pay commission only.</li>
+    </ul>
 
     <h3>Parameters, Memory & Setup</h3>
 <pre><code>PARAMS = {"fast": 20, "slow": 100}   # numbers here can be swept in Research tools
@@ -175,7 +225,40 @@ def on_bar(ctx):
     if ctx.price &lt; 0.9 * ctx.state["peak"]:
         return 0.0
     return 1.0 if ctx.sma(PARAMS["fast"]) &gt; ctx.sma(PARAMS["slow"]) else 0.0</code></pre>
-    <p><code>print()</code> and <code>ctx.log(...)</code> output appears in the <b>Output</b> panel under the results. <code>ctx.log</code> prefixes each line with the bar's date. If your code raises an error, the message, the line number and the bar's date are shown, and the line is marked in the editor.</p>
+    <p><code>print()</code> and <code>ctx.log(...)</code> output appears in the <b>Output</b> panel under the results. <code>ctx.log</code> prefixes each line with the bar's date. If your code raises an error, the message, the line number and the bar's date are shown, and the line is marked in the editor. The Output panel shows the first and last 20,000 characters of long output; <b>Download Full Output</b> saves all of it (up to 5&nbsp;MB).</p>
+
+    <h3 id="modules">Modules: Code Shared Between Strategies</h3>
+    <p>A module is a Python file in your browser's module library that any strategy can import. Click <b>Modules</b> above the editor, enter a name such as <code>my_signals</code> and press <b>Create</b>; the module opens in its own tab. Then, in a strategy:</p>
+<pre><code>from my_signals import trend        # or: import my_signals
+
+def on_bar(ctx):
+    return trend(ctx, 50)</code></pre>
+    <p>Modules get the same helpers as strategies (<code>qt</code>, <code>isnan</code>, <code>math</code> …) and may import each other and any package. Every run imports them afresh, so a module-level variable never carries over from one run to the next. Runs use the text in the editor, saved or not; <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> saves the visible module to the library, and an orange dot marks a tab with unsaved changes. A module can't take the name of a Python or QuantLab module (<code>math</code>, <code>numpy</code>, <code>engine</code> …). Errors inside a module open it at the failing line. Each run records a SHA-256 of every module it imported; <b>Re-run</b> in the History tab uses the recorded versions, and <b>Restore</b> opens them in tabs where they differ from yours. Modules are part of workspace backups and of <a href="#github">GitHub Sync</a>.</p>
+
+    <h3 id="editor">Editor</h3>
+    <ul>
+      <li><b>Problems.</b> A moment after you stop typing, the visible file is checked with pyflakes (bundled, loaded on first use) for undefined names, unused imports and variables, and similar mistakes, plus QuantLab's own checks: a missing <code>on_bar</code>/<code>signals</code>, and <code>ctx</code> attributes that don't exist (<code>ctx.smaa(20)</code> → “did you mean sma?”). Marked lines are highlighted in the gutter; hover a line number for the message. The full editor lists all problems; the Backtest tab shows the first under the editor.</li>
+      <li><b>Completions.</b> Typing after <code>ctx.</code>, <code>ctx["SPY"].</code>, <code>qt.</code>, <code>data.</code> or a module name lists what is there, with signatures and the first line of the documentation; at the top level it suggests your own names, imported names and Python's. <kbd>Ctrl</kbd>+<kbd>Space</kbd> opens the list anywhere; <kbd>↑</kbd> <kbd>↓</kbd> choose, <kbd>Enter</kbd> or <kbd>Tab</kbd> accept.</li>
+      <li><b>Go to definition.</b> <kbd>F12</kbd>, or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>-click, on a name jumps to its <code>def</code>, <code>class</code> or assignment, opening the module it was imported from if needed. On a <code>ctx</code> or <code>qt</code> name it shows the signature and documentation.</li>
+      <li><b>Find &amp; replace.</b> <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> finds, <kbd>Ctrl</kbd>+<kbd>H</kbd> (<kbd>⌘</kbd>+<kbd>⌥</kbd>+<kbd>F</kbd> on a Mac) replaces. <b>Aa</b> matches case, <b>.*</b> uses a regular expression (<code>$1</code> in the replacement inserts a group). <kbd>Enter</kbd> and <kbd>Shift</kbd>+<kbd>Enter</kbd> step through matches; <b>All</b> replaces every match in one step you can undo.</li>
+      <li><b>Console.</b> On the full editor page, the Console runs Python in the same engine as your backtests. <code>data</code> is the market selected on the Backtest tab, as <code>signals(data)</code> sees it; <code>result</code> is the backtest on screen, with <code>.equity</code>, <code>.trades</code>, <code>.fills</code> and <code>.weights</code>; <code>summarize(result)</code> recomputes its statistics. Variables persist until <b>Reset</b>. A final expression is printed, as at the Python prompt.</li>
+    </ul>
+
+    <h3 id="testing">Testing a Strategy</h3>
+    <p>Functions named <code>test_…</code> in a strategy or module are tests; backtests ignore them. <b>Run Tests</b> on the full editor runs those in the visible file and shows which passed, with the failing line and message for the rest. Tests use plain <code>assert</code> and can use these helpers:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Helper</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>make_data(close, open=None, high=None, low=None, volume=None, start="2020-01-02")</code></td><td>A price history from lists, on consecutive weekdays: the situation you want to test.</td></tr>
+        <tr><td><code>synthetic_data(n=500, seed=0, drift=0.0003, vol=0.01)</code></td><td>A reproducible random walk with opens, highs, lows and volume.</td></tr>
+        <tr><td><code>run_strategy(data, params=None, **settings)</code></td><td>Backtests this file's strategy on <code>data</code> (a list of them for a portfolio) and returns the result: <code>.equity</code>, <code>.exposure</code>, <code>.trades</code>, <code>.fills</code>. Settings are those of <code>engine.Config</code>, e.g. <code>slippage_bps=0</code>. In a module, pass <code>code="..."</code>.</td></tr>
+        <tr><td><code>metrics(result)</code></td><td>The statistics dictionary (<code>sharpe</code>, <code>max_drawdown</code> …).</td></tr>
+        <tr><td><code>assert_close(a, b, tol=1e-9)</code></td><td>Numbers or lists equal within a relative tolerance.</td></tr>
+      </tbody>
+    </table></div>
+<pre><code>def test_flat_in_a_downtrend():
+    res = run_strategy(make_data([200 - i for i in range(300)]))
+    assert max(res.exposure) == 0, "a falling market should never trigger a buy"</code></pre>
 
     <h2 id="ctx">The ctx Object</h2>
     <p>On each bar, <code>ctx</code> holds everything known at that day's close, and nothing from later days.</p>
@@ -188,6 +271,7 @@ def on_bar(ctx):
         <tr class="group"><td colspan="2">Time</td></tr>
         <tr><td><code>ctx.date</code></td><td>Today as text, e.g. <code>"2024-03-15"</code>.</td></tr>
         <tr><td><code>ctx.day</code></td><td>Today as a <code>datetime.date</code>: <code>ctx.day.month</code>, <code>ctx.day.day</code>, <code>ctx.day.year</code>.</td></tr>
+        <tr><td><code>ctx.time</code></td><td>The bar's time of day for intraday data, e.g. <code>"15:55"</code>; <code>None</code> for daily bars. <code>ctx.date</code> is then the full stamp, e.g. <code>"2024-03-15T15:55"</code>.</td></tr>
         <tr><td><code>ctx.weekday</code></td><td>0 = Monday … 4 = Friday.</td></tr>
         <tr><td><code>ctx.i</code>, <code>ctx.bar</code></td><td>Index in the full history, and bars since the backtest's start date (0 on the first bar).</td></tr>
         <tr class="group"><td colspan="2">Account</td></tr>
@@ -241,6 +325,19 @@ def on_bar(ctx):
     return [1.0 if f &gt; s else 0.0 for f, s in zip(fast, slow)]</code></pre>
     <p>The engine still applies weight <code>i</code> on bar <code>i + 1</code>. However, nothing stops <code>signals</code> from reading <code>data.close[i + 1]</code> by mistake. To catch that, QuantLab re-runs your function on histories cut off at several dates and compares the results. If any weight changes, the run is flagged <b>Look-ahead detected</b>, and its numbers are not achievable.</p>
 
+    <h2 id="portfolios">Portfolios</h2>
+    <p>A strategy that defines <code>UNIVERSE</code> is a portfolio strategy. The Market panel then picks several instruments, starting from that list, and the backtest runs them together on one calendar: the union of their trading days. An instrument can't trade before its first bar or on a day it has no bar; it is valued at its last price in between. Indicators use each instrument's own bars.</p>
+<pre><code>UNIVERSE = ["SPY", "TLT", "GLD"]
+
+def on_bar(ctx):
+    if ctx.state.get("month") == ctx.day.month:
+        return None                               # keep everything
+    ctx.state["month"] = ctx.day.month
+    up = [t for t in ctx.tickers if ctx[t].price &gt; ctx[t].sma(200)]
+    return {t: 1 / len(up) for t in up}             # tickers left out go to 0</code></pre>
+    <p><code>ctx['SPY']</code> has everything a single-instrument ctx has: prices, every indicator, <code>position</code>, <code>weight</code>, <code>is_long</code>, <code>entry_price</code>, <code>order()</code>. The portfolio ctx adds <code>ctx.tickers</code>, <code>ctx.weights</code>, <code>ctx.positions</code>, <code>ctx.gross</code> and <code>ctx.net</code>. Return a dict of weights, a list in ticker order, or <code>None</code>. <code>signals(data)</code> works too: <code>data['SPY'].close</code> is a list on the shared calendar (NaN before the first bar), <code>data.array('close')</code> a NumPy matrix, and it returns <code>{ticker: [weight per bar]}</code> or one dict per bar.</p>
+    <p>Weights whose absolute values add up to more than the leverage limit are scaled down together. Sells execute before buys, and buys share the cash. The results show a <b>Weights</b> chart and an <b>Attribution</b> table: each instrument's P&amp;L (trades, costs, dividends and borrow fees), which with interest on cash adds up exactly to the account's P&amp;L. Without a benchmark the comparison is an equal-weight portfolio of the same instruments, rebalanced daily. In Python use <code>engine.backtest_portfolio(strategy, [ds1, ds2, ...])</code>.</p>
+
     <h2 id="ml">Machine Learning</h2>
     <p>Strategies can <code>import numpy</code>, <code>pandas</code>, <code>scipy</code> and <code>sklearn</code> (scikit-learn). QuantLab loads what your code imports the first time you run it. NumPy (12&nbsp;MB) ships with the site. pandas, SciPy and scikit-learn download from the Pyodide CDN on first use: scikit-learn needs SciPy, about 75&nbsp;MB in all. The browser caches them afterwards.</p>
     <p><b>PyTorch and TensorFlow don’t run in browsers</b>: they have no WebAssembly build. There are three ways around that:</p>
@@ -276,6 +373,13 @@ def signals(data):
         <tr><td><code>window</code></td><td>Train on only the most recent <i>n</i> rows (a rolling window) instead of all past rows.</td></tr>
       </tbody>
     </table></div>
+    <p><code>walk_forward(..., embargo=5)</code> also leaves 5 bars between the newest training label and the first prediction, for features that overlap in time.</p>
+    <h3>Cross-Validating a Model</h3>
+    <p>To measure how good a model is (not to trade it), use purged cross-validation. Ordinary k-fold leaks the future when labels span several days; purging drops training rows whose label window overlaps the test fold, and the embargo drops the rows just after it (López de Prado 2018).</p>
+<pre><code>res = cv_score(X, y, fit_predict, score=lambda y_true, y_pred: ..., k=5, horizon=5, embargo=5)
+for train, test in purged_kfold(len(y), k=5, horizon=5, embargo=5): ...
+for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5): ...   # 15 splits, 5 paths</code></pre>
+    <p>These functions train on data after the test fold as well, so their predictions must never be returned from <code>signals</code>: the look-ahead check would flag them.</p>
     <p>Fit any scaling (means, standard deviations) inside <code>fit_predict</code> from the training rows, as the templates do. Scaling with statistics from the whole history leaks the future. Seed anything random (<code>random_state=0</code>, <code>np.random.default_rng(0)</code>) so results repeat; the look-ahead check also needs this. For slow models the look-ahead check samples fewer dates, marked <b>(partial)</b>. Training happens on every run, so retrain monthly or quarterly rather than daily to keep runs fast.</p>
 
     <h2 id="execution">Execution & Costs</h2>
@@ -284,6 +388,7 @@ def signals(data):
       <div><b>Day t+1, at the open</b>The order fills at the open price (or at the close with <i>Orders fill at: Next close</i>), plus slippage and commission.</div>
       <div><b>Day t+1, at the close</b>Equity is marked at the closing price. on_bar runs again.</div>
     </div>
+    <p>Every fill records its <b>arrival price</b>, the close when the order was decided. The <b>Implementation shortfall</b> statistic averages how far fills landed from it, which captures the overnight delay as well as costs, the way trading desks measure execution.</p>
     <p>This one-day delay is the most important rule in backtesting. Deciding and filling at the same price is a common backtest mistake, and it makes results look better than they could be in practice.</p>
     <div class="scroll"><table>
       <thead><tr><th>Setting</th><th>Default</th><th>Effect</th></tr></thead>
@@ -291,18 +396,39 @@ def signals(data):
         <tr><td>Starting cash</td><td>$10,000</td><td>Initial equity. Small accounts with fractional shares off can only buy whole shares.</td></tr>
         <tr><td>Commission bps</td><td>0</td><td>Charged on traded value. 1 bp = 0.01%, so 10 bps on a $10,000 trade is $10.</td></tr>
         <tr><td>Per fill $</td><td>0</td><td>Flat fee on every fill.</td></tr>
-        <tr><td>Slippage bps</td><td>2</td><td>Buys fill this much above the price and sells this much below. It models the bid/ask spread and market impact.</td></tr>
+        <tr><td>Slippage bps</td><td>2</td><td>Buys fill this much above the price and sells this much below, on every market fill.</td></tr>
+        <tr><td>Bid-ask spread bps</td><td>0</td><td>The quoted spread; each market fill pays half of it.</td></tr>
+        <tr><td>Impact coefficient</td><td>1</td><td>Square-root market impact: a fill moves the price by <i>coefficient × σ × √(shares ÷ ADV)</i>, where σ is the daily volatility and ADV the average volume of the 20 bars before the fill. Around 1 matches published estimates for liquid stocks; 0 turns it off. It is negligible for small accounts and dominates for large ones.</td></tr>
+        <tr><td>Max % of volume</td><td>10%</td><td>The most of a bar's volume an order may take. Larger orders fill over several days (counted as <b>Partial fills</b>). 0 removes the limit.</td></tr>
+        <tr><td>Limit &amp; stop fills</td><td>Standard</td><td>Pessimistic changes the fill rules described under <a href="#order-types">order types</a>.</td></tr>
         <tr><td>Orders fill at</td><td>Next open</td><td>Next open or next close.</td></tr>
         <tr><td>Max leverage</td><td>1×</td><td>Largest allowed position value / equity, long or short.</td></tr>
         <tr><td>Rebalance band</td><td>2%</td><td>Weight changes smaller than this share of equity are skipped. Entries and full exits always trade.</td></tr>
-        <tr><td>Risk-free %/yr</td><td>0</td><td>Subtracted in Sharpe, Sortino and alpha. Idle cash does not earn it.</td></tr>
+        <tr><td>Risk-free %/yr</td><td>0</td><td>Subtracted in Sharpe, Sortino and alpha. Idle cash earns it unless you set a cash interest rate.</td></tr>
         <tr><td>Random seed</td><td>42</td><td>Seeds <code>random</code>, so random strategies are reproducible.</td></tr>
+        <tr><td>Pay dividends</td><td>On</td><td>Dividends are paid into the account on ex-dates (total return). Off gives price-only results.</td></tr>
+        <tr><td>Cash interest %/yr</td><td>= risk-free</td><td>Interest on positive cash, accrued every calendar day (ACT/360). A rate series loaded on the Data tab (e.g. FRED DTB3) can be used instead of a fixed rate.</td></tr>
+        <tr><td>Margin spread %/yr</td><td>1</td><td>Borrowed cash (a negative balance from leverage) pays the cash rate plus this.</td></tr>
+        <tr><td>Borrow fee %/yr</td><td>0.25</td><td>Charged daily on the value of short positions; hard-to-borrow names can get their own rate (<code>GME:25</code>). Short sale proceeds sit in cash and earn the cash rate, which is how a short rebate works.</td></tr>
+        <tr><td>Maintenance margin</td><td>25%</td><td>When equity falls below this share of gross exposure, every position is cut at that day's close back to the leverage limit (or 80% of 1 / margin, if lower). Margin calls are listed in the results. If equity reaches zero, everything is closed and trading stops.</td></tr>
         <tr><td>Fractional shares</td><td>On</td><td>When off, positions are rounded toward zero to whole shares.</td></tr>
         <tr><td>Allow shorting</td><td>Off</td><td>When off, negative weights become 0 and sells stop at zero shares.</td></tr>
       </tbody>
     </table></div>
     <p>A <b>trade</b> is a round trip: from flat to a position and back to flat, or a flip from long to short. Adding to or trimming a position stays inside the same trade. A trade’s P&amp;L is the change in account equity from entry to exit, including costs, so the P&amp;L of all trades adds up to the total profit. A position still open on the last day is listed as <i>open</i> and left out of the trade statistics.</p>
     <p>The <b>benchmark</b> is buy-and-hold of the chosen instrument on the same dates, with no costs. If you choose a different benchmark, its prices are matched to your instrument’s dates, carrying forward the last price on any day it didn’t trade.</p>
+
+    <h3 id="sizing">Sizing &amp; Limits</h3>
+    <p>Under <b>Account &amp; Execution → Sizing &amp; Limits</b>, rules resize the strategy's target weights at the close they are decided, using only prices up to that close, before the orders go out. They apply in this order, and every change they make is listed in the <b>Constraint Log</b> under the results:</p>
+    <ol>
+      <li><b>Target volatility</b> multiplies the weights by <i>target ÷ volatility</i>, where volatility is that of the daily returns the proposed weights would have earned over the lookback (63 days by default), annualized. <b>Fraction of Kelly</b> multiplies them by <i>fraction × mean ÷ variance</i> of the same returns (never below 0). Neither goes beyond Max Leverage, and neither acts before a third of the lookback is available.</li>
+      <li><b>De-risk at drawdown</b>: once equity closes that far below its high, weights are multiplied by the de-risked size until the drawdown is back within half the trigger. The switch resizes the latest targets at once, even if the strategy issues no new ones.</li>
+      <li><b>Max per instrument</b> caps each |weight|; <b>Max net</b> scales the larger side so |longs − shorts| fits; <b>Max gross</b> scales everything so the sum of |weights| fits.</li>
+    </ol>
+    <p>Share orders (<code>ctx.order</code>) and resting limit and stop orders aren't resized. The statistics <i>Sizing &amp; limit changes</i>, <i>Time de-risked</i> and <i>Avg. sizing scale</i> summarize the log. In Python: <code>engine.Config(sizing="vol_target", vol_target=0.1, dd_limit=0.15)</code>; the log is <code>result.limits</code>.</p>
+
+    <h3 id="benchmarks">Benchmarks</h3>
+    <p>The <b>Benchmark</b> is buy and hold of the instrument (a single-instrument run), an equal-weight portfolio (a portfolio run), any loaded instrument, or a <b>custom blend</b>: weights in percent such as <code>SPY 60, TLT 40</code>, held with dividends reinvested and rebalanced monthly, quarterly, daily or never. <b>Also Compare With</b> adds up to five more benchmarks (tickers or blends): they appear on the equity chart, and the <b>Relative Performance</b> panel shows the strategy's value divided by each benchmark's (starting at 1) with each one's CAGR, Sharpe and drawdown and the strategy's excess CAGR, beta, correlation, tracking error and information ratio against it, each over the dates both have. A benchmark with gaps or a shorter history says so in the notes. In Python: <code>engine.blended_benchmark([spy, tlt], [0.6, 0.4], "monthly")</code>.</p>
 
     <h2 id="statistics">Statistics</h2>
     <p>All statistics come from the daily equity curve, marked at each close, and from the list of trades. Annualization assumes 252 trading days. Years are measured in calendar days divided by 365.25.</p>
@@ -386,20 +512,55 @@ def signals(data):
 <tr><td>Fills</td><td><code>n_fills</code></td><td>By default</td><td>Number of executed orders.</td></tr>
 <tr><td>Costs paid</td><td><code>total_costs</code></td><td>Always</td><td>Commissions plus slippage.</td></tr>
 <tr><td>Orders reduced</td><td><code>orders_clipped</code></td><td>By default</td><td>Share orders cut down for lack of cash or the no-short rule.</td></tr>
+<tr class="group"><td colspan="4">Carry &amp; exposure</td></tr>
+<tr><td>Gross exposure (avg.)</td><td><code>avg_gross</code></td><td>By default</td><td>Mean of (long + short market value) / equity.</td></tr>
+<tr><td>Net exposure (avg.)</td><td><code>avg_net</code></td><td>By default</td><td>Mean of (long - short market value) / equity.</td></tr>
+<tr><td>Long exposure (avg.)</td><td><code>avg_long</code></td><td>Optional</td><td>Mean long market value / equity.</td></tr>
+<tr><td>Short exposure (avg.)</td><td><code>avg_short</code></td><td>Optional</td><td>Mean short market value / equity.</td></tr>
+<tr><td>Gross exposure (max)</td><td><code>max_gross</code></td><td>Optional</td><td>Highest gross exposure at any close.</td></tr>
+<tr><td>Dividends</td><td><code>dividends_net</code></td><td>By default</td><td>Dividends received on longs minus dividends paid on shorts.</td></tr>
+<tr><td>Interest on cash</td><td><code>interest_net</code></td><td>By default</td><td>Interest earned on cash minus interest paid on borrowed cash (ACT/360).</td></tr>
+<tr><td>Borrow fees</td><td><code>borrow_paid</code></td><td>Optional</td><td>Fees paid to borrow shares for short positions.</td></tr>
+<tr><td>Net carry</td><td><code>carry_total</code></td><td>Optional</td><td>Dividends + interest - borrow fees.</td></tr>
+<tr><td>Margin calls</td><td><code>margin_calls</code></td><td>By default</td><td>Times equity fell below the maintenance margin and positions were cut.</td></tr>
+<tr class="group"><td colspan="4">Sizing &amp; limits</td></tr>
+<tr><td>Sizing &amp; limit changes</td><td><code>limit_events</code></td><td>Optional</td><td>Times the sizing rule, drawdown de-risking or a position, net or gross limit changed the strategy&#x27;s target weights (see the constraint log).</td></tr>
+<tr><td>Time de-risked</td><td><code>derisked_share</code></td><td>Optional</td><td>Share of bars spent scaled down after the drawdown limit was hit.</td></tr>
+<tr><td>Avg. sizing scale</td><td><code>avg_scale</code></td><td>Optional</td><td>Mean factor the volatility-target or Kelly rule multiplied the weights by (1 = unchanged).</td></tr>
+<tr class="group"><td colspan="4">Execution</td></tr>
+<tr><td>Implementation shortfall</td><td><code>is_bps</code></td><td>By default</td><td>Average fill price vs the close when the order was decided, in bps of traded value (side-adjusted; costs, delay and price moves until the fill).</td></tr>
+<tr><td>Shortfall ($)</td><td><code>is_cost</code></td><td>Optional</td><td>Implementation shortfall in dollars: what trading at the decision price would have saved, before commissions.</td></tr>
+<tr><td>Spread paid</td><td><code>spread_paid</code></td><td>Optional</td><td>Half the bid-ask spread on every market fill.</td></tr>
+<tr><td>Market impact</td><td><code>impact_paid</code></td><td>Optional</td><td>Square-root price impact of the fills, from their size vs average daily volume.</td></tr>
+<tr><td>Partial fills</td><td><code>partial_fills</code></td><td>By default</td><td>Orders spread over several bars by the participation limit.</td></tr>
+<tr><td>Resting orders filled</td><td><code>limit_filled</code></td><td>Optional</td><td>Limit, stop and stop-limit orders that filled.</td></tr>
+<tr><td>Resting orders unfilled</td><td><code>limit_unfilled</code></td><td>Optional</td><td>Limit and stop orders that expired or were cancelled without filling completely.</td></tr>
 <tr class="group"><td colspan="4">Statistical tests</td></tr>
 <tr><td>t-statistic (mean return)</td><td><code>t_stat</code></td><td>Optional</td><td>Mean daily excess return / its standard error. Above 2 suggests the mean is not zero.</td></tr>
-<tr><td>p-value (mean return &gt; 0)</td><td><code>p_value</code></td><td>Optional</td><td>Chance of a t-statistic this high if the true mean return were zero (one-sided, normal approximation). Below 0.05 is the usual bar.</td></tr>
+<tr><td>p-value (mean return &gt; 0)</td><td><code>p_value</code></td><td>Optional</td><td>Chance of a t-statistic this high if the true mean return were zero (one-sided, Student&#x27;s t). Below 0.05 is the usual bar.</td></tr>
+<tr><td>t-statistic (Newey-West)</td><td><code>t_stat_hac</code></td><td>Optional</td><td>The t-statistic with Newey-West standard errors, valid when returns are autocorrelated or their volatility changes. Trust it over the plain one when they differ.</td></tr>
+<tr><td>p-value (Newey-West)</td><td><code>p_value_hac</code></td><td>Optional</td><td>One-sided p-value of the Newey-West t-statistic.</td></tr>
+<tr><td>Sharpe (Lo-adjusted)</td><td><code>sharpe_lo_adj</code></td><td>Optional</td><td>Sharpe ratio annualized with the returns&#x27; autocorrelations (Lo 2002) instead of sqrt(252). Lower than the plain Sharpe when returns trend from day to day (smoothed or illiquid prices).</td></tr>
+<tr><td>Effective sample size</td><td><code>n_eff</code></td><td>Optional</td><td>How many independent days of returns the autocorrelated returns are worth (Bartlett-weighted autocorrelations).</td></tr>
+<tr><td>Effective track record</td><td><code>eff_years</code></td><td>Optional</td><td>Effective sample size in years. Compare with the minimum track record length.</td></tr>
 <tr><td>Probabilistic Sharpe</td><td><code>psr</code></td><td>Optional</td><td>Probability that the true Sharpe ratio is above 0, allowing for skew, fat tails and track length (Bailey &amp; Lopez de Prado).</td></tr>
 <tr><td>Sharpe 95% CI low</td><td><code>sharpe_lo</code></td><td>Optional</td><td>Lower end of a 95% confidence interval for the annualized Sharpe ratio.</td></tr>
 <tr><td>Sharpe 95% CI high</td><td><code>sharpe_hi</code></td><td>Optional</td><td>Upper end of a 95% confidence interval for the annualized Sharpe ratio.</td></tr>
 <tr><td>Min. track record</td><td><code>min_trl</code></td><td>Optional</td><td>Years of data needed to be 95% sure the Sharpe ratio is above 0. Longer than the backtest = not proven yet.</td></tr>
 <tr><td>Alpha t-statistic</td><td><code>alpha_t</code></td><td>Optional</td><td>Alpha / its standard error from the regression on the benchmark. Above 2 suggests real alpha.</td></tr>
-<tr><td>Alpha p-value</td><td><code>alpha_p</code></td><td>Optional</td><td>Chance of an alpha t-statistic this high if true alpha were zero (one-sided, normal approximation).</td></tr>
-<tr><td>Win-rate p-value</td><td><code>win_rate_p</code></td><td>Optional</td><td>Chance of at least this many winning trades if each trade were a coin flip (one-sided binomial, normal approximation).</td></tr>
+<tr><td>Alpha p-value</td><td><code>alpha_p</code></td><td>Optional</td><td>Chance of an alpha t-statistic this high if true alpha were zero (one-sided, Student&#x27;s t).</td></tr>
+<tr><td>Alpha t (Newey-West)</td><td><code>alpha_t_hac</code></td><td>Optional</td><td>Alpha&#x27;s t-statistic with Newey-West standard errors.</td></tr>
+<tr><td>Alpha p (Newey-West)</td><td><code>alpha_p_hac</code></td><td>Optional</td><td>One-sided p-value of alpha&#x27;s Newey-West t-statistic.</td></tr>
+<tr><td>Win-rate p-value</td><td><code>win_rate_p</code></td><td>Optional</td><td>Chance of at least this many winning trades if each trade were a coin flip (one-sided, exact binomial).</td></tr>
 <tr><td>Autocorrelation (1 day)</td><td><code>autocorr</code></td><td>Optional</td><td>Correlation of each day&#x27;s return with the previous day&#x27;s. Far from 0 means returns are not independent.</td></tr>
 <tr><td>Autocorrelation p-value</td><td><code>autocorr_p</code></td><td>Optional</td><td>Two-sided p-value that the 1-day autocorrelation is zero. Below 0.05 = significant serial correlation.</td></tr>
+<tr><td>Deflated Sharpe</td><td><code>dsr</code></td><td>By default</td><td>Probability that the true Sharpe ratio beats the best you&#x27;d expect from this many trials with no skill (Bailey &amp; Lopez de Prado). Below 95%: the result may be the luck of trying many versions.</td></tr>
+<tr><td>Sharpe hurdle (trials)</td><td><code>sr_hurdle</code></td><td>By default</td><td>The highest annualized Sharpe ratio expected by chance from the number of strategy variations tried so far.</td></tr>
+<tr><td>Trials counted</td><td><code>trials</code></td><td>By default</td><td>Distinct versions of this strategy (code, parameters, settings, market) run in this browser. Each one raises the bar.</td></tr>
 <tr><td>Normality p-value</td><td><code>jb_p</code></td><td>Optional</td><td>Jarque-Bera test that daily returns are normally distributed. Below 0.05 = fat tails or skew; treat Sharpe and VaR with care.</td></tr>
 </tbody></table></div>
+    <h3 id="rigour">Significance Tests</h3>
+    <p>The p-values are exact: the mean-return and alpha t-tests use Student's t, the win-rate test the binomial distribution. Daily returns are often autocorrelated (trend-following, smoothed or illiquid prices) and their volatility clusters, which makes ordinary t-statistics too large. The <b>Newey-West</b> t-statistics (for the mean return and for alpha) correct for both; when they are much smaller than the plain ones, believe them. The <b>Lo-adjusted Sharpe</b> annualizes the daily Sharpe ratio with the first ten autocorrelations rather than √252, and the <b>effective sample size</b> says how many independent days the returns are worth. The Probabilistic and Deflated Sharpe ratios allow for skew, fat tails and the number of versions tried. <b>Monte Carlo Resampling</b> adds block-bootstrap 95% confidence intervals for the Sharpe ratio, CAGR, volatility and maximum drawdown. All of these are in the <i>Statistical tests</i> group of the statistics picker.</p>
     <h3>How to Read Them Together</h3>
     <ul>
       <li><b>Sharpe</b> is the usual headline, but it treats upside and downside swings the same. A Sortino much higher than Sharpe means most of the volatility is on the upside.</li>
@@ -407,6 +568,7 @@ def signals(data):
       <li><b>Beta below 1 with positive alpha</b> means the strategy earned more than its market exposure explains. A low beta alone just means it held less of the asset.</li>
       <li><b>Win rate</b> means little alone. Trend followers often win 35% of trades and still profit because their average win is much larger than their average loss; check <b>profit factor</b>.</li>
       <li>Fewer than about 30 trades or 3 years of data is too little to tell skill from luck. Run the Monte Carlo tool.</li>
+      <li><b>Every version you try counts.</b> QuantLab counts the distinct versions of a strategy you have run on the same market (each change of code, parameters, settings or dates, plus every sweep and walk-forward candidate) and reports the <b>Deflated Sharpe Ratio</b> (Bailey &amp; López de Prado 2014): the probability that the true Sharpe ratio beats the best you would expect from that many tries with no skill, using how much the tries' Sharpe ratios varied. The chip under the title shows the count; <b>Reset Trials</b> starts it again, for example when you begin a genuinely new idea.</li>
       <li>The <b>statistical tests</b> answer “could this be luck?”. A p-value is the chance of a result at least this good if there were no real edge; below 0.05 is the usual bar. A <b>minimum track record</b> longer than your backtest means the data can’t yet show the Sharpe ratio is above zero. Test many variations and some will pass by chance, so treat one passing test as a hint, not proof.</li>
     </ul>
 
@@ -425,6 +587,8 @@ def signals(data):
 <tr><td>MACD Crossover</td><td>Long while the MACD line is above its signal line.</td><td><code>{&quot;fast&quot;: 12, &quot;slow&quot;: 26, &quot;signal&quot;: 9}</code></td></tr>
 <tr><td>ADX Trend Strength</td><td>Long only when a trend is strong (ADX above 25) and pointing up (+DI above -DI).</td><td><code>{&quot;n&quot;: 14, &quot;threshold&quot;: 25}</code></td></tr>
 <tr><td>Trend with ATR Trailing Stop</td><td>Enter above the 100-day average; exit when price falls 3 ATRs below its highest close since entry.</td><td><code>{&quot;trend&quot;: 100, &quot;atr_n&quot;: 14, &quot;atr_mult&quot;: 3.0}</code></td></tr>
+<tr class="group"><td colspan="3">Breakout</td></tr>
+<tr><td>Breakout with Stop-Loss &amp; Target</td><td>Enter on a stop order just above the 20-day high, then exit with a bracket: a stop-loss 2 ATRs below the entry &amp; a take-profit 3 ATRs above, whichever comes first.</td><td><code>{&quot;n&quot;: 20, &quot;atr_n&quot;: 14, &quot;stop_atr&quot;: 2.0, &quot;target_atr&quot;: 3.0, &quot;buffer&quot;: 0.005}</code></td></tr>
 <tr class="group"><td colspan="3">Mean Reversion</td></tr>
 <tr><td>RSI Oversold</td><td>Buy when RSI(14) drops below 30, sell when it recovers above 50.</td><td><code>{&quot;n&quot;: 14, &quot;buy_below&quot;: 30, &quot;sell_above&quot;: 50}</code></td></tr>
 <tr><td>RSI(2) Pullback in an Uptrend</td><td>Connors-style: in an uptrend (above the 200-day average), buy when RSI(2) &lt; 10, exit above the 5-day average.</td><td><code>{&quot;rsi_n&quot;: 2, &quot;entry&quot;: 10, &quot;trend&quot;: 200, &quot;exit_ma&quot;: 5}</code></td></tr>
@@ -445,24 +609,70 @@ def signals(data):
 <tr><td>Logistic Regression (NumPy)</td><td>Predicts whether tomorrow is up from momentum, RSI, trend &amp; volatility; retrained every quarter on past data only. Uses NumPy.</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 63, &quot;threshold&quot;: 0.53, &quot;l2&quot;: 0.01}</code></td></tr>
 <tr><td>Neural Network (NumPy)</td><td>A small two-layer neural network trained with Adam in plain NumPy, retrained twice a year: the same training loop you would write in PyTorch.</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 126, &quot;hidden&quot;: 16, &quot;epochs&quot;: 100, &quot;lr&quot;: 0.02, &quot;threshold&quot;: 0.53}</code></td></tr>
 <tr><td>Random Forest (scikit-learn)</td><td>A random forest predicts whether the next week is up, retrained twice a year. The first run downloads scikit-learn (about 75 MB, cached afterwards).</td><td><code>{&quot;min_train&quot;: 504, &quot;retrain&quot;: 126, &quot;horizon&quot;: 5, &quot;trees&quot;: 40, &quot;depth&quot;: 4, &quot;threshold&quot;: 0.55}</code></td></tr>
+<tr class="group"><td colspan="3">Portfolio</td></tr>
+<tr><td>Equal Weight, Monthly Rebalance</td><td>Hold every instrument in the universe at the same weight and rebalance on the first day of each month. The portfolio baseline.</td><td><code>{}</code></td></tr>
+<tr><td>Cross-Sectional Momentum (Top N)</td><td>Each month, rank the universe by its 12-month return (skipping the last month) and hold the best 3 equally weighted.</td><td><code>{&quot;lookback&quot;: 252, &quot;skip&quot;: 21, &quot;top&quot;: 3}</code></td></tr>
+<tr><td>Inverse-Volatility Risk Parity</td><td>Weight each instrument by 1 / its recent volatility so each contributes roughly the same risk; rebalanced monthly.</td><td><code>{&quot;lookback&quot;: 63}</code></td></tr>
+<tr><td>Pairs Trade (Stat Arb)</td><td>Trade the spread between XOM &amp; the energy ETF XLE: when it is 2 std away from normal, short the rich leg &amp; buy the cheap one. Turn on shorting in settings.</td><td><code>{&quot;lookback&quot;: 60, &quot;entry&quot;: 2.0, &quot;exit&quot;: 0.5, &quot;gross&quot;: 1.0}</code></td></tr>
+<tr><td>Long/Short Momentum (Dollar Neutral)</td><td>Each month buy the 3 strongest stocks &amp; short the 3 weakest by 6-month return, with equal long &amp; short dollars. Turn on shorting in settings.</td><td><code>{&quot;lookback&quot;: 126, &quot;n&quot;: 3, &quot;book&quot;: 0.5}</code></td></tr>
 </tbody></table></div>
 
     <h2 id="tools">Research Tools</h2>
     <p>Each tool uses the instrument, dates, settings and code currently on the Backtest tab.</p>
     <h3>Parameter Sweep</h3>
     <p>Choose one or two numeric entries from <code>PARAMS</code> and a list of values: <code>20:100:10</code> means 20, 30 … 100, and <code>5,10,20</code> lists values directly. Up to 400 runs. With <b>Tune on: First 70%</b>, each run is scored only on the first 70% of the period, and the last 30% is shown next to it as an out-of-sample check. <b>Use these values in the editor</b> writes the best combination into your PARAMS. Good parameters sit in a broad plateau of good results. A single bright cell is usually noise.</p>
+    <p>Every sweep ends with an <b>overfitting check</b>. Each run's daily returns are cut into 10 consecutive blocks; for every one of the 252 ways to call half of them in-sample, the setting with the best in-sample Sharpe is ranked against the others on the remaining half. The <b>probability of backtest overfitting</b> (PBO, Bailey, Borwein, López de Prado &amp; Zhu 2015) is the share of splits where that winner ranks at or below the median. Above 50%, picking the best setting is worse than picking at random. The check also reports the winner's Sharpe ratio in and out of sample and the <b>Sharpe hurdle</b>: the best result expected from that many settings with no skill.</p>
+    <h3>Walk-Forward Optimization</h3>
+    <p>Choose parameters and values like a sweep, a training window and a test window. Starting after the first training window, the setting with the best score over the training window (or over everything so far, with <b>Anchored</b>) is used for the next test window; then both windows move forward by one test window. The stitched test windows are the out-of-sample result, compared with the setting that looks best in hindsight and with the benchmark. <b>Walk-forward efficiency</b> is the out-of-sample CAGR as a share of the CAGR the chosen settings showed while being tuned. Each candidate runs as one continuous backtest, so the switch between settings at a window boundary is assumed to cost nothing.</p>
     <h3>Monte Carlo Resampling</h3>
     <p>Takes the strategy’s daily returns and builds alternative histories by stitching together randomly chosen blocks of consecutive days (a circular block bootstrap). Blocks keep calm and volatile stretches together. The fan chart shows the range of paths, and the table shows percentiles of total return, CAGR and maximum drawdown. If the 5th percentile drawdown would be unbearable, size the strategy down.</p>
     <h3>In-Sample vs Out-of-Sample</h3>
     <p>Runs one continuous backtest and reports statistics separately before and after a split date. Indicator warm-up and open positions carry across the split. A strategy designed by looking at the whole chart will almost always look worse after the split, and that worse result is the realistic one.</p>
+    <h3 id="risk">Risk Report</h3>
+    <p>Runs the strategy once and analyses its daily returns and the holdings on its last day.</p>
+    <ul>
+      <li><b>Factor regression.</b> The strategy's daily return above the risk-free rate, regressed on the factors you list: a loaded ticker (its return above the risk-free rate, e.g. <code>SPY</code>), <code>A-B</code> for the return of A minus that of B (<code>IWM-SPY</code>: small minus large caps; <code>TLT-SHY</code>: duration), or a column of an uploaded factor file (<code>ff3:SMB</code>). <b>Add Factor File</b> reads daily factor returns such as the Fama-French files from Ken French's data library (unzip the CSV; YYYYMMDD dates and values in percent are recognized, and an <code>RF</code> column becomes the risk-free rate). Alpha is annualized (×252). Each estimate has an ordinary t-statistic and a Newey-West one (Bartlett kernel, ⌊4(n/100)<sup>2/9</sup>⌋ lags), which stays valid when residuals are autocorrelated or their volatility changes; p-values are two-sided from Student's t. <b>Return attribution</b> splits the mean excess return into alpha plus beta × each factor's mean return, which add up exactly. <b>Variance decomposition</b> gives each factor's share, beta × cov(factor, fitted return) / variance, plus the idiosyncratic rest; the factor shares add up to R².</li>
+      <li><b>Rolling beta</b> and correlation to the benchmark over a window you choose.</li>
+      <li><b>Where the risk is.</b> From the last 252 days of the instruments' returns, each final holding's volatility, marginal risk (∂σ/∂w), contribution (weight × marginal, adding up to the portfolio's volatility) and share of the risk, and the diversification ratio (weighted average volatility / portfolio volatility).</li>
+      <li><b>Stress tests.</b> Ten well-known windows (the 2008 crisis, 2011 downgrade, 2015 devaluation, February 2018, Q4 2018, the COVID crash, the 2022 rate shock, March 2023 and August 2024) and one of your own. For each: what the strategy did if it was running, its drawdown within the window, and the <b>final holdings replayed</b>: each instrument's total return over the window × its final weight, which needs that instrument's data for the window. Benchmark shocks of −5%, −10% and −20% are applied through each holding's beta to the benchmark.</li>
+      <li><b>Value at Risk</b> for the final holdings from a history you choose (500 days by default): historical (the holdings' P&amp;L on each of those days), normal (from the covariance matrix) and Cornish-Fisher (normal adjusted for the P&amp;L's skew and kurtosis), with expected shortfall and 10-day figures (historical from overlapping 10-day returns, normal scaled by √10). Component VaR splits the normal VaR by instrument. The <b>Kupiec test</b> checks the strategy's own history against a rolling 250-day historical VaR: a p-value below 0.05 with too many breaches means that VaR understated the risk.</li>
+    </ul>
+    <h3 id="capacity">Capacity</h3>
+    <p>Re-runs the backtest at each account size you list with square-root market impact on (your impact coefficient, or 1 if it is off) and your participation limit, and reports CAGR, Sharpe ratio, drawdown, costs as a share of the starting cash, each fill's share of that day's volume (median and 95th percentile) and how many orders the limit spread over several days. <b>Capacity</b> is the size at which the Sharpe ratio falls to the share you pick of its value at the smallest size, interpolated on a log scale. It needs volume data, and it is an estimate: real impact depends on spreads, timing and other traders, so treat it as an order of magnitude.</p>
+    <h3 id="options">Options Overlay <span class="muted">(optional)</span></h3>
+    <p>Adds options to a single-instrument strategy's long position: <b>covered calls</b> (sell calls a chosen percentage above the price), <b>protective puts</b> (buy puts below it) or a <b>collar</b> (both). Every <i>N</i> trading days, at the close, it opens options on the shares held then, expiring <i>N</i> days later; it pays the trading cost you set as a share of each premium, marks the options every day and settles them in cash at expiry against that close. Their P&amp;L is added to the strategy's equity, and the statistics are shown with and without it.</p>
+    <p>There is no options market data here, so prices are <b>modelled</b> with Black-Scholes (European exercise, no dividends, the cash rate as the interest rate). The implied volatility is either the instrument's trailing realized volatility times a premium multiplier (implied usually runs above realized; 1.1 adds 10%) or the level of a loaded volatility index such as <code>^VIX</code> that day, in percent, times the multiplier. There is no volatility skew, early assignment or bid-ask beyond the trading cost, so treat the result as a model of the trade-off (income against capped upside, insurance cost against smaller drawdowns), not as what fills would have been.</p>
+    <p><b>Delta-hedged option.</b> The same panel sells an at-the-money call on the starting cash's worth of the instrument every <i>N</i> days and hedges its delta with the instrument at every close. The hedged P&amp;L is close to the sum of ½ × gamma × price² × (implied variance × Δt − the day's squared return): it earns when implied volatility was above the volatility that followed. It is split into the option's and the hedge's P&amp;L, with that gamma-theta estimate alongside. Engine: <code>bs()</code>, <code>implied_vol_series()</code>, <code>options_overlay(res, …)</code> and <code>delta_hedged(ds, …)</code>; tests check the prices against SciPy, put-call parity, finite-difference Greeks, an independent overlay ledger, and that a hedged option on simulated prices earns about nothing when implied equals the true volatility.</p>
     <h3>Sub-Period Consistency <span class="muted">(optional)</span></h3>
     <p>Cuts one continuous backtest into 2–20 back-to-back periods with equal numbers of trading days and scores each against the benchmark. A strategy whose whole profit comes from one period depended on one market regime.</p>
     <h3>Cost Sensitivity <span class="muted">(optional)</span></h3>
     <p>Re-runs the backtest once per cost level. Each level is the cost of every fill in basis points of traded value and replaces both the commission percentage and the slippage; the flat fee per fill is kept. The summary reports, by linear interpolation between the levels you tested, the cost at which CAGR drops below the benchmark’s and below zero.</p>
     <h3>Random-Timing Test <span class="muted">(optional)</span></h3>
     <p>A permutation test of timing skill. It shuffles the strategy’s daily exposures, which keeps how often and how heavily it was invested but not when, and pairs them with the instrument’s actual close-to-close returns. Each ordering is scored by its Sharpe ratio before costs. The p-value is the share of shuffles that scored at least as well as the real ordering. Strategies that hold nearly the same position every day, like buy and hold, can’t be tested this way.</p>
+    <h3 id="speed">Speed &amp; Caching</h3>
+    <p>Sweeps and walk-forward grids run on several copies of Python at once: the main one plus helpers, up to four in all and one fewer than your processor cores, so one core is left for the page. Helpers start when you open the Research tab and stop after five idle minutes; results are identical to running one after another. Re-running a setup that hasn't changed at all (code, parameters, settings, dates, data and trial count) shows the earlier result straight away; it isn't added to the history again, and <b>Re-run</b> in the History tab always runs for real. When only settings change, a <code>signals</code> strategy reuses the signals it already computed for the same code, parameters and data, so costs and sizing can be explored without re-training a model; its <code>print</code> output is replayed. This assumes your code gives the same answer each time, so seed anything random. Any change to the data clears these caches.</p>
     <h3>Instrument Analytics</h3>
     <p>Buy-and-hold statistics for each loaded instrument, a correlation matrix of daily returns on the dates all of them share, and a growth-of-100 chart. Assets with low correlation combine into portfolios with smaller drawdowns.</p>
+
+    <h2 id="audit">Saving, Exporting &amp; Auditing</h2>
+    <p><b>Run history.</b> Every backtest is saved in this browser with exactly what produced it: the code and its SHA-256, the parameters, every setting, the market and dates, a fingerprint of each instrument's data (prices and dividends), and the engine version. The <b>History</b> tab keeps the newest 500 runs. Tick two to compare them: their equity curves rebased to 100, every statistic with the change, the settings that differ, and a line-by-line diff of the code. <b>Restore</b> puts a run's code, settings and market back on the Backtest tab; <b>Re-run</b> also runs it and says whether it reproduced exactly, or what changed (code, settings, data or engine) if it didn't. Add a label to mark runs for review.</p>
+    <p><b>Exports.</b> <b>Export</b> under the results title downloads the equity and exposure series (with per-instrument weights for portfolios), the trades, the fills (with arrival prices), every statistic including hidden ones, or the whole run as JSON. Each file starts with comment lines naming the run, code hash, data fingerprints, parameters, settings and engine. <b>Tear Sheet</b> opens a printable one-page report (save it as PDF from the print dialog) with the provenance and the strategy code on its second page.</p>
+    <p><b>Workspace backup.</b> On the Data tab, <b>Export Workspace</b> saves everything QuantLab keeps in the browser (your strategies, uploaded prices, dividend files and rate series, settings, trial counts and, optionally, run history) as one JSON file. <b>Import Workspace</b> adds a file's contents to this browser: use it to back up, to move to another computer, or to hand a colleague the exact setup behind a result.</p>
+
+    <h3 id="github">GitHub Sync <span class="muted">(optional)</span></h3>
+    <p>On the Data tab, GitHub Sync keeps your saved strategies and modules in a GitHub repository as <code>.py</code> files: <code>&lt;folder&gt;/strategies/&lt;name&gt;.py</code>, <code>&lt;folder&gt;/modules/&lt;name&gt;.py</code> and a <code>quantlab.json</code> with the strategy names. <b>Push</b> makes one commit with all of them (unchanged files make no commit; files you deleted in QuantLab stay in the repository). <b>Pull</b> lists what would be added or replaced before changing anything, and can be undone. It needs a fine-grained personal access token with <b>Contents: read &amp; write</b> on that repository. The page sends it only to api.github.com, keeps it for the tab unless you tick Remember, and leaves it out of workspace exports. The code for this is in <code>github-sync.js</code>, which loads only when you use it.</p>
+
+    <h2 id="paper">Paper Trading &amp; the Broker Bridge</h2>
+    <p><b>Next Session.</b> Every backtest also asks the strategy for its decision at the last close and shows the orders it would send for the next bar, sized at that close (inside the rebalance band: none), plus resting limit and stop orders. Download them as CSV or copy them as JSON. In Python: <code>engine.backtest(..., decide_last=True).next</code>.</p>
+    <p><b>Paper accounts</b> (Paper tab) freeze the strategy code, modules, settings, market and a start date. <b>Update with Latest Data</b> re-runs the frozen setup from its start date on the data loaded now (add the newest prices on the Data tab first) and shows the account's equity, positions and next orders. Each update is logged with the code hash and data fingerprints, and if equity on a day recorded earlier comes out different (revised prices, a different engine), the account says so and keeps both. Nothing is sent anywhere.</p>
+    <p><b>Broker bridge</b> (optional, needs a server). The page never talks to a broker. <code>tools/bridge/broker_bridge.py</code> is a small standard-library server you run yourself; <b>Send to Bridge</b> POSTs the next orders to it as JSON with a shared secret, after you confirm. It checks the secret, logs every request to <code>bridge-log.jsonl</code>, and by default only answers with the orders it would place (dry run). With <code>--alpaca</code> it places them in an Alpaca paper account (keys from <code>APCA_API_KEY_ID</code> and <code>APCA_API_SECRET_KEY</code>); <code>--alpaca --live</code> uses the live account. Orders filled at the next open become market-on-open orders (<i>opg</i>), at the close <i>cls</i>; fractional quantities go as day orders. Use it with care: a backtest is not a trading system, and nothing here checks your broker's positions before sending.</p>
+<pre><code>python tools/bridge/broker_bridge.py --secret my-secret              # dry run on localhost:8787
+python tools/bridge/broker_bridge.py --secret my-secret --alpaca     # Alpaca paper account</code></pre>
+
+    <h2 id="collab">Sharing, Reviews &amp; Model Cards</h2>
+    <p><b>Share links.</b> In the History tab, a run's <b>Details</b> has <b>Copy Share Link</b>: a link to this page with the run's code, modules, settings, market, results, comments and model-card text compressed into the part after <code>#</code>, which browsers never send to the server. Whoever opens it sees what it is and can <b>Load &amp; Run It</b>: the code is saved as a strategy, the settings and market applied, and the run checked against the shared numbers (it reproduces exactly when they have the same data; the price data itself isn't in the link).</p>
+    <p><b>Comments &amp; model cards.</b> Each run can carry a comment thread and a purpose and limitations text. <b>Model Card</b> turns them into a printable document (or Markdown) with what QuantLab knows about the run: market and period, execution and cost assumptions, financing, results, significance and the number of trials, data fingerprints and calendars, code hash, engine version, the run's notes, reviews and comments, and the code.</p>
+    <p><b>Audit log.</b> <b>Approve</b> or <b>Reject</b> on a run (enter your name first) appends an entry to the audit log: time, run, a SHA-256 digest of the run's code, data, settings, market and results, the decision, the reviewer and a note. Each entry also stores the previous entry's hash and its own, so changing, removing or reordering an entry breaks the chain, which the log shows. <b>Export Log</b> saves it; <b>Verify a Log File</b> checks one in the page and in Python, and <code>engine.verify_audit_log(entries)</code> does it anywhere. It lives in this browser (and in workspace exports): tamper-evident, not tamper-proof, so keep exported copies where others can see them.</p>
 
     <h2 id="pitfalls">Pitfalls</h2>
     <ul>
@@ -493,13 +703,16 @@ print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['ma
     <div class="scroll"><table>
       <thead><tr><th>File</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, about 1900 lines.</td></tr>
+        <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, no dependencies.</td></tr>
         <tr><td><code>templates.py</code></td><td>The built-in strategies, separated by <code>#%% id:</code> markers. Add your own by following the same format.</td></tr>
         <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
-        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports.</td></tr>
+        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports. Sweeps and walk-forward grids start helper workers too.</td></tr>
+        <tr><td><code>github-sync.js</code></td><td>Optional GitHub Sync; loaded only when used.</td></tr>
+        <tr><td><code>tools/bridge/</code></td><td>Optional broker bridge server (dry run, Alpaca paper or live); not part of the web app. Tests: <code>tests/test_bridge.py</code>.</td></tr>
+        <tr><td><code>vendor/</code></td><td>Chart.js and the pyflakes wheel (MIT licence) used for the editor's Problems.</td></tr>
         <tr><td><code>pyodide/</code></td><td>The Python runtime and the NumPy wheel. Other package wheels from the Pyodide 0.26.4 release placed here are used instead of the CDN.</td></tr>
         <tr><td><code>data/</code></td><td>Bundled CSV files and <code>manifest.json</code>.</td></tr>
-        <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics and the look-ahead detector.</td></tr>
+        <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics, the look-ahead detector, modules, lint, the test runner and the console.</td></tr>
         <tr><td><code>tools/build_docs.py</code></td><td>Regenerates this page's statistics and strategy tables from the code.</td></tr>
       </tbody>
     </table></div>

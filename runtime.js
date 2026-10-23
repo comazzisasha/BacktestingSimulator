@@ -12,6 +12,8 @@
   let py = null;
   let handle = null;
   let packagesFor = null;   // last strategy code whose imports loaded successfully
+  let pyflakes = null;      // loading the bundled pyflakes wheel (lint falls back to a simpler check without it)
+  const NO_IMPORTS = { lint: 1, completions: 1, check_module: 1 };   // calls that read code without running it
 
   function loadScript(url) {
     if (typeof importScripts === 'function') {
@@ -87,6 +89,14 @@
     if (!failed) packagesFor = code;
   }
 
+  function loadPyflakes() {
+    if (!pyflakes) {
+      const url = new URL('vendor/pyflakes-3.2.0-py2.py3-none-any.whl', root.location.href).href;
+      pyflakes = py.loadPackage(url, { messageCallback: function () {}, errorCallback: function () {} }).catch(function () {});
+    }
+    return pyflakes;
+  }
+
   async function onMessage(msg, reply) {
     try {
       let result;
@@ -94,8 +104,13 @@
       else if (msg.type === 'call') {
         if (!handle) throw new Error('Python is not ready yet');
         let code = null;
-        try { code = JSON.parse(msg.payload).code; } catch (e) { /* no code in this call */ }
-        await loadImports(code, function (text) { reply({ id: msg.id, progress: text }); });
+        try {
+          const p = JSON.parse(msg.payload);
+          code = p.code || null;
+          if (code && p.modules) code = [code].concat(Object.values(p.modules)).join('\n');   // modules' imports too
+        } catch (e) { /* no code in this call */ }
+        if (msg.method === 'lint') await loadPyflakes();
+        else if (!NO_IMPORTS[msg.method]) await loadImports(code, function (text) { reply({ id: msg.id, progress: text }); });
         result = handle(msg.method, msg.payload);
       } else throw new Error('unknown message type ' + msg.type);
       reply({ id: msg.id, ok: true, result: result });
