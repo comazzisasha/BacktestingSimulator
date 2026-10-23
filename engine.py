@@ -749,6 +749,50 @@ def _to_float(v, fallback):
     return f
 
 
+def _iso_stamp(raw):
+    """A bar's time stamp: 'YYYY-MM-DD' for daily data, 'YYYY-MM-DDTHH:MM' (':SS' when the
+    seconds aren't 0) for intraday bars, or None. Accepts what _iso_date does plus a time
+    after a space or 'T' (24-hour or AM/PM; a time zone suffix is ignored), YYYYMMDD, and
+    Unix seconds or milliseconds. Midnight counts as a plain date."""
+    raw = str(raw).strip().strip('"')
+    if raw.isdigit() and len(raw) in (9, 10, 12, 13):
+        secs = int(raw) / (1000.0 if len(raw) >= 12 else 1.0)
+        t = _dt.datetime(1970, 1, 1) + _dt.timedelta(seconds=secs)
+        return _stamp(t.date(), t.hour, t.minute, t.second)
+    if raw.isdigit() and len(raw) == 8:
+        return _iso_date("%s-%s-%s" % (raw[:4], raw[4:6], raw[6:]))
+    sep = raw.find("T") if "T" in raw[8:11] else raw.find(" ")
+    day = _iso_date(raw if sep < 0 else raw[:sep])
+    if day is None or sep < 0:
+        return day
+    clock = raw[sep + 1:].strip().upper()
+    pm, am = clock.endswith("PM"), clock.endswith("AM")
+    clock = clock[:-2].strip() if pm or am else clock
+    for z in ("Z", "+", "-"):
+        k = clock.find(z, 1)
+        if k > 0:
+            clock = clock[:k]
+    parts = clock.split(":")
+    try:
+        h, m = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
+        sec = int(float(parts[2])) if len(parts) > 2 and parts[2] else 0
+    except ValueError:
+        return day
+    if pm and h < 12:
+        h += 12
+    if am and h == 12:
+        h = 0
+    if not (0 <= h < 24 and 0 <= m < 60 and 0 <= sec < 60):
+        return None
+    return _stamp(_dt.date.fromisoformat(day), h, m, sec)
+
+
+def _stamp(day, h, m, sec):
+    if h == m == sec == 0:
+        return day.isoformat()
+    return "%sT%02d:%02d%s" % (day.isoformat(), h, m, ":%02d" % sec if sec else "")
+
+
 def _iso_date(raw):
     """'MM/DD/YYYY', 'YYYY-MM-DD' (optionally with a time) -> 'YYYY-MM-DD', else None."""
     raw = str(raw).strip().strip('"')
@@ -794,7 +838,7 @@ class DataSet:
         self.issues = {}
         rows = []
         for j, d in enumerate(dates):
-            day = _iso_date(d) if not isinstance(d, _dt.date) else d.isoformat()
+            day = _iso_stamp(d) if not isinstance(d, _dt.date) else d.isoformat()
             c = _to_float(close[j], None)
             if day is None or c is None:
                 self._issue("dropped", day or str(d), "row without a valid date and positive close was skipped")
@@ -830,12 +874,13 @@ class DataSet:
         self.low = [r[3] for r in dedup]
         self.close = [r[4] for r in dedup]
         self.volume = [r[5] for r in dedup]
-        self.days = [_dt.date.fromisoformat(d) for d in self.dates]
+        self.days = [_dt.date.fromisoformat(d[:10]) for d in self.dates]
         self.n = len(self.dates)
         self.index = {d: i for i, d in enumerate(self.dates)}
         self.dividends = [0.0] * self.n
         self.dividend_source = None      # None (price return only), 'adj_close' or 'events'
         self.price_basis = "price"       # 'price' or 'total_return' (only an adjusted close was given)
+        self.calendar = None             # 'NYSE', 'weekdays' or '24/7'; None = judged from the dates
         self.splits_applied = []
         self.kind = "price"
         self._cache = {}
@@ -1041,6 +1086,7 @@ CSV_COLUMNS = {
     "open": ("open",), "high": ("high",), "low": ("low",), "volume": ("volume", "vol."),
     "dividend": ("dividends", "dividend", "cash amount", "amount", "dividend amount"),
     "split": ("stock splits", "split", "splits", "split ratio", "ratio"),
+    "clock": ("time",),   # a time-of-day column next to a separate date column (intraday files)
 }
 
 
@@ -1080,8 +1126,14 @@ def parse_csv_text(text, ticker="DATA"):
     idx = {k: _col(header, k) for k in ("date", "close", "adj_close", "open", "high", "low", "volume")}
     price_col = idx["close"] if idx["close"] is not None else idx["adj_close"]
     cols = {k: [] for k in idx}
+    clock = _col(header, "clock")
+    if clock == idx["date"]:
+        clock = None
     for row in rows:
-        cols["date"].append(row[idx["date"]] if idx["date"] < len(row) else "")
+        d = row[idx["date"]] if idx["date"] < len(row) else ""
+        if clock is not None and clock < len(row) and row[clock].strip():
+            d = d.strip() + " " + row[clock].strip()
+        cols["date"].append(d)
         for k in ("close", "adj_close", "open", "high", "low", "volume"):
             j = price_col if k == "close" else idx[k]
             cols[k].append(_num(row[j]) if j is not None and j < len(row) else None)
@@ -1228,7 +1280,7 @@ CALENDARS = {
 
 def session_days(start, end, calendar="NYSE"):
     """ISO dates the market is open from start to end inclusive."""
-    d, last = _dt.date.fromisoformat(start), _dt.date.fromisoformat(end)
+    d, last = _dt.date.fromisoformat(start[:10]), _dt.date.fromisoformat(end[:10])
     hol = set()
     if calendar == "NYSE":
         for y in range(d.year, last.year + 1):
@@ -1243,9 +1295,62 @@ def session_days(start, end, calendar="NYSE"):
 
 
 def guess_calendar(ds):
-    """'24/7' when the data trades on weekends, else 'NYSE'."""
-    weekend = sum(1 for d in ds.days if d.weekday() >= 5)
-    return "24/7" if weekend > 0.1 * ds.n else "NYSE"
+    """The calendar an instrument trades on, judged from its dates: '24/7' when a tenth or
+    more of its bars fall on weekends (crypto), 'weekdays' when it trades on most NYSE
+    holidays (FX, many futures), else 'NYSE'. An explicit ds.calendar wins."""
+    if getattr(ds, "calendar", None):
+        return ds.calendar
+    return ds.cached(("guessed_calendar",), lambda: _guess_calendar(ds))
+
+
+def _guess_calendar(ds):
+    days = sorted(set(ds.days))
+    weekend = sum(1 for d in days if d.weekday() >= 5)
+    if weekend > 0.1 * len(days):
+        return "24/7"
+    if days:
+        hol = set()
+        for y in range(days[0].year, days[-1].year + 1):
+            hol |= nyse_holidays(y)
+        lo, hi = days[0].isoformat(), days[-1].isoformat()
+        hol = {h for h in hol if lo <= h <= hi and _dt.date.fromisoformat(h).weekday() < 5}
+        traded = sum(1 for d in days if d.isoformat() in hol)
+        if hol and traded >= 0.5 * len(hol) and len(hol) >= 4:
+            return "weekdays"
+    return "NYSE"
+
+
+def bars_per_day(ds):
+    """1 for daily data; the median number of bars per date for intraday data."""
+    def build():
+        counts = {}
+        for d in ds.dates:
+            counts[d[:10]] = counts.get(d[:10], 0) + 1
+        return max(1, int(round(percentile(list(counts.values()), 50)))) if counts else 1
+    return ds.cached(("bars_per_day",), build)
+
+
+def periods_per_year(ds):
+    """Bars per year, to annualize this instrument's statistics: trading days x bars per
+    day. Days are 365 for data that trades every day (crypto), the chosen calendar's when
+    ds.calendar is set ('weekdays' = 260), and otherwise the usual 252."""
+    cal = getattr(ds, "calendar", None) or ("24/7" if guess_calendar(ds) == "24/7" else "NYSE")
+    return CALENDARS[cal][1] * bars_per_day(ds)
+
+
+def panel_ann(panel):
+    """Bars per year of a backtest's shared calendar: that of its busiest instrument."""
+    if "ann" not in panel._aligned:
+        panel._aligned["ann"] = max(periods_per_year(ds) for ds in panel.sets)
+    return panel._aligned["ann"]
+
+
+def res_ann(res):
+    """Periods per year of a Result (252 for daily US equities)."""
+    a = getattr(res, "ann", None)
+    if a is None and getattr(res, "panel", None) is not None:
+        a = panel_ann(res.panel)
+    return a or TRADING_DAYS
 
 
 def quality_report(ds, calendar=None, jump_sigma=8.0, min_jump=0.12, stale_run=5):
@@ -1265,7 +1370,8 @@ def quality_report(ds, calendar=None, jump_sigma=8.0, min_jump=0.12, stale_run=5
             rec["examples"].append({"date": date, "detail": detail})
 
     expected = session_days(ds.dates[0], ds.dates[-1], calendar)
-    have = set(ds.dates)
+    have = {d[:10] for d in ds.dates}
+    per = "bar" if bars_per_day(ds) > 1 else "day"
     missing = [d for d in expected if d not in have]
     run = []
     for d in missing + [None]:          # group consecutive missing sessions
@@ -1276,7 +1382,7 @@ def quality_report(ds, calendar=None, jump_sigma=8.0, min_jump=0.12, stale_run=5
         if d is not None:
             run.append(d)
     exp = set(expected)
-    for d in ds.dates:
+    for d in sorted({d[:10] for d in ds.dates}):
         if d not in exp:
             add("off_calendar", d, "bar on a day the %s calendar is closed" % calendar)
     same = 1
@@ -1293,8 +1399,8 @@ def quality_report(ds, calendar=None, jump_sigma=8.0, min_jump=0.12, stale_run=5
         sd = stdev(window) if len(window) >= 20 else NAN
         r = lr[t]
         if abs(r) > min_jump and (isnan(sd) or abs(r) > jump_sigma * sd):
-            add("jump", ds.dates[t + 1], "%+.1f%% in one day%s; check for an unadjusted split or a bad print" % (
-                100 * (math.exp(r) - 1), "" if isnan(sd) else " (%.0f sigma)" % (abs(r) / sd)))
+            add("jump", ds.dates[t + 1], "%+.1f%% in one %s%s; check for an unadjusted split or a bad print" % (
+                100 * (math.exp(r) - 1), per, "" if isnan(sd) else " (%.0f sigma)" % (abs(r) / sd)))
     titles = {
         "dropped": ("Rows skipped", "error"), "ohlc": ("High/low repaired", "warn"),
         "missing_ohlc": ("Open/high/low missing", "info"), "duplicate": ("Duplicate dates", "warn"),
@@ -1304,7 +1410,8 @@ def quality_report(ds, calendar=None, jump_sigma=8.0, min_jump=0.12, stale_run=5
     }
     for k, rec in found.items():
         rec["title"], rec["severity"] = titles.get(k, (k, "info"))
-    return {"calendar": calendar, "issues": found, "bars": ds.n,
+    return {"calendar": calendar, "issues": found, "bars": ds.n, "bars_per_day": bars_per_day(ds),
+            "periods_per_year": periods_per_year(ds),
             "dividends": ds.dividend_source, "price_basis": ds.price_basis}
 
 
@@ -1333,7 +1440,7 @@ class Panel:
         else:
             self.dates = sorted(set().union(*(ds.dates for ds in self.sets)))
         self.n = len(self.dates)
-        self.days = [_dt.date.fromisoformat(d) for d in self.dates]
+        self.days = [_dt.date.fromisoformat(d[:10]) for d in self.dates]
         self.nat, self.live = [], []
         for ds in self.sets:
             if self.k == 1:
@@ -1677,6 +1784,12 @@ class _StrategyClock:
     @property
     def weekday(self):
         return self._panel.days[self._run.t].weekday()
+
+    @property
+    def time(self):
+        """The bar's time of day as 'HH:MM' (or 'HH:MM:SS') for intraday data, None for daily bars."""
+        d = self._panel.dates[self._run.t]
+        return d[11:] if len(d) > 10 else None
 
     @property
     def i(self):
@@ -2649,7 +2762,7 @@ def _resolve_range(dates, start=None, end=None, label="the data"):
         while s < n and dates[s] < start[:10]:
             s += 1
     if end:
-        while e >= 0 and dates[e] > end[:10]:
+        while e >= 0 and dates[e][:10] > end[:10]:   # an end date includes that day's intraday bars
             e -= 1
     if e - s < 1:
         raise ValueError("The chosen date range has fewer than 2 bars of %s." % label)
@@ -2669,10 +2782,12 @@ def align_benchmark(dates, bench, s, e, total_return=True):
     src = bench.total_return_index() if total_return else bench.close
     out, last, j, gap, worst = [], None, 0, 0, (0, None)
     bd = bench.dates
+    # A daily benchmark next to intraday bars counts only once its day has closed.
+    daily_on_intraday = len(bd[-1]) == 10 and len(bd[0]) == 10 and any(len(x) > 10 for x in dates[s:min(e + 1, s + 500)])
     for i in range(s, e + 1):
         d = dates[i]
         hit = False
-        while j < bench.n and bd[j] <= d:
+        while j < bench.n and (bd[j] < d[:10] if daily_on_intraday else bd[j] <= d):
             last = src[j]
             hit = bd[j] == d
             j += 1
@@ -2680,6 +2795,9 @@ def align_benchmark(dates, bench, s, e, total_return=True):
         if gap > worst[0]:
             worst = (gap, d)
         out.append(last)
+    if daily_on_intraday and out and out[0] is None:   # before its first close: held at its first value
+        first = next((v for v in out if v is not None), src[0])
+        out = [first if v is None else v for v in out]
     if any(v is None for v in out):
         raise ValueError("Benchmark %s has no data for the start of this range." % bench.ticker)
     if bench.dates[-1] < dates[e]:
@@ -2965,6 +3083,7 @@ class _Limits:
 
     def __init__(self, cfg, panel):
         self.cfg, self.panel = cfg, panel
+        self.ann = panel_ann(panel)
         self.on = (cfg.sizing != "none" or cfg.max_weight > 0 or cfg.max_gross > 0 or cfg.max_net > 0 or cfg.dd_limit > 0)
         self.log, self.counts = [], {}
         self.derisked, self.peak, self.seen = False, None, 0
@@ -3026,8 +3145,8 @@ class _Limits:
                 m, sd = mean(p), stdev(p)
                 if sd > 0:
                     if cfg.sizing == "vol_target":
-                        scale = cfg.vol_target / (sd * math.sqrt(TRADING_DAYS))
-                        why = "estimated volatility %.1f%%" % (100 * sd * math.sqrt(TRADING_DAYS))
+                        scale = cfg.vol_target / (sd * math.sqrt(self.ann))
+                        why = "estimated volatility %.1f%%" % (100 * sd * math.sqrt(self.ann))
                     else:
                         scale = max(0.0, cfg.kelly_fraction * m / (sd * sd))
                         why = "Kelly leverage %.2f" % (m / (sd * sd))
@@ -3290,7 +3409,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         spread_paid=acct.spread_paid, impact_paid=acct.impact_paid, partial_fills=acct.partial_fills,
         book_stats=dict(run.book_stats, open=len(run.book)),
         logs=logs, full_logs=full_logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
-        signals=sig, signal_key=signal_key, limits=limits.summary(len(equity)) if limits.on else None,
+        signals=sig, signal_key=signal_key, limits=limits.summary(len(equity)) if limits.on else None, ann=panel_ann(panel),
     )
 
 
@@ -3551,7 +3670,7 @@ def period_returns(dates, equity, kind="month"):
     return out
 
 
-def return_tests(r, rfd=0.0):
+def return_tests(r, rfd=0.0, ann=None):
     """Significance tests on daily returns r (rfd = daily risk-free rate).
 
     The Sharpe ratio's standard error follows Lo (2002) / Mertens (2002), which
@@ -3573,12 +3692,12 @@ def return_tests(r, rfd=0.0):
             spread = 1 - g3 * sr + (g4 + 2) / 4 * sr * sr   # (g4 + 2) = raw kurtosis - 1
             if spread > 0:
                 se = math.sqrt(spread / (n - 1))
-                ann = math.sqrt(TRADING_DAYS)
+                ann_sqrt = math.sqrt(ann or TRADING_DAYS)
                 out["psr"] = norm_cdf(sr / se)
-                out["sharpe_lo"] = (sr - Z_975 * se) * ann
-                out["sharpe_hi"] = (sr + Z_975 * se) * ann
+                out["sharpe_lo"] = (sr - Z_975 * se) * ann_sqrt
+                out["sharpe_hi"] = (sr + Z_975 * se) * ann_sqrt
                 if sr > 0:
-                    out["min_trl"] = (1 + spread * (Z_95 / sr) ** 2) / TRADING_DAYS
+                    out["min_trl"] = (1 + spread * (Z_95 / sr) ** 2) / (ann or TRADING_DAYS)
     if not isnan(g3) and not isnan(g4):
         jb = n / 6 * (g3 * g3 + g4 * g4 / 4)
         out["jb_p"] = math.exp(-jb / 2)   # chi-squared with 2 degrees of freedom
@@ -3632,21 +3751,23 @@ def trade_stats(trades, ret_key="ret"):
 
 
 def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=None,
-                traded_notional=None, costs=None, n_fills=None, clipped=None, trade_ret="ret"):
-    """Compute every metric in METRICS (those that apply) for one equity curve."""
+                traded_notional=None, costs=None, n_fills=None, clipped=None, trade_ret="ret", ann=None):
+    """Compute every metric in METRICS (those that apply) for one equity curve.
+    ann: return periods per year (252 for daily US equities; see periods_per_year)."""
+    P = ann or TRADING_DAYS
     m = {}
     n = len(equity)
     m["start"], m["end"], m["bars"] = dates[0], dates[-1], n
     e0, e1 = equity[0], equity[-1]
-    years = max((_dt.date.fromisoformat(dates[-1]) - _dt.date.fromisoformat(dates[0])).days / 365.25, 1 / 365.25)
+    years = max((_dt.date.fromisoformat(dates[-1][:10]) - _dt.date.fromisoformat(dates[0][:10])).days / 365.25, 1 / 365.25)
     m["years"] = years
     m["final_equity"] = e1
     m["total_return"] = e1 / e0 - 1
     m["cagr"] = (e1 / e0) ** (1 / years) - 1 if e1 > 0 else -1.0
 
     r = daily_returns(equity)
-    rfd = (1 + rf) ** (1 / TRADING_DAYS) - 1
-    ann = math.sqrt(TRADING_DAYS)
+    rfd = (1 + rf) ** (1 / P) - 1
+    ann = math.sqrt(P)
     if len(r) >= 2:
         mu, sd = mean(r), stdev(r)
         m["volatility"] = sd * ann
@@ -3669,7 +3790,7 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
         m["var_99"] = -p1
         m["cvar_99"] = -mean([x for x in r if x <= p1])
         m["kelly"] = (mu - rfd) / (sd * sd) if sd > 0 else NAN
-        m.update(return_tests(r, rfd))
+        m.update(return_tests(r, rfd, P))
 
     dd = drawdown_stats(equity, dates)
     m["max_drawdown"] = dd["max_drawdown"]
@@ -3689,7 +3810,7 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
         m["stability"] = rho * rho if not isnan(rho) else NAN
 
     if years >= 1:
-        cut = (_dt.date.fromisoformat(dates[-1]) - _dt.timedelta(days=365)).isoformat()
+        cut = (_dt.date.fromisoformat(dates[-1][:10]) - _dt.timedelta(days=365)).isoformat()
         k = next(i for i, d in enumerate(dates) if d >= cut)
         m["ret_1y"] = e1 / equity[k] - 1 if equity[k] > 0 else NAN
 
@@ -3726,14 +3847,14 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
         mub = mean(rb)
         beta = covariance(r, rb) / varb if varb > 0 else NAN
         m["beta"] = beta
-        m["alpha"] = ((mean(r) - rfd) - beta * (mub - rfd)) * TRADING_DAYS if not isnan(beta) else NAN
+        m["alpha"] = ((mean(r) - rfd) - beta * (mub - rfd)) * P if not isnan(beta) else NAN
         corr = correlation(r, rb)
         m["correlation"] = corr
         m["r_squared"] = corr * corr if not isnan(corr) else NAN
         diff = [a - b for a, b in zip(r, rb)]
         te = stdev(diff) * ann
         m["tracking_error"] = te
-        m["information_ratio"] = mean(diff) * TRADING_DAYS / te if te > 0 else NAN
+        m["information_ratio"] = mean(diff) * P / te if te > 0 else NAN
         up = [(a, b) for a, b in zip(r, rb) if b > 0]
         dn = [(a, b) for a, b in zip(r, rb) if b < 0]
         m["up_capture"] = _div(mean([a for a, _ in up]), mean([b for _, b in up])) if up else NAN
@@ -3760,9 +3881,9 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
     return m
 
 
-def rolling_sharpe(equity, window=126, rf=0.0):
+def rolling_sharpe(equity, window=126, rf=0.0, ann=None):
     r = daily_returns(equity)
-    rfd = (1 + rf) ** (1 / TRADING_DAYS) - 1
+    rfd = (1 + rf) ** (1 / (ann or TRADING_DAYS)) - 1
     out = [NAN] * len(equity)
     if len(r) < window:
         return out
@@ -3775,15 +3896,15 @@ def rolling_sharpe(equity, window=126, rf=0.0):
             ss += new * new - old * old
         mu = s / window
         var = (ss - s * s / window) / (window - 1)
-        out[t] = (mu - rfd) / math.sqrt(var) * math.sqrt(TRADING_DAYS) if var > 1e-18 else NAN
+        out[t] = (mu - rfd) / math.sqrt(var) * math.sqrt((ann or TRADING_DAYS)) if var > 1e-18 else NAN
     return out
 
 
-def rolling_vol(equity, window=63):
+def rolling_vol(equity, window=63, ann=None):
     """Annualized volatility of the last `window` daily returns, aligned with equity."""
     r = daily_returns(equity)
     out = [NAN] * len(equity)
-    ann = math.sqrt(TRADING_DAYS)
+    ann = math.sqrt((ann or TRADING_DAYS))
     for t, v in enumerate(rolling_std(r, window, ddof=1)):
         out[t + 1] = v * ann if not isnan(v) else NAN
     return out
@@ -3835,7 +3956,7 @@ def summarize(res, rf=None, trials=None):
     rf = res.config.risk_free if rf is None else rf
     m = performance(res.dates, res.equity, rf, res.bench_equity, res.trades, res.exposure,
                     res.traded_notional, res.commission + res.slippage + res.spread_paid + res.impact_paid,
-                    len(res.fills), res.clipped, "ret_notional" if res.portfolio else "ret")
+                    len(res.fills), res.clipped, "ret_notional" if res.portfolio else "ret", res_ann(res))
     m.update(execution_stats(res))
     m.update(exposure_stats(res))
     c = res.carry
@@ -3849,9 +3970,9 @@ def summarize(res, rf=None, trials=None):
     m["derisked_share"] = lim.get("derisked_share", 0.0)
     m["avg_scale"] = lim.get("avg_scale", NAN)
     t = trials or {}
-    rfd = (1 + rf) ** (1 / TRADING_DAYS) - 1
-    m.update(deflated_sharpe(daily_returns(res.equity), t.get("n", 1), t.get("var"), rfd))
-    b = performance(res.dates, res.bench_equity, rf)
+    rfd = (1 + rf) ** (1 / res_ann(res)) - 1
+    m.update(deflated_sharpe(daily_returns(res.equity), t.get("n", 1), t.get("var"), rfd, res_ann(res)))
+    b = performance(res.dates, res.bench_equity, rf, ann=res_ann(res))
     return m, b
 
 
@@ -3874,7 +3995,7 @@ def attribution(res):
     """P&L by instrument: what each one contributed, plus interest on cash.
     The rows add up to the account's total P&L."""
     cash0 = res.config.cash
-    years = max(len(res.dates) / TRADING_DAYS, 1e-9)
+    years = max(len(res.dates) / res_ann(res), 1e-9)
     avg_eq = mean(res.equity) or cash0
     rows = []
     for tk in res.tickers:
@@ -3901,7 +4022,7 @@ def attribution(res):
 # 7. Research tools
 # =============================================================================
 
-def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120):
+def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120, ann=None):
     """Circular block bootstrap of daily returns.
 
     Resamples blocks of `block` consecutive days (keeping short-term patterns
@@ -3918,7 +4039,7 @@ def monte_carlo(returns_, n_paths=500, block=20, seed=7, points=120):
     points = max(2, min(points, T))
     checkpoints = sorted(set(int(round(j * (T - 1) / (points - 1))) for j in range(points)))
     snaps = [[] for _ in checkpoints]
-    years = T / TRADING_DAYS
+    years = T / (ann or TRADING_DAYS)
     finals, cagrs, mdds = [], [], []
     for _ in range(n_paths):
         eq = peak = 1.0
@@ -3972,8 +4093,8 @@ def _segment(res, a, b, rf):
     return {
         "start": d[0], "end": d[-1],
         "metrics": dict(performance(d, eq, rf, be, trades, res.exposure[a:b], notional, None, fills,
-                                    "ret_notional" if res.portfolio else "ret"), **exposure_stats(res, a, b)),
-        "bench": performance(d, be, rf),
+                                    trade_ret="ret_notional" if res.portfolio else "ret", ann=res_ann(res)), **exposure_stats(res, a, b)),
+        "bench": performance(d, be, rf, ann=res_ann(res)),
     }
 
 
@@ -4060,7 +4181,7 @@ def permutation_test(res, n_perm=500, seed=7):
     r = [[(x[t] / x[t - 1] - 1) if not (isnan(x[t]) or isnan(x[t - 1])) else 0.0 for x in tr] for t in range(1, n)]
     W = [res.weights[tk] for tk in res.tickers]
     pos = [[W[a][t] for a in range(k)] for t in range(n - 1)]  # weights at bar t's close are held over bar t + 1
-    ann = math.sqrt(TRADING_DAYS)
+    ann = math.sqrt(res_ann(res))
     m = len(r)
 
     def sharpe(p):
@@ -4104,7 +4225,7 @@ def expected_max_sharpe(trials, sr_var):
     return math.sqrt(sr_var) * ((1 - g) * norm_ppf(1 - 1.0 / trials) + g * norm_ppf(1 - 1.0 / (trials * math.e)))
 
 
-def deflated_sharpe(r, trials, sr_var_annual=None, rfd=0.0):
+def deflated_sharpe(r, trials, sr_var_annual=None, rfd=0.0, ann=None):
     """Deflated Sharpe Ratio (Bailey & Lopez de Prado, 2014) of daily returns r.
 
     The probability that the true Sharpe ratio beats the best one expected from
@@ -4124,10 +4245,10 @@ def deflated_sharpe(r, trials, sr_var_annual=None, rfd=0.0):
     if spread <= 0:
         return {}
     trials = max(1, int(trials))
-    var_d = sr_var_annual / TRADING_DAYS if sr_var_annual else spread / (n - 1)
+    var_d = sr_var_annual / (ann or TRADING_DAYS) if sr_var_annual else spread / (n - 1)
     sr0 = expected_max_sharpe(trials, var_d)
     return {"dsr": norm_cdf((sr - sr0) * math.sqrt(n - 1) / math.sqrt(spread)),
-            "sr_hurdle": sr0 * math.sqrt(TRADING_DAYS), "trials": trials}
+            "sr_hurdle": sr0 * math.sqrt((ann or TRADING_DAYS)), "trials": trials}
 
 
 def block_stats(r, n_blocks):
@@ -4141,7 +4262,7 @@ def block_stats(r, n_blocks):
     return out
 
 
-def pbo_cscv(blocks, labels=None):
+def pbo_cscv(blocks, labels=None, ann=None):
     """Probability of Backtest Overfitting by combinatorially symmetric cross-validation
     (Bailey, Borwein, Lopez de Prado & Zhu, 2015).
 
@@ -4165,7 +4286,7 @@ def pbo_cscv(blocks, labels=None):
             ss += blocks[c][i][1]
             cnt += blocks[c][i][2]
         var = (ss - s * s / cnt) / (cnt - 1) if cnt > 1 else 0.0
-        return s / cnt / math.sqrt(var) * math.sqrt(TRADING_DAYS) if var > 1e-18 else 0.0
+        return s / cnt / math.sqrt(var) * math.sqrt(ann or TRADING_DAYS) if var > 1e-18 else 0.0
 
     logits, is_best, oos_best, chosen = [], [], [], {}
     for comb in combinations(range(S), S // 2):
@@ -4192,14 +4313,14 @@ def pbo_cscv(blocks, labels=None):
     }
 
 
-def score_returns(r, metric="sharpe", days=None):
+def score_returns(r, metric="sharpe", days=None, ann=None):
     """A score for a slice of daily returns: sharpe, sortino, cagr, total_return or calmar."""
     if len(r) < 2:
         return NAN
     if metric in ("sharpe", "sortino"):
         mu = mean(r)
         sd = stdev(r) if metric == "sharpe" else math.sqrt(mean([min(x, 0.0) ** 2 for x in r]))
-        return mu / sd * math.sqrt(TRADING_DAYS) if sd > 0 else NAN
+        return mu / sd * math.sqrt((ann or TRADING_DAYS)) if sd > 0 else NAN
     eq, peak, mdd = 1.0, 1.0, 0.0
     for x in r:
         eq *= 1 + x
@@ -4207,7 +4328,7 @@ def score_returns(r, metric="sharpe", days=None):
         mdd = min(mdd, eq / peak - 1)
     if metric == "total_return":
         return eq - 1
-    years = (days if days else len(r)) / (365.25 if days else TRADING_DAYS)
+    years = (days if days else len(r)) / (365.25 if days else (ann or TRADING_DAYS))
     cagr = eq ** (1 / years) - 1 if eq > 0 and years > 0 else -1.0
     if metric == "cagr":
         return cagr
@@ -4949,7 +5070,7 @@ def factor_regression(res, specs, hac_lags=None):
     t-statistics, R-squared, and two decompositions that add up exactly: mean return
     = alpha + sum(beta x mean factor return), and variance = each factor's share
     (beta x cov(factor, fitted)) + the idiosyncratic rest."""
-    rf_const = res.config.risk_free / TRADING_DAYS
+    rf_const = res.config.risk_free / res_ann(res)
     rf = {}
     for spec in specs:
         if ":" in spec:
@@ -4978,13 +5099,13 @@ def factor_regression(res, specs, hac_lags=None):
     n = len(y)
     out_rows = []
     for i, nm in enumerate(["alpha"] + names):
-        scale = TRADING_DAYS if i == 0 else 1.0
+        scale = res_ann(res) if i == 0 else 1.0
         out_rows.append({"name": nm, "coef": fit["coef"][i] * scale, "se": fit["se"][i] * scale, "t": fit["t"][i],
                          "p": fit["p"][i], "se_hac": fit["se_hac"][i] * scale, "t_hac": fit["t_hac"][i], "p_hac": fit["p_hac"][i]})
     means = [sum(r[i] for r in rows) / n for i in range(1, len(names) + 1)]
-    attribution = [{"name": "alpha", "return": fit["coef"][0] * TRADING_DAYS}]
-    attribution += [{"name": nm, "beta": fit["coef"][i + 1], "factor_return": means[i] * TRADING_DAYS,
-                     "return": fit["coef"][i + 1] * means[i] * TRADING_DAYS} for i, nm in enumerate(names)]
+    attribution = [{"name": "alpha", "return": fit["coef"][0] * res_ann(res)}]
+    attribution += [{"name": nm, "beta": fit["coef"][i + 1], "factor_return": means[i] * res_ann(res),
+                     "return": fit["coef"][i + 1] * means[i] * res_ann(res)} for i, nm in enumerate(names)]
     var_y = sum((v - sum(y) / n) ** 2 for v in y) / (n - 1)
     fitted_sys = [f - fit["coef"][0] for f in fit["fitted"]]
     ms = sum(fitted_sys) / n
@@ -4995,10 +5116,10 @@ def factor_regression(res, specs, hac_lags=None):
         cov = sum((a - mc) * (b - ms) for a, b in zip(col, fitted_sys)) / (n - 1)
         variance.append({"name": nm, "share": fit["coef"][i + 1] * cov / var_y if var_y > 0 else NAN})
     variance.append({"name": "idiosyncratic", "share": 1 - sum(v["share"] for v in variance)})
-    resid_vol = stdev(fit["resid"]) * math.sqrt(TRADING_DAYS)
+    resid_vol = stdev(fit["resid"]) * math.sqrt(res_ann(res))
     return {"n": n, "factors": names, "rows": out_rows, "r2": fit["r2"], "adj_r2": fit["adj_r2"],
             "resid_vol": resid_vol, "hac_lags": fit["hac_lags"], "df": fit["df"],
-            "mean_excess": sum(y) / n * TRADING_DAYS, "attribution": attribution, "variance": variance,
+            "mean_excess": sum(y) / n * res_ann(res), "attribution": attribution, "variance": variance,
             "rf_source": "uploaded RF column" if rf else "risk-free setting (%.2f%%)" % (100 * res.config.risk_free)}
 
 
@@ -5061,7 +5182,7 @@ def risk_decomposition(res, window=252):
         Cw = [sum(C[i][j] * w[j] for j in range(k)) for i in range(k)]
         var = sum(w[i] * Cw[i] for i in range(k))
         vol = math.sqrt(max(var, 0.0))
-        ann = math.sqrt(TRADING_DAYS)
+        ann = math.sqrt(res_ann(res))
         assets = []
         for i, tk in enumerate(res.tickers):
             sd = math.sqrt(max(C[i][i], 0.0))
@@ -5241,7 +5362,7 @@ def portfolio_var(res, window=500, levels=(0.95, 0.99), horizon=10, backtest_win
                 x += 1
         lr, pv = kupiec_pof(x, nobs, 1 - q)
         bt.append({"level": q, "days": nobs, "breaches": x, "expected": nobs * (1 - q), "lr": lr, "p_value": pv})
-    return {"window": len(R), "horizon": h, "equity": eq, "vol": sig * math.sqrt(TRADING_DAYS), "skew": S, "kurtosis": K,
+    return {"window": len(R), "horizon": h, "equity": eq, "vol": sig * math.sqrt(res_ann(res)), "skew": S, "kurtosis": K,
             "levels": out, "backtest": bt, "backtest_window": backtest_window}
 
 
@@ -5410,6 +5531,10 @@ def _downsample(n, limit=600):
 def api_load_data(p):
     """Load prices (and optionally 'dividends' / 'splits' as [[date, value], ...])."""
     ds = DataSet.from_dict(p["ticker"], p["data"])
+    if p.get("calendar"):
+        if p["calendar"] not in CALENDARS:
+            raise ValueError("Unknown calendar %r; use one of %s." % (p["calendar"], ", ".join(CALENDARS)))
+        ds.calendar = p["calendar"]
     if p.get("splits"):
         ds.apply_splits(p["splits"])
     if p.get("dividends"):
@@ -5514,9 +5639,9 @@ def api_run(p):
         "monthly": monthly_table(res.dates, res.equity),
         "bench_monthly": monthly_table(res.dates, res.bench_equity),
         "hist": histogram([daily_returns(res.equity), daily_returns(res.bench_equity)]),
-        "rolling": {"window": window, "sharpe": rolling_sharpe(res.equity, window, cfg.risk_free),
-                    "bench": rolling_sharpe(res.bench_equity, window, cfg.risk_free),
-                    "vol_window": 63, "vol": rolling_vol(res.equity, 63), "bench_vol": rolling_vol(res.bench_equity, 63)},
+        "rolling": {"window": window, "sharpe": rolling_sharpe(res.equity, window, cfg.risk_free, res_ann(res)),
+                    "bench": rolling_sharpe(res.bench_equity, window, cfg.risk_free, res_ann(res)),
+                    "vol_window": 63, "vol": rolling_vol(res.equity, 63, res_ann(res)), "bench_vol": rolling_vol(res.bench_equity, 63, res_ann(res))},
         "annual": [{"year": y, "strategy": a, "bench": b} for (y, a), (_, b) in
                    zip(period_returns(res.dates, res.equity, "year"), period_returns(res.dates, res.bench_equity, "year"))],
         "logs": res.logs, "logs_total": len(res.full_logs), "notes": res.notes, "config": cfg.as_dict(),
@@ -5547,6 +5672,7 @@ def provenance(res, code, modules=()):
             "modules": module_hashes(modules),
             "params": dict(res.params), "config": res.config.as_dict(),
             "data": {tk: ds.fingerprint() for tk, ds in zip(res.tickers, res.panel.sets)},
+            "calendars": {tk: guess_calendar(ds) for tk, ds in zip(res.tickers, res.panel.sets)}, "periods_per_year": res_ann(res),
             "start": res.dates[0], "end": res.dates[-1], "bars": len(res.dates), "benchmark": res.benchmark}
 
 
@@ -5555,7 +5681,7 @@ def api_metrics(p):
     adds block_stats for PBO; 'returns': true adds the daily returns (for walk-forward)."""
     res, _ = _run_payload(p)
     m, _ = summarize(res)
-    out = {"params": res.params, "full": m}
+    out = {"params": res.params, "full": m, "ann": res_ann(res)}
     r = daily_returns(res.equity)
     if p.get("blocks"):
         out["blocks"] = block_stats(r, int(p["blocks"]))
@@ -5574,7 +5700,7 @@ def api_metrics(p):
 
 def api_montecarlo(p):
     res, _ = _run_payload(p)
-    mc = monte_carlo(daily_returns(res.equity), p.get("paths", 500), p.get("block", 20), p.get("seed", 7))
+    mc = monte_carlo(daily_returns(res.equity), p.get("paths", 500), p.get("block", 20), p.get("seed", 7), ann=res_ann(res))
     mc["dates"] = [res.dates[c + 1] for c in mc["checkpoints"]]
     mc["start_date"] = res.dates[0]
     return mc
@@ -5607,13 +5733,14 @@ def api_costs(p):
 
 
 def api_pbo(p):
-    out = pbo_cscv(p["blocks"], p.get("labels"))
+    A = float(p.get("ann") or TRADING_DAYS)
+    out = pbo_cscv(p["blocks"], p.get("labels"), ann=A)
     sr = p.get("sharpes") or []
     if sr:
         best = max(range(len(sr)), key=lambda c: -math.inf if sr[c] is None else sr[c])
         v = stdev([x for x in sr if x is not None]) ** 2 if len(sr) > 2 else None
         out["best"] = best
-        out["sr_hurdle"] = expected_max_sharpe(len(sr), v / TRADING_DAYS) * math.sqrt(TRADING_DAYS) if v else NAN
+        out["sr_hurdle"] = expected_max_sharpe(len(sr), v / A) * math.sqrt(A) if v else NAN
     return out
 
 

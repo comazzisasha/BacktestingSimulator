@@ -161,6 +161,7 @@ select option { background-color: var(--panel); color: var(--fg); }
 .btn.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
 .btn.primary:hover { background: color-mix(in srgb, var(--primary) 82%, var(--bg)); }
 .btn.small { min-height: 30px; padding: 0 10px; font-size: 13px; }
+select.small { height: 30px; min-height: 30px; padding: 0 26px 0 8px; font-size: 13px; width: auto; max-width: 260px; }
 .btn.danger { color: var(--loss); }
 .btn.danger:hover { border-color: var(--loss); }
 .btn.armed { background: var(--loss); border-color: var(--loss); color: #fff; }
@@ -1070,7 +1071,7 @@ function NF(key, opts) { return nf[key] || (nf[key] = new Intl.NumberFormat(LOCA
 const UTC_DAY = { timeZone: 'UTC' };
 const dfDay = new Intl.DateTimeFormat(LOCALE, { year: 'numeric', month: 'short', day: 'numeric', ...UTC_DAY });
 const dfMonth = new Intl.DateTimeFormat(LOCALE, { year: 'numeric', month: 'short', ...UTC_DAY });
-const toDate = iso => new Date(iso + 'T00:00:00Z');
+const toDate = iso => new Date(iso.slice(0, 10) + 'T00:00:00Z');   // intraday stamps: the date part
 const fmt = {
   pct: (v, d = 2, signed = false) => (v == null ? '—' : NF(`p${d}${signed}`, { style: 'percent', minimumFractionDigits: d, maximumFractionDigits: d, signDisplay: signed ? 'exceptZero' : 'auto' }).format(v)),
   num: (v, d = 2) => (v == null ? '—' : Math.abs(v) >= 1e5 ? NF('sci', { notation: 'scientific', maximumFractionDigits: 2 }).format(v) : NF('n' + d, { minimumFractionDigits: d, maximumFractionDigits: d }).format(v)),
@@ -1082,7 +1083,7 @@ const fmt = {
   years: v => (v == null ? '—' : NF('n1', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v) + ' years'),
   pval: v => (v == null ? '—' : v < 0.001 ? '< ' + NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(0.001) : NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(v)),
   price: v => (v == null ? '—' : NF('px', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
-  date: iso => (iso ? dfDay.format(toDate(iso)) : '—'),
+  date: iso => (iso ? dfDay.format(toDate(iso)) + (iso.length > 10 ? ' ' + iso.slice(11, 16) : '') : '—'),
   month: iso => (iso ? dfMonth.format(toDate(iso)) : ''),
 };
 const UNSIGNED = new Set(['volatility', 'downside_dev', 'exposure', 'avg_leverage', 'win_rate', 'pct_pos_days', 'pct_pos_months', 'tracking_error',
@@ -1242,6 +1243,7 @@ const CSV_COLUMNS = {
   open: ['open'], high: ['high'], low: ['low'], volume: ['volume', 'vol.'],
   dividend: ['dividends', 'dividend', 'cash amount', 'amount', 'dividend amount'],
   split: ['stock splits', 'split', 'splits', 'split ratio', 'ratio'],
+  clock: ['time'],   // a time-of-day column next to a separate date column (intraday files)
 };
 function csvHeader(text) {
   const first = text.replace(/^﻿/, '').split(/\r?\n/).find(l => l.trim());
@@ -1270,6 +1272,32 @@ function csvDate(s) {
   const dt = new Date(Date.UTC(y, mo - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? dt.toISOString().slice(0, 10) : null;
 }
+// A bar's time stamp, exactly as engine._iso_stamp: 'YYYY-MM-DD', or 'YYYY-MM-DDTHH:MM[:SS]' for
+// intraday bars. Also YYYYMMDD and Unix seconds / milliseconds; midnight is a plain date.
+function csvStamp(raw) {
+  const s = String(raw == null ? '' : raw).replace(/"/g, '').trim();
+  const two = n => String(n).padStart(2, '0');
+  const stamp = (day, h, m, sec) => (h === 0 && m === 0 && sec === 0 ? day : `${day}T${two(h)}:${two(m)}${sec ? ':' + two(sec) : ''}`);
+  if (/^\d+$/.test(s) && [9, 10, 12, 13].includes(s.length)) {
+    const t = new Date(Math.floor(+s * (s.length >= 12 ? 1 : 1000) / 1000) * 1000);
+    return stamp(t.toISOString().slice(0, 10), t.getUTCHours(), t.getUTCMinutes(), t.getUTCSeconds());
+  }
+  if (/^\d{8}$/.test(s)) return csvDate(`${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6)}`);
+  const sep = s.slice(8, 11).includes('T') ? s.indexOf('T') : s.indexOf(' ');
+  const day = csvDate(sep < 0 ? s : s.slice(0, sep));
+  if (!day || sep < 0) return day;
+  let clock = s.slice(sep + 1).trim().toUpperCase();
+  const pm = clock.endsWith('PM'), am = clock.endsWith('AM');
+  if (pm || am) clock = clock.slice(0, -2).trim();
+  for (const z of ['Z', '+', '-']) { const k = clock.indexOf(z, 1); if (k > 0) clock = clock.slice(0, k); }
+  const parts = clock.split(':');
+  if (!/^\d+$/.test(parts[0]) || (parts.length > 1 && !/^\d+$/.test(parts[1])) || (parts.length > 2 && parts[2] && !/^\d+(\.\d*)?$/.test(parts[2]))) return day;
+  let h = +parts[0]; const m = parts.length > 1 ? +parts[1] : 0, sec = parts.length > 2 && parts[2] ? Math.trunc(+parts[2]) : 0;
+  if (pm && h < 12) h += 12;
+  if (am && h === 12) h = 0;
+  if (!(h >= 0 && h < 24 && m >= 0 && m < 60 && sec >= 0 && sec < 60)) return null;
+  return stamp(day, h, m, sec);
+}
 // Prices: the raw close is the trading price; an adjusted close is passed on so the engine can
 // recover dividends from it. With an adjusted close alone, it becomes the price.
 function parseCSV(text) {
@@ -1279,11 +1307,13 @@ function parseCSV(text) {
   const col = key => { for (const n of CSV_COLUMNS[key]) { const i = head.indexOf(n); if (i >= 0) return i; } return -1; };
   const iD = col('date'), iC = col('close'), iA = col('adj_close');
   const iO = col('open'), iH = col('high'), iL = col('low'), iV = col('volume');
+  const iT = col('clock') === iD ? -1 : col('clock');
   if (iD < 0 || (iC < 0 && iA < 0)) throw new Error('No Date & Close columns found. Use the CSV from Nasdaq.com’s “Download Historical Data” button.');
   const iP = iC >= 0 ? iC : iA, useAdj = iC >= 0 && iA >= 0;
   const rows = [];
   for (const line of lines.slice(1)) {
-    const c = splitCSVLine(line); const d = csvDate(c[iD]); const close = csvNum(c[iP]);
+    const c = splitCSVLine(line); const close = csvNum(c[iP]);
+    const d = csvStamp(iT >= 0 && c[iT] && String(c[iT]).trim() ? `${String(c[iD] || '').trim()} ${String(c[iT]).trim()}` : c[iD]);
     if (!d || !(close > 0)) continue;
     const at = i => (i >= 0 ? csvNum(c[i]) : NaN);
     rows.push([d, at(iO), at(iH), at(iL), close, at(iV), useAdj ? at(iA) : NaN]);
@@ -1382,7 +1412,7 @@ const py = {
       const rec = instruments.get(t);
       if (!rec) throw new Error(`No data is loaded for ${t}. Add it on the Data tab.`);
       const ev = rec.events || {};
-      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null });
+      const info = await this.call('load_data', { ticker: t, data: rec.data, dividends: ev.dividends || null, splits: ev.splits || null, calendar: store.get('calendars', {})[t] || null });
       dataInfo.set(t, info); this.loaded.add(t);
     }
   },
@@ -2283,7 +2313,7 @@ function marketRange() {
   const ts = isPortfolio() ? pickedUniverse() : [$('#instrument').value];
   const recs = ts.map(t => instruments.get(t)).filter(Boolean);
   if (!recs.length) return null;
-  return { start: recs.map(r => r.start).sort()[0], end: recs.map(r => r.end).sort().slice(-1)[0] };
+  return { start: recs.map(r => r.start.slice(0, 10)).sort()[0], end: recs.map(r => r.end.slice(0, 10)).sort().slice(-1)[0] };
 }
 function validInputs() {
   if (!validate(DATE_RULES)) return false;
@@ -2694,7 +2724,7 @@ async function renderOverfit(results, p1, p2, fam) {
   const out = $('#swOut'); const box = document.createElement('div'); box.className = 'stack'; box.style.gap = '8px'; out.appendChild(box);
   const labels = results.map(x => (p2 ? `${p1}=${x.a}, ${p2}=${x.b}` : `${p1}=${x.a}`));
   try {
-    const r = await py.call('pbo', { blocks: results.map(x => x.r.blocks), labels, sharpes: results.map(x => x.r.full.sharpe) });
+    const r = await py.call('pbo', { blocks: results.map(x => x.r.blocks), labels, sharpes: results.map(x => x.r.full.sharpe), ann: results[0].r.ann });
     const best = results[r.best]; const n = Object.keys(trials.get(fam)).length;
     const verdict = r.pbo > 0.5 ? 'The in-sample winner usually does worse than a typical setting out of sample: the sweep is mostly fitting noise.' : r.pbo > 0.2 ? 'A real risk that the best setting was picked for luck; prefer a broad plateau over the single best value.' : 'The best settings tend to stay good out of sample.';
     box.innerHTML = `<h3>Overfitting Check</h3><p style="margin:0">Probability of backtest overfitting <b>${fmt.pct(r.pbo, 0)}</b> (${fmt.int(r.splits)} ways to split ${r.blocks} blocks in half). ${verdict} In-sample Sharpe of the winner ${fmt.num(r.is_sharpe)} → out of sample ${fmt.num(r.oos_sharpe)}; it lost money out of sample in ${fmt.pct(r.prob_oos_loss, 0)} of splits.</p>` +
@@ -3277,16 +3307,29 @@ function renderInstTable() {
   const list = sortedTickers();
   if (!qualityChecking) $('#instCount').textContent = `${fmt.int(list.length)} instrument${list.length === 1 ? '' : 's'}`;
   if (!list.length) { $('#instTable').innerHTML = '<tbody><tr><td class="muted">No instruments yet. Drop a CSV file above to add one.</td></tr></tbody>'; return; }
-  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Days</th><th scope="col" class="n">Last Close</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
+  let h = '<caption class="sr">Loaded instruments</caption><thead><tr><th scope="col">Ticker</th><th scope="col">Name</th><th scope="col">Source</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Bars</th><th scope="col" class="n">Last Close</th><th scope="col">Calendar</th><th scope="col">Dividends</th><th scope="col">Data Quality</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>';
   for (const t of list) {
     const r = instruments.get(t);
     const src = r.synthetic ? '<span class="chip">Synthetic demo</span>' : r.base === 'bundled' ? '<span class="chip">Bundled + your files</span>' : r.source === 'upload' ? '<span class="chip">Your file</span>' : '<span class="chip">Bundled</span>';
     h += `<tr><th scope="row" translate="no">${esc(t)}</th><td>${esc(r.name || '')}</td><td>${src}</td><td class="tnum">${fmt.date(r.start)}</td><td class="tnum">${fmt.date(r.end)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.price(r.last)}</td>` +
-      `<td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
+      `<td>${calendarSelect(t)}</td><td>${dividendBadge(t)}</td><td>${qualityBadge(t)}</td>` +
       `<td>${r.source === 'upload' ? `<button class="btn small danger" type="button" data-remove="${esc(t)}" aria-label="Remove ${esc(t)}">${r.base === 'bundled' ? 'Reset' : 'Remove'}</button>` : ''}</td></tr>`;
     if (openQuality.has(t) && dataInfo.has(t)) h += qualityDetail(t);
   }
   $('#instTable').innerHTML = h + '</tbody>';
+}
+// The calendar sets how statistics are annualized: trading days a year x bars per day.
+const CAL_NAMES = { NYSE: 'NYSE (252)', weekdays: 'Weekdays (260)', '24/7': 'Every day (365)' };
+function calendarSelect(t) {
+  const q = (dataInfo.get(t) || {}).quality, cur = store.get('calendars', {})[t] || '';
+  const auto = q ? `Auto: ${q.calendar === 'weekdays' ? 'weekdays' : q.calendar}${q.bars_per_day > 1 ? ` × ${fmt.int(q.bars_per_day)} bars/day` : ''} (${fmt.int(q.periods_per_year)}/yr)` : 'Auto';
+  return `<select class="small" data-calendar="${esc(t)}" aria-label="Calendar for ${esc(t)}"><option value=""${cur ? '' : ' selected'}>${esc(auto)}</option>` +
+    Object.entries(CAL_NAMES).map(([k, v]) => `<option value="${k}"${cur === k ? ' selected' : ''}>${v}</option>`).join('') + '</select>';
+}
+function setCalendar(t, cal) {
+  const c = store.get('calendars', {}); if (cal) c[t] = cal; else delete c[t]; store.set('calendars', c);
+  py.forget(t); dataInfo.delete(t); checkAllData();
+  toast(cal ? `${t} now uses the ${CAL_NAMES[cal]} calendar for annualizing.` : `${t}’s calendar is judged from its dates again.`);
 }
 function renderRateTable() {
   const list = [...rates.values()].sort((a, b) => a.ticker.localeCompare(b.ticker));
@@ -3398,6 +3441,8 @@ async function reproduceRun(x) {
   if (Object.keys(was.config).some(k => JSON.stringify(now.provenance.config[k]) !== JSON.stringify(was.config[k]))) diffs.push('the settings');
   const dataDiff = Object.keys({ ...was.data, ...now.provenance.data }).filter(t => was.data[t] !== now.provenance.data[t]);
   if (dataDiff.length) diffs.push(`the data for ${dataDiff.join(', ')}`);
+  const calDiff = was.calendars ? Object.keys(was.calendars).filter(t => (now.provenance.calendars || {})[t] !== was.calendars[t]) : [];
+  if (calDiff.length) diffs.push(`the calendar of ${calDiff.join(', ')}`);
   if (now.provenance.engine_version !== was.engine_version) diffs.push(`the engine (${was.engine_version} → ${now.provenance.engine_version})`);
   const same = Math.abs(now.metrics.final_equity - x.metrics.final_equity) < 0.005 && now.metrics.n_trades === x.metrics.n_trades;
   toast(same && !diffs.length ? `Reproduced exactly: same code, settings, data & engine; final equity ${fmt.money(now.metrics.final_equity)} matches to the cent.`
@@ -3842,6 +3887,7 @@ function wire() {
     const btn = e.target.closest('button[data-act="skip"]'); if (!btn) return;
     const p = pendingFiles.find(x => x.id === btn.closest('form').dataset.id); if (p) { pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); toast(`Skipped ${p.file}.`); }
   });
+  $('#instTable').addEventListener('change', e => { const sel = e.target.closest('select[data-calendar]'); if (sel) setCalendar(sel.dataset.calendar, sel.value); });
   $('#instTable').addEventListener('click', e => {
     const q = e.target.closest('button[data-quality]');
     if (q) { const t = q.dataset.quality; if (openQuality.has(t)) openQuality.delete(t); else openQuality.add(t); renderInstTable(); $(`button[data-quality="${t}"]`).focus(); return; }

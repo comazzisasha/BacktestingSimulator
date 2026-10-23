@@ -1611,6 +1611,106 @@ def test_limit_settings_are_validated():
         raise AssertionError("accepted %r" % bad)
 
 
+# ---------------------------------------------------- calendars & intraday -----
+
+def test_time_stamps_parse_dates_times_and_epochs():
+    cases = {
+        "2024-01-02": "2024-01-02", "01/02/2024": "2024-01-02", "20240102": "2024-01-02",
+        "2024-01-02 09:30": "2024-01-02T09:30", "2024-01-02T09:30:00Z": "2024-01-02T09:30",
+        "2024-01-02T09:30:15-05:00": "2024-01-02T09:30:15", "01/02/2024 1:05 PM": "2024-01-02T13:05",
+        "01/02/2024 12:00 AM": "2024-01-02", "01/05/2024 00:00": "2024-01-05", "1704187800": "2024-01-02T09:30",
+        "1704187800000": "2024-01-02T09:30", "2024-13-01": None, "2024-01-02 25:00": None,
+    }
+    for raw, want in cases.items():
+        assert engine._iso_stamp(raw) == want, (raw, engine._iso_stamp(raw), want)
+
+
+def _intraday(days=20, per_day=78, seed=1, ticker="BARS", start="2024-01-02"):
+    rng = random.Random(seed)
+    d0 = engine._dt.date.fromisoformat(start)
+    stamps, close, px = [], [], 100.0
+    day = d0
+    while len({x[:10] for x in stamps}) < days:
+        if day.weekday() < 5:
+            for k in range(per_day):
+                m = 9 * 60 + 30 + 5 * k
+                stamps.append("%sT%02d:%02d" % (day.isoformat(), m // 60, m % 60))
+                px *= 1 + rng.gauss(0, 0.002)
+                close.append(px)
+        day += engine._dt.timedelta(days=1)
+    return engine.DataSet(ticker, stamps, close, volume=[1e5] * len(close))
+
+
+def test_browser_and_python_parse_intraday_csv_identically():
+    sep_cols = "Date,Time,Open,High,Low,Close,Volume\n" + "".join(
+        "01/%02d/2024,%s,%d,%d,%d,%d.5,1000\n" % (d, t, 100 + d, 102 + d, 99 + d, 101 + d) for d in (2, 3) for t in ("9:30 AM", "12:00 PM", "3:55 PM"))
+    iso = "timestamp,open,high,low,close,volume\n" + "".join(
+        "2024-03-04T%02d:00:00Z,1,2,0.5,%d,10\n" % (h, h) for h in range(10, 16))
+    epoch = "time,open,high,low,close,Volume\n" + "".join("%d,1,1,1,%d,5\n" % (1704187800 + 300 * i, 10 + i) for i in range(5))
+    texts = [sep_cols, iso, epoch]
+    parsed = browser_parse(texts)
+    pys = [engine.parse_csv_text(t, "X") for t in texts]
+    assert pys[0].dates[:3] == ["2024-01-02T09:30", "2024-01-02T12:00", "2024-01-02T15:55"]
+    assert pys[1].dates[0] == "2024-03-04T10:00" and pys[2].dates[1] == "2024-01-02T09:35"
+    if parsed is None:
+        print("skip  browser/Python intraday parity (needs node)")
+        return
+    for text, js, py in zip(texts, parsed, pys):
+        assert "error" not in js, js
+        via = engine.DataSet.from_dict("X", js)
+        for col in ("dates", "open", "high", "low", "close", "volume"):
+            assert getattr(via, col) == getattr(py, col), (col, text[:30])
+
+
+def test_calendars_and_periods_per_year():
+    assert engine.guess_calendar(DEMO) == "weekdays" and engine.periods_per_year(DEMO) == 252, "weekday data keeps 252 unless chosen"
+    spy = engine.load_csv(os.path.join(ROOT, "data", "SPY.csv"), "SPY")
+    assert engine.guess_calendar(spy) == "NYSE" and engine.periods_per_year(spy) == 252
+    d0 = engine._dt.date(2022, 1, 1)
+    days = [(d0 + engine._dt.timedelta(days=i)).isoformat() for i in range(400)]
+    btc = engine.DataSet("BTC", days, [100 * 1.001 ** i for i in range(400)])
+    assert engine.guess_calendar(btc) == "24/7" and engine.periods_per_year(btc) == 365
+    fx = engine.DataSet("EURUSD", DEMO.dates, DEMO.close)
+    fx.calendar = "weekdays"
+    assert engine.periods_per_year(fx) == 260
+    res = engine.backtest(engine.Strategy.from_code("def on_bar(ctx):\n    return 1.0\n"), btc, engine.Config(slippage_bps=0))
+    m, _ = engine.summarize(res)
+    r = engine.daily_returns(res.equity)
+    assert res.ann == 365 and approx(m["volatility"], engine.stdev(r) * math.sqrt(365))
+    q = engine.quality_report(btc)
+    assert q["calendar"] == "24/7" and "missing_days" not in q["issues"] and q["periods_per_year"] == 365
+
+
+def test_intraday_backtest():
+    ds = _intraday()
+    assert engine.bars_per_day(ds) == 78 and engine.periods_per_year(ds) == 252 * 78
+    code = "def on_bar(ctx):\n    if ctx.time == '09:30':\n        ctx.state.setdefault('times', []).append(ctx.time)\n    return 0.5 if ctx.time and ctx.time < '15:00' else 0.0\n"
+    res = engine.backtest(engine.Strategy.from_code(code), ds, engine.Config(slippage_bps=0, cash_rate=0.036))
+    m, _ = engine.summarize(res)
+    r = engine.daily_returns(res.equity)
+    assert approx(m["volatility"], engine.stdev(r) * math.sqrt(252 * 78))
+    assert m["years"] > 0 and res.ann == 252 * 78
+    # the strategy is flat at every close of the day, so only cash earns interest: once per calendar day
+    days = [engine._dt.date.fromisoformat(d) for d in sorted({x[:10] for x in ds.dates})]
+    assert res.carry["interest_earned"] > 0
+    # positions open after 15:00 never: exposure at the 15:55 bars is 0
+    assert all(abs(res.exposure[i]) < 1e-9 for i, d in enumerate(res.dates) if d.endswith("15:55"))
+    # a dividend dated by day is paid on the first bar of that day
+    ds2 = _intraday()
+    ds2.set_dividends([("2024-01-10", 0.5)])
+    j = ds2.dates.index("2024-01-10T09:30")
+    assert ds2.dividends[j] == 0.5 and sum(ds2.dividends) == 0.5
+    # a daily benchmark on intraday bars uses only days that have closed
+    daily = engine.DataSet("DAY", sorted({x[:10] for x in ds.dates}), [100 + i for i in range(20)])
+    res2 = engine.backtest(engine.Strategy.from_code("def on_bar(ctx):\n    return 0.0\n"), ds, engine.Config(), bench=daily)
+    i = res2.dates.index("2024-01-04T12:00")
+    k = res2.dates.index("2024-01-02T09:30")
+    assert approx(res2.bench_equity[i] / res2.bench_equity[k], 101 / 100), "Jan 4 midday sees Jan 3's close, not Jan 4's"
+    # end dates include the whole last day
+    s, e = engine._resolve_range(ds.dates, "2024-01-03", "2024-01-04")
+    assert ds.dates[s] == "2024-01-03T09:30" and ds.dates[e] == "2024-01-04T15:55"
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
