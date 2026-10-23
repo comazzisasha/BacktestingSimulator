@@ -856,12 +856,15 @@ class DataSet:
         return self.cached(("total_return",), build)
 
     def fingerprint(self):
-        """Short hash of the prices and dividends, to tell exactly which data a run used."""
-        import hashlib
-        h = hashlib.sha256()
-        for cols in (self.dates, self.open, self.high, self.low, self.close, self.volume, self.dividends):
-            h.update(json.dumps(cols if cols is self.dates else [round(v, 8) for v in cols]).encode())
-        return h.hexdigest()[:16]
+        """Short hash of the exact prices and dividends, to tell which data a run used."""
+        def build():
+            import hashlib
+            import struct
+            h = hashlib.sha256("\n".join(self.dates).encode())
+            for col in (self.open, self.high, self.low, self.close, self.volume, self.dividends):
+                h.update(struct.pack("<%dd" % len(col), *col))
+            return h.hexdigest()[:16]
+        return self.cached(("fingerprint",), build)
 
     def col(self, name):
         if name not in PRICE_COLUMNS:
@@ -1897,6 +1900,7 @@ class Account:
                       "interest_paid": 0.0, "borrow_paid": 0.0}
         self.margin_calls = []
         self._val = [NAN] * k                # valuation prices during an execution
+        self._eq = None                      # equity at those prices (None = recompute)
         self.spread_paid = 0.0
         self.impact_paid = 0.0
         self.partial_fills = 0               # market orders cut by the participation limit
@@ -1942,15 +1946,19 @@ class Account:
         return eq
 
     def _equity_val(self):
-        eq = self.cash
-        for a, sh in enumerate(self.shares):
-            if sh:
-                eq += sh * self._val[a]
-        return eq
+        """Equity at the current valuation prices (kept up to date fill by fill)."""
+        if self._eq is None:
+            eq = self.cash
+            for a, sh in enumerate(self.shares):
+                if sh:
+                    eq += sh * self._val[a]
+            self._eq = eq
+        return self._eq
 
     def _set_val(self, px, t):
         for a in range(self.k):
             self._val[a] = px[a] if px[a] is not None else self.panel.mark(a, t)
+        self._eq = None
 
     def asset_value(self, a, price):
         return self.asset_cash[a] + self.shares[a] * price
@@ -1986,6 +1994,7 @@ class Account:
                     fee_total += f
         self.carry["borrow_paid"] += fee_total
         self.cash += x - fee_total
+        self._eq = None
 
     def pay_dividends(self, t):
         """Holders on the ex-date receive the dividend; short sellers pay it."""
@@ -1996,6 +2005,7 @@ class Account:
                 if d:
                     amt = sh * d
                     self.cash += amt
+                    self._eq = None
                     self.asset_cash[a] += amt
                     self.asset_dividends[a] += amt
                     self.carry["dividends_received" if amt > 0 else "dividends_paid"] += abs(amt)
@@ -2160,7 +2170,9 @@ class Account:
         adj = slip + half + imp
         px = price * (1 + adj) if q > 0 else price * (1 - adj)
         comm = abs(q) * px * cfg.commission_bps / 1e4 + cfg.commission_fixed
-        self._val[a] = price
+        if self._val[a] != price:
+            self._val[a] = price
+            self._eq = None
         eq_before = self._equity_val()
         value_before = self.asset_value(a, price)
         self.cash -= q * px + comm
@@ -2187,7 +2199,8 @@ class Account:
         if reason:
             fill["reason"] = reason
         self.fills.append(fill)
-        eq_after = self._equity_val()
+        self._eq = eq_before + q * price - q * px - comm   # the fill's only effect on equity
+        eq_after = self._eq
         value_after = self.asset_value(a, price)
 
         flipped = prev != 0 and new != 0 and (prev > 0) != (new > 0)
@@ -2445,7 +2458,7 @@ def signal_rows(raw, panel, portfolio, n=None):
             if len(s) != n:
                 raise _user_error("signals(data)[%r] has %d values but the calendar has %d bars." % (tk, len(s), n))
             cols[panel.tickers.index(tk)] = s
-        rows = [{a: cols[a][t] if a in cols else 0.0 for a in range(panel.k)} for t in range(n)]
+        rows = [{tk: (cols[a][t] if a in cols else 0.0) for a, tk in enumerate(panel.tickers)} for t in range(n)]
     else:
         rows = list(raw)
         if len(rows) != n:
@@ -3842,12 +3855,22 @@ DATA = {}
 
 
 def _sanitize(x):
-    if isinstance(x, float):
-        return x if (x == x and not math.isinf(x)) else None
-    if isinstance(x, dict):
-        return {str(k): _sanitize(v) for k, v in x.items()}
-    if isinstance(x, (list, tuple)):
+    """Replace NaN and +/-Infinity with None (JSON has neither), keeping everything else.
+
+    A list whose sum() is finite holds only finite numbers, and sum() runs in C, so
+    long numeric series pass through without a Python-level loop."""
+    t = type(x)
+    if t is float:
+        return x if x - x == 0 else None
+    if t is list or t is tuple:
+        try:
+            if math.isfinite(sum(x)):
+                return x
+        except TypeError:
+            pass
         return [_sanitize(v) for v in x]
+    if t is dict:
+        return {(k if type(k) is str else str(k)): _sanitize(v) for k, v in x.items()}
     return x
 
 
@@ -3963,10 +3986,33 @@ def api_inspect(p):
     return {"params": strat.params, "mode": strat.mode, "universe": strat.universe}
 
 
+LAST_RUN = {}      # the latest api_run Result, so exports can fetch every fill & trade
+ROW_LIMIT = 5000   # fills and trades sent with a run; the rest stay here until asked for
+
+
+def _fill_rows(res, fills):
+    return [{"i": f["i"] - res.start, "date": f["date"], "ticker": f["ticker"], "side": f["side"],
+             "qty": f["qty"], "price": f["price"], "commission": f["commission"],
+             "position": f["position"], "reason": f.get("reason"), "kind": f.get("kind"),
+             "arrival": f.get("arrival")} for f in fills]
+
+
+def api_rows(p):
+    """Every fill or trade of the latest run (the run output keeps only the last ROW_LIMIT)."""
+    res = LAST_RUN.get("res")
+    if res is None:
+        raise ValueError("No run to export yet.")
+    return _fill_rows(res, res.fills) if p.get("kind") == "fills" else res.trades
+
+
 def api_run(p):
+    import time
+    t0 = time.perf_counter()
     res, strat = _run_payload(p)
+    t1 = time.perf_counter()
     cfg = res.config
     m, b = summarize(res, trials=p.get("trials"))
+    t2 = time.perf_counter()
     window = int(p.get("rolling_window") or 126)
     out = {
         "ticker": res.ticker, "tickers": res.tickers, "portfolio": res.portfolio,
@@ -3975,12 +4021,8 @@ def api_run(p):
         "drawdown": drawdown(res.equity), "bench_drawdown": drawdown(res.bench_equity),
         "exposure": res.exposure, "position": res.position,
         "gross": res.gross, "net": res.net, "long": res.long, "short": res.short,
-        "fills": [{"i": f["i"] - res.start, "date": f["date"], "ticker": f["ticker"], "side": f["side"],
-                   "qty": f["qty"], "price": f["price"], "commission": f["commission"],
-                   "position": f["position"], "reason": f.get("reason"), "kind": f.get("kind"),
-                   "arrival": f.get("arrival")}
-                  for f in res.fills],
-        "trades": res.trades, "metrics": m, "bench_metrics": b,
+        "fills": _fill_rows(res, res.fills[-ROW_LIMIT:]), "fills_total": len(res.fills),
+        "trades": res.trades[-ROW_LIMIT:], "trades_total": len(res.trades), "metrics": m, "bench_metrics": b,
         "carry": res.carry, "margin_calls": res.margin_calls[:50], "book": res.book_stats,
         "monthly": monthly_table(res.dates, res.equity),
         "bench_monthly": monthly_table(res.dates, res.bench_equity),
@@ -3999,9 +4041,12 @@ def api_run(p):
         out["attribution"] = attribution(res)
         out["weights"] = {"index": idx, "series": {tk: [res.weights[tk][i] for i in idx] for tk in res.tickers},
                           "full": {tk: [round(w, 6) for w in res.weights[tk]] for tk in res.tickers}}
+    t3 = time.perf_counter()
     if res.signals is not None:
         data = res.panel if res.portfolio else res.panel.sets[0]
         out["lookahead"] = lookahead_check(strat, data, res.signals, budget=float(p.get("lookahead_budget", 4.0)))
+    out["timing"] = {"backtest": t1 - t0, "statistics": t2 - t1, "charts": t3 - t2, "lookahead": time.perf_counter() - t3}
+    LAST_RUN["res"] = res
     return out
 
 
@@ -4108,18 +4153,29 @@ API = {
     "inspect": api_inspect, "run": api_run, "metrics": api_metrics,
     "montecarlo": api_montecarlo, "split": api_split, "analytics": api_analytics,
     "subperiods": api_subperiods, "costs": api_costs, "permutation": api_permutation,
-    "pbo": api_pbo, "wfo": api_wfo,
+    "pbo": api_pbo, "wfo": api_wfo, "rows": api_rows,
     "metric_list": api_metric_list,
 }
+
+
+def to_json(x):
+    """Compact JSON text with NaN and +/-Infinity as null (JavaScript can't parse them)."""
+    return json.dumps(_sanitize(x), allow_nan=False, separators=(",", ":"))
 
 
 def handle(method, payload_json):
     """Entry point for the web page: returns a JSON string {ok, result | error}."""
     try:
+        import time
         p = json.loads(payload_json) if payload_json else {}
         if method not in API:
             raise ValueError("unknown method %r" % method)
-        return json.dumps({"ok": True, "result": _sanitize(API[method](p))}, allow_nan=False)
+        result = API[method](p)
+        t0 = time.perf_counter()
+        text = to_json({"ok": True, "result": result})
+        if isinstance(result, dict) and "timing" in result:   # how long the hand-over to the page took
+            text = text[:-2] + ',"_encode":%.6f}}' % (time.perf_counter() - t0)
+        return text
     except StrategyError as e:
         return json.dumps({"ok": False, "error": _sanitize(e.info)})
     except Exception as e:  # noqa: BLE001

@@ -897,6 +897,24 @@ def test_portfolio_templates_run_and_are_causal():
     assert engine.lookahead_check(strat, res.panel, res.signals)["violations"], "portfolio look-ahead is caught too"
 
 
+def test_portfolio_signal_formats_agree():
+    sets = [DEMO, BOND]
+    as_dict = ("def signals(data):\n    s = qt.sma(data['DEMO-STOCK'].close, 50)\n"
+               "    w = [0.6 if c > m else 0.2 for c, m in zip(data['DEMO-STOCK'].close, s)]\n"
+               "    return {'DEMO-STOCK': w, 'DEMO-BOND': [1 - x for x in w]}\n")
+    rows = as_dict.replace("    return {'DEMO-STOCK': w, 'DEMO-BOND': [1 - x for x in w]}\n",
+                           "    return [{'DEMO-STOCK': x, 'DEMO-BOND': 1 - x} for x in w]\n")
+    results = [engine.backtest_portfolio(engine.Strategy.from_code(c), sets).equity for c in (as_dict, rows)]
+    try:
+        import numpy  # noqa: F401
+        matrix = as_dict.replace("    return {'DEMO-STOCK': w, 'DEMO-BOND': [1 - x for x in w]}\n",
+                                 "    import numpy as np\n    return np.column_stack([w, [1 - x for x in w]])\n")
+        results.append(engine.backtest_portfolio(engine.Strategy.from_code(matrix), sets).equity)
+    except ImportError:
+        pass
+    assert all(r == results[0] for r in results), "dict of lists, list of dicts and a matrix are the same weights"
+
+
 def test_portfolio_errors_are_readable():
     for code, msg in (("def on_bar(ctx):\n    return {'NOPE': 1}\n", "not in the portfolio"),
                       ("def on_bar(ctx):\n    return [1, 2, 3]\n", "3 weights for 2 instruments"),
@@ -961,6 +979,14 @@ def test_bundled_data_parses():
         ds = engine.load_csv(os.path.join(ROOT, "data", m["file"]), m["ticker"])
         assert ds.n > 1000, m["ticker"]
         assert all(l <= min(o, c) + 1e-9 and h >= max(o, c) - 1e-9 for o, h, l, c in zip(ds.open, ds.high, ds.low, ds.close)), m["ticker"]
+
+
+def test_json_output_replaces_only_nonfinite_numbers():
+    x = {"a": float("nan"), "b": [1.5, float("inf"), -float("inf")], 3: (1, 2),
+         "log": 'ratio: NaN, "quoted" \\ Infinity -Infinity', "nested": {"z": [float("nan")]}}
+    out = json.loads(engine.to_json(x))
+    assert out == {"a": None, "b": [1.5, None, None], "3": [1, 2],
+                   "log": 'ratio: NaN, "quoted" \\ Infinity -Infinity', "nested": {"z": [None]}}
 
 
 def test_json_api_roundtrip():
