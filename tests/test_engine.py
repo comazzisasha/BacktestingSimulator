@@ -1517,6 +1517,100 @@ def test_risk_report_api():
     assert any(s["name"] == "Mine" for s in r["stress"]["scenarios"])
 
 
+# --------------------------------------------------------- sizing & limits -----
+
+def _limits(ds_list, **cfg):
+    panel = engine.Panel(ds_list)
+    return engine._Limits(engine.Config(**cfg), panel), panel
+
+
+def test_vol_target_and_kelly_scale_from_trailing_returns():
+    lim, panel = _limits([DEMO], sizing="vol_target", vol_target=0.05, sizing_lookback=63)
+    t = 700
+    tr = panel.aligned(0, "total_return")
+    r = [tr[u] / tr[u - 1] - 1 for u in range(t - 62, t + 1)]
+    sd = engine.stdev(r)
+    w = lim.apply({0: 1.0}, t)
+    assert abs(w[0] - 0.05 / (sd * math.sqrt(252))) < 1e-12
+    assert lim.counts == {"vol_target": 1} and "x " in lim.log[0]["detail"]
+    w2 = lim.apply({0: -0.5}, t)
+    assert abs(w2[0] + 0.5 * 0.05 / (0.5 * sd * math.sqrt(252))) < 1e-12, "scale targets the weights' own volatility"
+    kel, _ = _limits([DEMO], sizing="kelly", kelly_fraction=0.5, sizing_lookback=63, max_leverage=3.0)
+    m = engine.mean(r)
+    k = kel.apply({0: 1.0}, t)[0]
+    assert abs(k - min(3.0, max(0.0, 0.5 * m / (sd * sd)))) < 1e-12
+    # too little history: unchanged
+    early, _ = _limits([DEMO], sizing="vol_target", vol_target=0.05)
+    assert early.apply({0: 1.0}, 5) == {0: 1.0} and not early.log
+
+
+def test_limits_use_only_past_data():
+    cut = 800
+    changed = engine.DataSet("DEMO-STOCK", DEMO.dates, DEMO.close[:cut + 1] + [c * 1.5 for c in DEMO.close[cut + 1:]],
+                             DEMO.open[:cut + 1] + [c * 1.5 for c in DEMO.open[cut + 1:]], DEMO.high[:cut + 1] + [c * 1.5 for c in DEMO.high[cut + 1:]],
+                             DEMO.low[:cut + 1] + [c * 1.5 for c in DEMO.low[cut + 1:]], DEMO.volume)
+    a, _ = _limits([DEMO], sizing="vol_target", vol_target=0.1)
+    b, _ = _limits([changed], sizing="vol_target", vol_target=0.1)
+    assert a.apply({0: 1.0}, cut) == b.apply({0: 1.0}, cut)
+    assert a.apply({0: 1.0}, cut + 5) != b.apply({0: 1.0}, cut + 5)
+
+
+def test_position_net_and_gross_limits():
+    lim, _ = _limits([DEMO, BOND], max_weight=0.6, max_net=0.3, max_gross=1.0, allow_short=True)
+    w = lim.apply({0: 0.9, 1: -0.2}, 300)
+    # cap: 0.9 -> 0.6; net 0.4 > 0.3: longs scaled to 0.3 + 0.2 = 0.5; gross 0.7 within 1.0
+    assert abs(w[0] - 0.5) < 1e-12 and abs(w[1] + 0.2) < 1e-12
+    assert lim.counts == {"position cap": 1, "net limit": 1}
+    g = lim.apply({0: 0.6, 1: -0.6}, 301)
+    assert abs(sum(abs(v) for v in g.values()) - 1.0) < 1e-12 and abs(g[0] + g[1]) < 1e-12 and lim.counts["gross limit"] == 1
+    neg = lim.apply({0: 0.1, 1: -0.6}, 302)
+    assert abs(sum(neg.values()) + 0.3) < 1e-12 and abs(neg[0] - 0.1) < 1e-12, "a net short is cut on the short side"
+
+
+def test_drawdown_derisking_resizes_without_new_signals():
+    code = "def on_bar(ctx):\n    return 1.0 if ctx.bar == 0 else None\n"
+    base = run(code)
+    dd = engine.drawdown(base.equity)
+    assert min(dd) < -0.2, "the demo stock needs a real drawdown for this test"
+    res = run(code, dd_limit=0.1, dd_scale=0.5, dd_resume=0.5)
+    log = res.limits["log"]
+    on = [x for x in log if "weights x 0.50" in x["detail"]]
+    off = [x for x in log if "full size" in x["detail"]]
+    assert on, log
+    i = on[0]["i"] - res.start
+    eq = base.equity
+    peak = max(eq[:i + 1])
+    assert eq[i] / peak - 1 <= -0.1 < max(e / max(eq[:j + 1]) - 1 for j, e in enumerate(eq[:i])) , "triggers on the first close 10% below the high"
+    assert abs(res.exposure[i + 2] - 0.5) < 0.05, "half size from the next bar, with no new signal"
+    if off:
+        j = off[0]["i"] - res.start
+        assert abs(res.exposure[j + 2] - 1.0) < 0.05
+    assert 0 < res.limits["derisked_share"] < 1
+    m, _ = engine.summarize(res)
+    assert m["limit_events"] == res.limits["events"] == len(log) and m["derisked_share"] == res.limits["derisked_share"]
+    assert min(engine.drawdown(res.equity)) > min(dd), "de-risking shallows the worst drawdown here"
+
+
+def test_vol_target_brings_realized_vol_near_target():
+    code = "def on_bar(ctx):\n    return 1.0\n"
+    plain = run(code)
+    tgt = run(code, sizing="vol_target", vol_target=0.08, sizing_lookback=63, max_leverage=2.0, rebalance_band=0.0)
+    vol = lambda e: engine.stdev(engine.daily_returns(e)) * math.sqrt(252)
+    assert abs(vol(tgt.equity) - 0.08) < abs(vol(plain.equity) - 0.08)
+    assert 0.06 < vol(tgt.equity) < 0.10, vol(tgt.equity)
+    assert tgt.limits["counts"].get("vol_target", 0) > 100 and not math.isnan(tgt.limits["avg_scale"])
+    assert engine.summarize(plain)[0]["limit_events"] == 0 and plain.limits is None
+
+
+def test_limit_settings_are_validated():
+    for bad in ({"sizing": "magic"}, {"vol_target": 0}, {"max_weight": -1}, {"dd_limit": 1.5}, {"dd_scale": 2}):
+        try:
+            engine.Config(**bad)
+        except ValueError:
+            continue
+        raise AssertionError("accepted %r" % bad)
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

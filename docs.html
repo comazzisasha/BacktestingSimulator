@@ -393,6 +393,15 @@ for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5):
     <p>A <b>trade</b> is a round trip: from flat to a position and back to flat, or a flip from long to short. Adding to or trimming a position stays inside the same trade. A trade’s P&amp;L is the change in account equity from entry to exit, including costs, so the P&amp;L of all trades adds up to the total profit. A position still open on the last day is listed as <i>open</i> and left out of the trade statistics.</p>
     <p>The <b>benchmark</b> is buy-and-hold of the chosen instrument on the same dates, with no costs. If you choose a different benchmark, its prices are matched to your instrument’s dates, carrying forward the last price on any day it didn’t trade.</p>
 
+    <h3 id="sizing">Sizing &amp; Limits</h3>
+    <p>Under <b>Account &amp; Execution → Sizing &amp; Limits</b>, rules resize the strategy's target weights at the close they are decided, using only prices up to that close, before the orders go out. They apply in this order, and every change they make is listed in the <b>Constraint Log</b> under the results:</p>
+    <ol>
+      <li><b>Target volatility</b> multiplies the weights by <i>target ÷ volatility</i>, where volatility is that of the daily returns the proposed weights would have earned over the lookback (63 days by default), annualized. <b>Fraction of Kelly</b> multiplies them by <i>fraction × mean ÷ variance</i> of the same returns (never below 0). Neither goes beyond Max Leverage, and neither acts before a third of the lookback is available.</li>
+      <li><b>De-risk at drawdown</b>: once equity closes that far below its high, weights are multiplied by the de-risked size until the drawdown is back within half the trigger. The switch resizes the latest targets at once, even if the strategy issues no new ones.</li>
+      <li><b>Max per instrument</b> caps each |weight|; <b>Max net</b> scales the larger side so |longs − shorts| fits; <b>Max gross</b> scales everything so the sum of |weights| fits.</li>
+    </ol>
+    <p>Share orders (<code>ctx.order</code>) and resting limit and stop orders aren't resized. The statistics <i>Sizing &amp; limit changes</i>, <i>Time de-risked</i> and <i>Avg. sizing scale</i> summarize the log. In Python: <code>engine.Config(sizing="vol_target", vol_target=0.1, dd_limit=0.15)</code>; the log is <code>result.limits</code>.</p>
+
     <h2 id="statistics">Statistics</h2>
     <p>All statistics come from the daily equity curve, marked at each close, and from the list of trades. Annualization assumes 252 trading days. Years are measured in calendar days divided by 365.25.</p>
     <p>The <b>Shown</b> column says what the Backtest tab displays. <i>Always</i> statistics can’t be hidden; <i>By default</i> ones are on until you hide them; <i>Optional</i> ones are off until you turn them on with <b>Choose Statistics</b>. Your choice is remembered in the browser. The same applies to the chart panels (<b>Customize Panels</b>) and to the Research Tools (<b>Optional Tools</b>). Every statistic is always computed and returned by <code>engine.summarize</code>, whatever the page shows.</p>
@@ -486,6 +495,10 @@ for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5):
 <tr><td>Borrow fees</td><td><code>borrow_paid</code></td><td>Optional</td><td>Fees paid to borrow shares for short positions.</td></tr>
 <tr><td>Net carry</td><td><code>carry_total</code></td><td>Optional</td><td>Dividends + interest - borrow fees.</td></tr>
 <tr><td>Margin calls</td><td><code>margin_calls</code></td><td>By default</td><td>Times equity fell below the maintenance margin and positions were cut.</td></tr>
+<tr class="group"><td colspan="4">Sizing &amp; limits</td></tr>
+<tr><td>Sizing &amp; limit changes</td><td><code>limit_events</code></td><td>Optional</td><td>Times the sizing rule, drawdown de-risking or a position, net or gross limit changed the strategy&#x27;s target weights (see the constraint log).</td></tr>
+<tr><td>Time de-risked</td><td><code>derisked_share</code></td><td>Optional</td><td>Share of bars spent scaled down after the drawdown limit was hit.</td></tr>
+<tr><td>Avg. sizing scale</td><td><code>avg_scale</code></td><td>Optional</td><td>Mean factor the volatility-target or Kelly rule multiplied the weights by (1 = unchanged).</td></tr>
 <tr class="group"><td colspan="4">Execution</td></tr>
 <tr><td>Implementation shortfall</td><td><code>is_bps</code></td><td>By default</td><td>Average fill price vs the close when the order was decided, in bps of traded value (side-adjusted; costs, delay and price moves until the fill).</td></tr>
 <tr><td>Shortfall ($)</td><td><code>is_cost</code></td><td>Optional</td><td>Implementation shortfall in dollars: what trading at the decision price would have saved, before commissions.</td></tr>

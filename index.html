@@ -617,6 +617,19 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
                 <div class="field"><label for="cfgHtb">Hard-to-Borrow Fees</label><input type="text" id="cfgHtb" name="htb-fees" value="" placeholder="GME:25, AMC:12" autocomplete="off" spellcheck="false" translate="no" aria-describedby="cfgHtb-err"><p class="ferr" id="cfgHtb-err" hidden></p></div>
               </div>
               <p class="help">Interest accrues on cash every calendar day (ACT/360); borrowed cash pays the cash rate plus the spread, shorts pay the borrow fee on their value. Below the maintenance margin, positions are cut at the close. A rate series (e.g. FRED’s DTB3 T-bill yield) can be added on the Data tab.</p>
+              <h3 class="subhead">Sizing &amp; Limits</h3>
+              <div class="grid3">
+                <div class="field"><label for="cfgSizing">Position Sizing</label><select id="cfgSizing" name="sizing"><option value="none">As the strategy says</option><option value="vol_target">Target volatility</option><option value="kelly">Fraction of Kelly</option></select></div>
+                <div class="field"><label for="cfgVolT">Target Volatility (%/yr)</label><input type="text" inputmode="decimal" id="cfgVolT" name="vol-target" value="10" autocomplete="off" aria-describedby="cfgVolT-err"><p class="ferr" id="cfgVolT-err" hidden></p></div>
+                <div class="field"><label for="cfgKelly">Kelly Fraction</label><input type="text" inputmode="decimal" id="cfgKelly" name="kelly-fraction" value="0.5" autocomplete="off" aria-describedby="cfgKelly-err"><p class="ferr" id="cfgKelly-err" hidden></p></div>
+                <div class="field"><label for="cfgLook">Sizing Lookback (days)</label><input type="text" inputmode="numeric" id="cfgLook" name="sizing-lookback" value="63" autocomplete="off" aria-describedby="cfgLook-err"><p class="ferr" id="cfgLook-err" hidden></p></div>
+                <div class="field"><label for="cfgMaxW">Max per Instrument (%)</label><input type="text" inputmode="decimal" id="cfgMaxW" name="max-weight" value="" placeholder="no cap" autocomplete="off" aria-describedby="cfgMaxW-err"><p class="ferr" id="cfgMaxW-err" hidden></p></div>
+                <div class="field"><label for="cfgMaxG">Max Gross (%)</label><input type="text" inputmode="decimal" id="cfgMaxG" name="max-gross" value="" placeholder="= leverage" autocomplete="off" aria-describedby="cfgMaxG-err"><p class="ferr" id="cfgMaxG-err" hidden></p></div>
+                <div class="field"><label for="cfgMaxN">Max Net (%)</label><input type="text" inputmode="decimal" id="cfgMaxN" name="max-net" value="" placeholder="no limit" autocomplete="off" aria-describedby="cfgMaxN-err"><p class="ferr" id="cfgMaxN-err" hidden></p></div>
+                <div class="field"><label for="cfgDD">De-Risk at Drawdown (%)</label><input type="text" inputmode="decimal" id="cfgDD" name="dd-limit" value="" placeholder="off" autocomplete="off" aria-describedby="cfgDD-err"><p class="ferr" id="cfgDD-err" hidden></p></div>
+                <div class="field"><label for="cfgDDScale">De-Risked Size (%)</label><input type="text" inputmode="decimal" id="cfgDDScale" name="dd-scale" value="50" autocomplete="off" aria-describedby="cfgDDScale-err"><p class="ferr" id="cfgDDScale-err" hidden></p></div>
+              </div>
+              <p class="help">Applied to the strategy’s target weights at the close they are decided, using only data up to then. <i>Target volatility</i> scales them so the last <i>lookback</i> days of returns of those weights would have had that volatility; <i>Kelly</i> uses the fraction × mean ÷ variance of the same returns. Both stay within Max Leverage. Then the drawdown rule (full size again once the drawdown halves), the per-instrument cap, the net & the gross limit. Every change is listed in the Constraint Log. Share orders aren’t resized.</p>
               <p class="help">1&nbsp;bps = 0.01%. Orders placed at a bar’s close fill on the next bar, so your strategy never trades on data it couldn’t have seen.</p>
               <div class="row"><button class="btn small primary" type="submit">Apply &amp; Run</button></div>
             </form>
@@ -726,6 +739,11 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <section class="panel" aria-labelledby="h-trades">
             <div class="panel-h"><h3 id="h-trades">Trades</h3><span class="muted" id="tradeInfo"></span></div>
             <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Trades table"><table id="tradesTable"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div></div>
+          </section>
+
+          <section class="panel" id="limitPanel" aria-labelledby="h-limits" hidden>
+            <div class="panel-h"><h3 id="h-limits">Constraint Log</h3><span class="muted" id="limitInfo"></span></div>
+            <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Constraint log"><table id="limitTable"></table></div></div>
           </section>
 
           <section class="panel" id="logPanel" aria-labelledby="h-logs" hidden>
@@ -2154,7 +2172,14 @@ const CFG_RULES = [
   ['cfgBorrow', between(0, 200, 'percent')], ['cfgMaint', between(0, 90, 'percent')],
   ['cfgSpread2', between(0, 1000, 'basis points')], ['cfgImpact', between(0, 10)], ['cfgPart', between(0, 100, 'percent')],
   ['cfgHtb', raw => (parseHtb(raw) ? null : 'Use TICKER:fee pairs in %/yr, e.g. GME:25, AMC:12.')],
+  ['cfgVolT', between(0.5, 100, 'percent')], ['cfgKelly', between(0.01, 2)], ['cfgLook', between(10, 1000, 'days', true, 63)],
+  ['cfgMaxW', raw => (String(raw).trim() === '' ? null : between(0.1, 1000, 'percent')(raw))], ['cfgMaxG', raw => (String(raw).trim() === '' ? null : between(1, 1000, 'percent')(raw))],
+  ['cfgMaxN', raw => (String(raw).trim() === '' ? null : between(0.1, 1000, 'percent')(raw))], ['cfgDD', raw => (String(raw).trim() === '' ? null : between(1, 95, 'percent')(raw))],
+  ['cfgDDScale', between(0, 100, 'percent')],
 ];
+// Sizing & limit settings go into the payload only when they differ from the engine's defaults,
+// so runs (and trial counts) made before these settings existed keep matching.
+const LIMIT_DEFAULTS = { sizing: 'none', vol_target: 0.1, kelly_fraction: 0.5, sizing_lookback: 63, max_weight: 0, max_gross: 0, max_net: 0, dd_limit: 0, dd_scale: 0.5, dd_resume: 0.5 };
 // "GME:25, AMC:12" -> {GME: 0.25, AMC: 0.12}; null if malformed
 function parseHtb(raw) {
   const out = {}; const s = String(raw || '').trim(); if (!s) return out;
@@ -2176,10 +2201,19 @@ function readConfig() {
     total_return: $('#cfgTR').checked, cash_rate: $('#cfgCashRate').value.trim() === '' ? null : n('cfgCashRate', 0) / 100,
     rate_ticker: $('#cfgRateSeries').value, margin_spread: n('cfgSpread', 1) / 100, borrow_fee: n('cfgBorrow', 0.25) / 100,
     maintenance_margin: n('cfgMaint', 25) / 100, borrow_fees: parseHtb($('#cfgHtb').value) || {},
-    spread_bps: n('cfgSpread2', 0), impact_coef: n('cfgImpact', 1), max_participation: n('cfgPart', 10) / 100, fill_model: $('#cfgFill').value };
+    spread_bps: n('cfgSpread2', 0), impact_coef: n('cfgImpact', 1), max_participation: n('cfgPart', 10) / 100, fill_model: $('#cfgFill').value, ...readLimits() };
+}
+function readLimits() {
+  const n = (id, d) => { const v = parseNumber($('#' + id).value); return isFinite(v) ? v : d; };
+  const sizing = $('#cfgSizing').value;
+  const c = { sizing, vol_target: n('cfgVolT', 10) / 100, kelly_fraction: n('cfgKelly', 0.5), sizing_lookback: Math.round(n('cfgLook', 63)),
+    max_weight: n('cfgMaxW', 0) / 100, max_gross: n('cfgMaxG', 0) / 100, max_net: n('cfgMaxN', 0) / 100, dd_limit: n('cfgDD', 0) / 100, dd_scale: n('cfgDDScale', 50) / 100 };
+  if (sizing === 'none') { delete c.vol_target; delete c.kelly_fraction; delete c.sizing_lookback; } else if (sizing === 'vol_target') delete c.kelly_fraction; else delete c.vol_target;
+  if (!c.dd_limit) delete c.dd_scale;
+  return Object.fromEntries(Object.entries(c).filter(([k, v]) => Math.abs((typeof v === 'number' ? v : 0) - (typeof LIMIT_DEFAULTS[k] === 'number' ? LIMIT_DEFAULTS[k] : 0)) > 1e-12 || (typeof v === 'string' && v !== LIMIT_DEFAULTS[k])));
 }
 function saveSettings() {
-  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill'].forEach(id => { s[id] = $('#' + id).value.trim(); });
+  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill', 'cfgSizing', 'cfgVolT', 'cfgKelly', 'cfgLook', 'cfgMaxW', 'cfgMaxG', 'cfgMaxN', 'cfgDD', 'cfgDDScale'].forEach(id => { s[id] = $('#' + id).value.trim(); });
   s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked; s.cfgTR = $('#cfgTR').checked;
   s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.start = $('#start').value; s.end = $('#end').value;
   store.set('settings', s); summarizeSettings(); url.write();
@@ -2198,6 +2232,9 @@ function summarizeSettings() {
   if (c.fill_model === 'pessimistic') bits.push('pessimistic fills');
   if (!c.total_return) bits.push('price return only');
   if (c.rate_ticker) bits.push(`cash at ${c.rate_ticker}`); else if (c.cash_rate != null) bits.push(`cash at ${fmt.num(c.cash_rate * 100, 2)}%`);
+  if (c.sizing === 'vol_target') bits.push(`${fmt.num(c.vol_target * 100, 0)}% vol target`); else if (c.sizing === 'kelly') bits.push(`${fmt.num(c.kelly_fraction, 2)} Kelly`);
+  if (c.max_weight || c.max_gross || c.max_net) bits.push('limits');
+  if (c.dd_limit) bits.push(`de-risk at ${fmt.num(c.dd_limit * 100, 0)}% DD`);
   $('#settingsSummary').textContent = bits.join(' · ');
 }
 function payloadBase() {
@@ -2290,6 +2327,16 @@ async function runBacktest({ fresh = false, modules = null } = {}) {
   if (done) announce(done);
   return produced;
 }
+const LIMIT_RULES = { vol_target: 'Volatility target', kelly: 'Kelly sizing', drawdown: 'Drawdown', 'position cap': 'Position cap', 'net limit': 'Net limit', 'gross limit': 'Gross limit' };
+function renderLimits(L) {
+  $('#limitPanel').hidden = !L; if (!L) return;
+  const counts = Object.entries(L.counts).map(([k, n]) => `${LIMIT_RULES[k] || k} ${fmt.int(n)}`).join(' · ');
+  $('#limitInfo').textContent = L.events ? `${fmt.int(L.events)} change${L.events === 1 ? '' : 's'}: ${counts}${L.derisked_share ? ` · de-risked ${fmt.pct(L.derisked_share, 0)} of the time` : ''}${isFinite(L.avg_scale) && L.avg_scale != null ? ` · average sizing ×${fmt.num(L.avg_scale, 2)}` : ''}` : 'The rules never had to change a target.';
+  const rows = L.log.slice().reverse();
+  $('#limitTable').innerHTML = rows.length ? '<thead><tr><th scope="col">Decided</th><th scope="col">Rule</th><th scope="col">Change</th></tr></thead><tbody>' +
+    rows.map(x => `<tr><td class="tnum">${fmt.date(x.date)}</td><td>${esc(LIMIT_RULES[x.rule] || x.rule)}</td><td translate="no">${esc(x.detail)}</td></tr>`).join('') +
+    (L.truncated ? `<tr><td colspan="3" class="muted">Only the first ${fmt.int(L.log.length)} changes are listed.</td></tr>` : '') + '</tbody>' : '<tbody><tr><td class="muted">No changes.</td></tr></tbody>';
+}
 function announce(msg) { setStatus('ready', msg); setTimeout(() => { if (busyCount === 0 && $('#statusText').textContent === msg) setStatus('ready', 'Python ready'); }, 5000); }
 
 function hideError() { $('#errBox').hidden = true; editor.clearError(); }
@@ -2362,6 +2409,7 @@ function renderResults(r) {
   $('#rollInfo').textContent = `${r.rolling.window}-day window, annualized`;
   $('#volInfo').textContent = `${r.rolling.vol_window}-day window, annualized`;
   $('#logPanel').hidden = !r.logs; $('#logs').textContent = r.logs || '';
+  renderLimits(r.limits);
   const more = (r.logs_total || 0) > (r.logs || '').length; $('#logMore').hidden = !more;
   if (more) $('#logMoreText').textContent = `Showing the start & end of ${fmt.int(r.logs_total)} characters.`;
 }
@@ -3310,6 +3358,9 @@ function applyConfig(c) {
   set('cfgSpread', pct(c.margin_spread)); set('cfgBorrow', pct(c.borrow_fee)); set('cfgMaint', pct(c.maintenance_margin));
   $('#cfgHtb').value = Object.entries(c.borrow_fees || {}).map(([t, v]) => `${t}:${pct(v)}`).join(', ');
   set('cfgSpread2', c.spread_bps); set('cfgImpact', c.impact_coef); set('cfgPart', pct(c.max_participation)); set('cfgFill', c.fill_model);
+  const L = { ...LIMIT_DEFAULTS, ...c }, opt = v => (v ? pct(v) : '');   // older runs have no sizing keys: the defaults
+  set('cfgSizing', L.sizing); set('cfgVolT', pct(L.vol_target)); set('cfgKelly', L.kelly_fraction); set('cfgLook', L.sizing_lookback);
+  $('#cfgMaxW').value = opt(L.max_weight); $('#cfgMaxG').value = opt(L.max_gross); $('#cfgMaxN').value = opt(L.max_net); $('#cfgDD').value = opt(L.dd_limit); set('cfgDDScale', pct(L.dd_scale));
 }
 async function restoreRun(x) {
   const tpl = x.strategy.template;
@@ -3343,7 +3394,8 @@ async function reproduceRun(x) {
   if (now.provenance.code_sha256 !== was.code_sha256) diffs.push('the code');
   const wm = was.modules || {}, nm = now.provenance.modules || {}, modDiff = Object.keys({ ...wm, ...nm }).filter(n => wm[n] !== nm[n]);
   if (was.modules && modDiff.length) diffs.push(`module${modDiff.length === 1 ? '' : 's'} ${modDiff.join(', ')}`);
-  if (JSON.stringify(now.provenance.config) !== JSON.stringify(was.config)) diffs.push('the settings');
+  // Settings added in later versions are missing from older records; compare the ones it has.
+  if (Object.keys(was.config).some(k => JSON.stringify(now.provenance.config[k]) !== JSON.stringify(was.config[k]))) diffs.push('the settings');
   const dataDiff = Object.keys({ ...was.data, ...now.provenance.data }).filter(t => was.data[t] !== now.provenance.data[t]);
   if (dataDiff.length) diffs.push(`the data for ${dataDiff.join(', ')}`);
   if (now.provenance.engine_version !== was.engine_version) diffs.push(`the engine (${was.engine_version} → ${now.provenance.engine_version})`);

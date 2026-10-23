@@ -2043,6 +2043,17 @@ class Config:
         "impact_coef": 0.0,       # square-root impact: price moves impact_coef x daily vol x sqrt(qty / ADV)
         "max_participation": 0.0,  # most of a bar's volume one instrument may trade (0.1 = 10%; 0 = no limit)
         "fill_model": "standard",  # 'pessimistic': limits must trade through; stops hit before targets
+        # sizing & limits, applied to target weights at the close they are decided
+        "sizing": "none",         # 'vol_target': scale to vol_target; 'kelly': to kelly_fraction x the Kelly leverage
+        "vol_target": 0.10,       # annual volatility aimed at with sizing='vol_target'
+        "kelly_fraction": 0.5,    # share of the estimated Kelly leverage used with sizing='kelly'
+        "sizing_lookback": 63,    # trading days of returns used to estimate volatility (and the mean, for Kelly)
+        "max_weight": 0.0,        # largest |weight| in one instrument (0 = no cap)
+        "max_gross": 0.0,         # largest sum of |weights| (0 = only max_leverage)
+        "max_net": 0.0,           # largest |sum of weights| (0 = no limit)
+        "dd_limit": 0.0,          # drawdown from the equity high that triggers de-risking (0.15 = 15%; 0 = off)
+        "dd_scale": 0.5,          # weights are multiplied by this while de-risked
+        "dd_resume": 0.5,         # full size again once the drawdown is back within dd_resume x dd_limit
     }
 
     def __init__(self, **kw):
@@ -2078,6 +2089,14 @@ class Config:
             raise ValueError("fill_model must be 'standard' or 'pessimistic'")
         if self.spread_bps < 0 or self.impact_coef < 0 or not 0 <= self.max_participation <= 1:
             raise ValueError("spread, impact and participation must be non-negative (participation at most 1)")
+        if self.sizing not in ("none", "vol_target", "kelly"):
+            raise ValueError("sizing must be 'none', 'vol_target' or 'kelly'")
+        if self.vol_target <= 0 or self.kelly_fraction <= 0 or self.sizing_lookback < 10:
+            raise ValueError("vol_target and kelly_fraction must be positive and sizing_lookback at least 10 days")
+        if min(self.max_weight, self.max_gross, self.max_net) < 0 or not 0 <= self.dd_limit < 1:
+            raise ValueError("position, gross and net limits must be non-negative and dd_limit from 0 to 1")
+        if not 0 <= self.dd_scale <= 1 or not 0 <= self.dd_resume <= 1:
+            raise ValueError("dd_scale and dd_resume must be from 0 to 1")
 
     def as_dict(self):
         return {k: (dict(getattr(self, k)) if isinstance(getattr(self, k), dict) else getattr(self, k))
@@ -2935,6 +2954,124 @@ def backtest_portfolio(strategy, datasets, cfg=None, start=None, end=None, bench
     return _run_backtest(strategy, shared_panel(datasets), cfg, start, end, bench, True, capture_output, rates, signal_key)
 
 
+class _Limits:
+    """Sizing and limits applied to every set of target weights, at the close they are
+    decided, with only data up to that close. In order: volatility targeting or fractional
+    Kelly (from what the proposed weights would have earned over the last sizing_lookback
+    days), drawdown de-risking, per-instrument caps, the net limit and the gross limit.
+    Every change is recorded in the constraint log. Share orders aren't resized."""
+
+    LOG_MAX = 2000
+
+    def __init__(self, cfg, panel):
+        self.cfg, self.panel = cfg, panel
+        self.on = (cfg.sizing != "none" or cfg.max_weight > 0 or cfg.max_gross > 0 or cfg.max_net > 0 or cfg.dd_limit > 0)
+        self.log, self.counts = [], {}
+        self.derisked, self.peak, self.seen = False, None, 0
+        self.derisked_bars = 0
+        self.last_raw = None
+        self.scales = []
+        self._r = None
+
+    def _returns(self):
+        if self._r is None:
+            out = []
+            for a in range(self.panel.k):
+                tr = self.panel.aligned(a, "total_return")
+                out.append([0.0] + [(tr[t] / tr[t - 1] - 1) if not (isnan(tr[t]) or isnan(tr[t - 1]) or tr[t - 1] <= 0) else 0.0
+                                    for t in range(1, len(tr))])
+            self._r = out
+        return self._r
+
+    def _note(self, t, rule, detail):
+        self.counts[rule] = self.counts.get(rule, 0) + 1
+        if len(self.log) < self.LOG_MAX:
+            self.log.append({"i": t, "date": self.panel.dates[t], "rule": rule, "detail": detail})
+
+    def observe(self, t, equity):
+        """Track the equity high and switch de-risking on or off. True when the state changed,
+        so the latest targets should be re-sized now."""
+        for v in equity[self.seen:]:
+            self.peak = v if self.peak is None else max(self.peak, v)
+        self.seen = len(equity)
+        cfg = self.cfg
+        if not cfg.dd_limit or not equity:
+            return False
+        dd = equity[-1] / self.peak - 1 if self.peak else 0.0
+        if self.derisked:
+            self.derisked_bars += 1
+        if not self.derisked and dd <= -cfg.dd_limit:
+            self.derisked = True
+            self._note(t, "drawdown", "drawdown %.1f%%: weights x %.2f until it recovers to %.1f%%"
+                       % (100 * dd, cfg.dd_scale, -100 * cfg.dd_limit * cfg.dd_resume))
+            return True
+        if self.derisked and dd > -cfg.dd_limit * cfg.dd_resume:
+            self.derisked = False
+            self._note(t, "drawdown", "drawdown back to %.1f%%: full size again" % (100 * dd))
+            return True
+        return False
+
+    def apply(self, w, t):
+        cfg, tk = self.cfg, self.panel.tickers
+        self.last_raw = dict(w)
+        w = dict(w)
+        gross = sum(abs(v) for v in w.values())
+        if cfg.sizing != "none" and gross > 0:
+            L = cfg.sizing_lookback
+            lo = max(1, t - L + 1)
+            if t - lo + 1 >= max(10, L // 3):
+                R = self._returns()
+                act = [(a, v) for a, v in w.items() if v]
+                p = [sum(v * R[a][u] for a, v in act) for u in range(lo, t + 1)]
+                m, sd = mean(p), stdev(p)
+                if sd > 0:
+                    if cfg.sizing == "vol_target":
+                        scale = cfg.vol_target / (sd * math.sqrt(TRADING_DAYS))
+                        why = "estimated volatility %.1f%%" % (100 * sd * math.sqrt(TRADING_DAYS))
+                    else:
+                        scale = max(0.0, cfg.kelly_fraction * m / (sd * sd))
+                        why = "Kelly leverage %.2f" % (m / (sd * sd))
+                    cap = cfg.max_leverage / gross
+                    if scale > cap:
+                        scale, why = cap, why + ", capped by max leverage"
+                    self.scales.append(scale)
+                    if abs(scale - 1) > 1e-9:
+                        w = {a: v * scale for a, v in w.items()}
+                        self._note(t, cfg.sizing, "weights x %.3f (%s)" % (scale, why))
+        if self.derisked:
+            w = {a: v * cfg.dd_scale for a, v in w.items()}
+        if cfg.max_weight > 0:
+            for a, v in list(w.items()):
+                if abs(v) > cfg.max_weight + 1e-12:
+                    w[a] = math.copysign(cfg.max_weight, v)
+                    self._note(t, "position cap", "%s %.1f%% -> %.1f%%" % (tk[a], 100 * v, 100 * w[a]))
+        if cfg.max_net > 0:
+            net = sum(w.values())
+            if abs(net) > cfg.max_net + 1e-12:
+                longs = sum(v for v in w.values() if v > 0)
+                shorts = -sum(v for v in w.values() if v < 0)
+                if net > 0:
+                    f = (cfg.max_net + shorts) / longs
+                    w = {a: (v * f if v > 0 else v) for a, v in w.items()}
+                else:
+                    f = (cfg.max_net + longs) / shorts
+                    w = {a: (v * f if v < 0 else v) for a, v in w.items()}
+                self._note(t, "net limit", "net %.1f%% -> %s%.1f%% (the %s side scaled by %.3f)"
+                           % (100 * net, "" if net > 0 else "-", 100 * cfg.max_net, "long" if net > 0 else "short", f))
+        if cfg.max_gross > 0:
+            g = sum(abs(v) for v in w.values())
+            if g > cfg.max_gross + 1e-12:
+                f = cfg.max_gross / g
+                w = {a: v * f for a, v in w.items()}
+                self._note(t, "gross limit", "gross %.1f%% -> %.1f%%" % (100 * g, 100 * cfg.max_gross))
+        return w
+
+    def summary(self, bars):
+        return {"log": self.log, "counts": dict(self.counts), "events": sum(self.counts.values()),
+                "derisked_share": self.derisked_bars / bars if bars else 0.0,
+                "avg_scale": mean(self.scales) if self.scales else NAN, "truncated": sum(self.counts.values()) > len(self.log)}
+
+
 def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_output, rates, signal_key=None):
     if cfg is None:
         cfg = Config()
@@ -2966,6 +3103,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     k = panel.k
     acct = Account(cfg, panel, rates)
     run = _Run(acct)
+    limits = _Limits(cfg, panel)
     ctx = PortfolioContext(panel, run, strategy.params, s) if portfolio else Context(panel, run, strategy.params, s)
     out_buf = io.StringIO()
     old_stdout = sys.stdout
@@ -3076,10 +3214,13 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
 
             ctx._sync(t)
             bar_date = panel.dates[t]
+            resize = limits.on and limits.observe(t, equity)
             if row is not None:
                 w = row(t)
+                if w is None and resize and limits.last_raw is not None:
+                    w = limits.last_raw
                 if w is not None:
-                    pending = {"t": t, "weights": w, "w_at": cfg.execution, "orders": {}}
+                    pending = {"t": t, "weights": limits.apply(w, t) if limits.on else w, "w_at": cfg.execution, "orders": {}}
                 continue
             run.orders = {}
             r = strategy.on_bar(ctx)
@@ -3092,9 +3233,15 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
                     except (TypeError, ValueError):
                         raise TypeError("on_bar must return a number (target weight) or None, got %r" % (r,))
                     w = None if isnan(w) else {0: w}
-                if w is not None:
-                    pending = {"t": t, "weights": w, "w_at": cfg.execution, "orders": {}}
-            elif run.orders:
+            else:
+                w = None
+            if w is None and resize and limits.last_raw is not None and not run.orders:
+                w = limits.last_raw           # de-risking switched: re-size the latest targets now
+            if w is not None:
+                if limits.on:
+                    w = limits.apply(w, t)
+                pending = {"t": t, "weights": w, "w_at": cfg.execution, "orders": {}}
+            elif run.orders and r is None:
                 pending = {"t": t, "weights": None, "w_at": cfg.execution, "orders": dict(run.orders)}
     except StrategyError:
         raise
@@ -3143,7 +3290,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         spread_paid=acct.spread_paid, impact_paid=acct.impact_paid, partial_fills=acct.partial_fills,
         book_stats=dict(run.book_stats, open=len(run.book)),
         logs=logs, full_logs=full_logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
-        signals=sig, signal_key=signal_key,
+        signals=sig, signal_key=signal_key, limits=limits.summary(len(equity)) if limits.on else None,
     )
 
 
@@ -3313,6 +3460,10 @@ METRICS = [
     ("borrow_paid", "Borrow fees", "Carry & exposure", "money", "extra", "Fees paid to borrow shares for short positions."),
     ("carry_total", "Net carry", "Carry & exposure", "money", "extra", "Dividends + interest - borrow fees."),
     ("margin_calls", "Margin calls", "Carry & exposure", "int", "std", "Times equity fell below the maintenance margin and positions were cut."),
+
+    ("limit_events", "Sizing & limit changes", "Sizing & limits", "int", "extra", "Times the sizing rule, drawdown de-risking or a position, net or gross limit changed the strategy's target weights (see the constraint log)."),
+    ("derisked_share", "Time de-risked", "Sizing & limits", "pct", "extra", "Share of bars spent scaled down after the drawdown limit was hit."),
+    ("avg_scale", "Avg. sizing scale", "Sizing & limits", "num", "extra", "Mean factor the volatility-target or Kelly rule multiplied the weights by (1 = unchanged)."),
 
     ("is_bps", "Implementation shortfall", "Execution", "bps", "std", "Average fill price vs the close when the order was decided, in bps of traded value (side-adjusted; costs, delay and price moves until the fill)."),
     ("is_cost", "Shortfall ($)", "Execution", "money", "extra", "Implementation shortfall in dollars: what trading at the decision price would have saved, before commissions."),
@@ -3693,6 +3844,10 @@ def summarize(res, rf=None, trials=None):
     m["borrow_paid"] = c["borrow_paid"]
     m["carry_total"] = m["dividends_net"] + m["interest_net"] - c["borrow_paid"]
     m["margin_calls"] = len(res.margin_calls)
+    lim = getattr(res, "limits", None) or {}
+    m["limit_events"] = lim.get("events", 0)
+    m["derisked_share"] = lim.get("derisked_share", 0.0)
+    m["avg_scale"] = lim.get("avg_scale", NAN)
     t = trials or {}
     rfd = (1 + rf) ** (1 / TRADING_DAYS) - 1
     m.update(deflated_sharpe(daily_returns(res.equity), t.get("n", 1), t.get("var"), rfd))
@@ -5355,7 +5510,7 @@ def api_run(p):
         "gross": res.gross, "net": res.net, "long": res.long, "short": res.short,
         "fills": _fill_rows(res, res.fills[-ROW_LIMIT:]), "fills_total": len(res.fills),
         "trades": res.trades[-ROW_LIMIT:], "trades_total": len(res.trades), "metrics": m, "bench_metrics": b,
-        "carry": res.carry, "margin_calls": res.margin_calls[:50], "book": res.book_stats,
+        "carry": res.carry, "margin_calls": res.margin_calls[:50], "book": res.book_stats, "limits": res.limits,
         "monthly": monthly_table(res.dates, res.equity),
         "bench_monthly": monthly_table(res.dates, res.bench_equity),
         "hist": histogram([daily_returns(res.equity), daily_returns(res.bench_equity)]),
