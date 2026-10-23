@@ -1747,13 +1747,14 @@ def format_error(exc, bar_date=None):
     """Turn an exception into {message, trace, line}, keeping only strategy frames."""
     if isinstance(exc, StrategyError):
         return exc.info
-    if isinstance(exc, SyntaxError) and exc.filename == STRATEGY_FILENAME:
+    if isinstance(exc, SyntaxError) and (exc.filename == STRATEGY_FILENAME or _module_of(exc.filename)):
         text = (exc.text or "").rstrip()
-        return {"message": "SyntaxError: %s (line %s)" % (exc.msg, exc.lineno),
+        mod = _module_of(exc.filename)
+        return {"message": "SyntaxError: %s (%sline %s)" % (exc.msg, "%s.py, " % mod if mod else "", exc.lineno),
                 "trace": "  line %s\n    %s" % (exc.lineno, text.strip()),
-                "line": exc.lineno, "user": True}
+                "line": exc.lineno, "file": mod, "user": True}
     frames = traceback.extract_tb(exc.__traceback__)
-    user = [f for f in frames if f.filename == STRATEGY_FILENAME]
+    user = [f for f in frames if f.filename == STRATEGY_FILENAME or _module_of(f.filename)]
     msg = "%s: %s" % (type(exc).__name__, exc)
     if isinstance(exc, ModuleNotFoundError) and sys.platform == "emscripten":
         msg += (". In the browser, strategies can import NumPy, pandas, SciPy and scikit-learn plus the "
@@ -1762,15 +1763,107 @@ def format_error(exc, bar_date=None):
     if bar_date:
         msg += "  (on bar %s)" % bar_date
     if user:
-        trace = "\n".join("  line %d, in %s\n    %s" % (f.lineno, f.name, (f.line or "").strip())
+        where = lambda f: ("%s.py, " % _module_of(f.filename)) if f.filename != STRATEGY_FILENAME else ""
+        trace = "\n".join("  %sline %d, in %s\n    %s" % (where(f), f.lineno, f.name, (f.line or "").strip())
                           for f in user)
-        return {"message": msg, "trace": trace, "line": user[-1].lineno, "user": True}
+        return {"message": msg, "trace": trace, "line": user[-1].lineno,
+                "file": _module_of(user[-1].filename), "user": True}
     return {"message": msg, "trace": "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)),
             "line": None, "user": False}
 
 
 def _user_error(message):
     return StrategyError({"message": message, "trace": "", "line": None, "user": True})
+
+
+# User modules: Python files from the module library that strategies import like any
+# package (import my_signals / from my_signals import zscore). Every strategy compile
+# imports them afresh, so module-level state never carries from one run into the next.
+MODULES = {}             # name -> source
+_used_modules = []       # user modules imported since the last strategy compile, in order
+_loaded_modules = set()  # user modules that may be sitting in sys.modules
+_RESERVED = {"engine", "templates", "strategy", "qt", "numpy", "pandas", "scipy", "sklearn",
+             "torch", "matplotlib", "micropip", "pyodide", "js", "pyflakes"}
+
+
+def module_filename(name):
+    return "<%s.py>" % name
+
+
+def _module_of(filename):
+    """'my_signals' for '<my_signals.py>'; None for the strategy or anything else."""
+    if filename and filename.startswith("<") and filename.endswith(".py>"):
+        name = filename[1:-4]
+        return name if name in MODULES else None
+    return None
+
+
+def module_name_problem(name):
+    """Why name can't be a user module, or None."""
+    import keyword
+    if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
+        return "%r isn't a valid module name: use letters, digits and _ and start with a letter, e.g. my_signals." % (name,)
+    if name in _RESERVED or name in getattr(sys, "stdlib_module_names", ()) or name in sys.builtin_module_names:
+        return "A module can't be called %s: Python or QuantLab already uses that name. Try %s_lib." % (name, name)
+    return None
+
+
+class _ModuleFinder:
+    """Import hook for MODULES. It sits last on sys.meta_path, so it never hides a real package."""
+    quantlab = True
+
+    def find_spec(self, name, path=None, target=None):
+        if path is None and name in MODULES:
+            import importlib.util
+            return importlib.util.spec_from_loader(name, self, origin=module_filename(name))
+        return None
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        name = module.__name__
+        src, fn = MODULES[name], module_filename(name)
+        linecache.cache[fn] = (len(src), None, src.splitlines(True), fn)
+        for k, v in _namespace().items():     # the same helpers a strategy gets: qt, isnan, math ...
+            if k != "__name__":
+                module.__dict__.setdefault(k, v)
+        module.__file__ = fn
+        _loaded_modules.add(name)
+        if name not in _used_modules:
+            _used_modules.append(name)
+        exec(compile(src, fn, "exec"), module.__dict__)
+
+
+sys.meta_path[:] = [f for f in sys.meta_path if not getattr(f, "quantlab", False)] + [_ModuleFinder()]
+
+
+def _forget_modules():
+    """Drop imported user modules, so the next import runs their current code."""
+    global _used_modules
+    for name in _loaded_modules:
+        sys.modules.pop(name, None)
+    _loaded_modules.clear()
+    _used_modules = []
+
+
+def set_modules(mods):
+    """Replace the module library with {name: source}."""
+    mods = dict(mods or {})
+    for name, src in mods.items():
+        problem = module_name_problem(name)
+        if problem:
+            raise _user_error(problem)
+        if not isinstance(src, str):
+            raise _user_error("Module %s must be text." % name)
+    MODULES.clear()
+    MODULES.update(mods)
+    _forget_modules()
+
+
+def module_hashes(names):
+    import hashlib
+    return {n: hashlib.sha256(MODULES[n].encode("utf-8")).hexdigest() for n in names if n in MODULES}
 
 
 class Strategy:
@@ -1788,6 +1881,7 @@ class Strategy:
         self.params = params if params is not None else {}
         self.name = name
         self.universe = universe
+        self.modules = []   # user modules the code imported (set by from_code)
 
     @property
     def mode(self):
@@ -1796,6 +1890,7 @@ class Strategy:
     @classmethod
     def from_code(cls, code, params_override=None):
         _register_source(code)
+        _forget_modules()
         ns = _namespace()
         try:
             compiled = compile(code, STRATEGY_FILENAME, "exec")
@@ -1821,9 +1916,11 @@ class Strategy:
         on_bar = ns.get("on_bar")
         signals = ns.get("signals")
         init = ns.get("init")
-        return cls(on_bar if callable(on_bar) else None,
-                   signals if callable(signals) and not callable(on_bar) else None,
-                   init if callable(init) else None, params, universe=universe)
+        strat = cls(on_bar if callable(on_bar) else None,
+                    signals if callable(signals) and not callable(on_bar) else None,
+                    init if callable(init) else None, params, universe=universe)
+        strat.modules = _used_modules    # grows if the strategy imports a module later, inside on_bar
+        return strat
 
 
 class Config:
@@ -2426,6 +2523,13 @@ class Result:
     def to_dict(self):
         return dict(self.__dict__)
 
+    def __repr__(self):
+        eq = getattr(self, "equity", None) or [0.0]
+        return ("<Result %s %s to %s: %d bars, equity %.2f -> %.2f, %d trades, %d fills; try .equity, .trades, "
+                ".fills, .weights, summarize(result)>" % (getattr(self, "ticker", "?"), self.dates[0] if self.dates else "?",
+                                                          self.dates[-1] if self.dates else "?", len(eq), eq[0], eq[-1],
+                                                          len(getattr(self, "trades", [])), len(getattr(self, "fills", []))))
+
 
 def _resolve_range(dates, start=None, end=None, label="the data"):
     n = len(dates)
@@ -2676,6 +2780,20 @@ def _carry(carry, t_dec, weights, w_at, orders):
     return carry
 
 
+LOG_SHOW = 20000          # characters of print() output sent with a run
+LOG_KEEP = 5 * 10 ** 6    # characters kept in Result.full_logs (fetch them with api_rows kind='logs')
+
+
+def _log_preview(text):
+    """The start and end of long output, with how much was left out in between."""
+    if len(text) <= LOG_SHOW:
+        return text
+    head, tail = text[:LOG_SHOW * 3 // 5], text[-(LOG_SHOW * 2 // 5):]
+    cut = text[len(head):len(text) - len(tail)]
+    return "%s\n... %s characters (%s lines) not shown ...\n%s" % (
+        head, format(len(cut), ","), format(cut.count("\n"), ","), tail)
+
+
 SIGNAL_CACHE = {}   # signals(data) results by (code, params, data, seed): reused when only settings change
 
 
@@ -2905,9 +3023,10 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     dates = panel.dates[s:e + 1]
     b0 = bench_vals[0]
     bench_equity = [cfg.cash * v / b0 for v in bench_vals]
-    logs = out_buf.getvalue()
-    if len(logs) > 20000:
-        logs = logs[:20000] + "\n... output truncated ...\n"
+    full_logs = out_buf.getvalue()
+    if len(full_logs) > LOG_KEEP:
+        full_logs = full_logs[:LOG_KEEP] + "\n... output stopped here: over %d MB ...\n" % (LOG_KEEP // 10 ** 6)
+    logs = _log_preview(full_logs)
     if acct.margin_calls:
         notes.append("%d margin call%s (first on %s): positions were cut at the close to restore the margin."
                      % (len(acct.margin_calls), "" if len(acct.margin_calls) == 1 else "s", acct.margin_calls[0]["date"]))
@@ -2931,7 +3050,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         carry=dict(acct.carry), margin_calls=acct.margin_calls,
         spread_paid=acct.spread_paid, impact_paid=acct.impact_paid, partial_fills=acct.partial_fills,
         book_stats=dict(run.book_stats, open=len(run.book)),
-        logs=logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
+        logs=logs, full_logs=full_logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
         signals=sig, signal_key=signal_key,
     )
 
@@ -4046,6 +4165,372 @@ def instrument_stats(datasets, start=None, end=None, rf=0.0):
 
 
 # =============================================================================
+# 7b. Developer tools: lint, strategy tests, the console and editor completions
+# =============================================================================
+
+# pyflakes message classes that are mistakes rather than style; everything else is a warning.
+LINT_ERRORS = {"UndefinedName", "UndefinedLocal", "UndefinedExport", "ReturnOutsideFunction",
+               "YieldOutsideFunction", "ContinueOutsideLoop", "BreakOutsideLoop", "DuplicateArgument",
+               "TwoStarredExpressions", "TooManyExpressionsInStarredAssignment", "DefaultExceptNotLast",
+               "ForwardAnnotationSyntaxError", "PercentFormatInvalidFormat", "StringDotFormatInvalidFormat"}
+# Attributes set on contexts in __init__ (found from the source when it is available).
+_CTX_ATTRS = {"state", "params", "start_index", "ticker", "tickers", "open", "high", "low", "close", "volume"}
+_MEMBERS = {}
+
+
+def _members(cls):
+    """Public attribute names of a class and its instances."""
+    if cls not in _MEMBERS:
+        import inspect
+        import re
+        names = {n for n in dir(cls) if not n.startswith("_")} | (_CTX_ATTRS if "Context" in cls.__name__ else set())
+        for klass in cls.__mro__:
+            try:
+                names |= set(re.findall(r"self\.([a-z]\w*)\s*=", inspect.getsource(klass)))
+            except (OSError, TypeError):
+                pass
+        _MEMBERS[cls] = names
+    return _MEMBERS[cls]
+
+
+def _lint_builtins():
+    return set(_namespace()) - {"__name__", "__builtins__"}
+
+
+def lint(code, kind="strategy", name=None):
+    """Static checks on strategy or module code: [{line, col, severity, message, code}].
+
+    Uses pyflakes when it is installed (the web page loads a bundled copy), otherwise a
+    smaller built-in check for syntax errors, undefined names and unused imports.
+    Strategy code is also checked for a missing on_bar/signals and for ctx attributes
+    that don't exist (ctx.smaa(20) -> "did you mean sma?")."""
+    import ast
+    fn = STRATEGY_FILENAME if kind == "strategy" else module_filename(name or "module")
+    try:
+        tree = ast.parse(code, fn)
+    except SyntaxError as e:
+        return [{"line": e.lineno or 1, "col": e.offset or 1, "severity": "error",
+                 "message": "SyntaxError: %s" % e.msg, "code": "SyntaxError"}]
+    try:
+        from pyflakes import checker
+    except ImportError:
+        checker = None
+    out = _pyflakes(tree, fn, checker) if checker else _basic_lint(tree)
+    if kind == "strategy":
+        out += _strategy_lint(tree)
+    out.sort(key=lambda m: (m["line"], m["col"]))
+    return out
+
+
+def _pyflakes(tree, fn, checker):
+    w = checker.Checker(tree, filename=fn, builtins=_lint_builtins())
+    out = []
+    for m in w.messages:
+        kind = type(m).__name__
+        out.append({"line": m.lineno, "col": (getattr(m, "col", 0) or 0) + 1,
+                    "severity": "error" if kind in LINT_ERRORS else "warning",
+                    "message": m.message % m.message_args, "code": kind})
+    return out
+
+
+def _basic_lint(tree):
+    """Undefined names and unused imports, without pyflakes. Scope-blind: a name defined
+    anywhere in the file counts as defined everywhere, so it misses some mistakes but
+    doesn't invent any."""
+    import ast
+    import builtins
+    known = set(dir(builtins)) | _lint_builtins() | {"__file__", "__name__", "__doc__"}
+    defined, imported, loaded, star = set(), {}, set(), False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            (loaded if isinstance(node.ctx, ast.Load) else defined).add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+        elif isinstance(node, ast.arg):
+            defined.add(node.arg)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                if a.name == "*":
+                    star = True
+                    continue
+                nm = a.asname or a.name.split(".")[0]
+                imported.setdefault(nm, (node.lineno, node.col_offset))
+                defined.add(nm)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            defined.add(node.name)
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            defined.update(node.names)
+        elif type(node).__name__ in ("MatchAs", "MatchStar") and getattr(node, "name", None):
+            defined.add(node.name)
+        elif type(node).__name__ == "MatchMapping" and getattr(node, "rest", None):
+            defined.add(node.rest)
+    out = []
+    if not star:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id not in defined | known:
+                out.append({"line": node.lineno, "col": node.col_offset + 1, "severity": "error",
+                            "message": "undefined name %r" % node.id, "code": "UndefinedName"})
+    for nm, (line, col) in imported.items():
+        if nm not in loaded:
+            out.append({"line": line, "col": col + 1, "severity": "warning",
+                        "message": "%r imported but unused" % nm, "code": "UnusedImport"})
+    return out
+
+
+def _strategy_lint(tree):
+    import ast
+    import difflib
+    out = []
+    top = {n.name: n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    assigned = {t.id for n in tree.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+    if not ({"on_bar", "signals"} & (set(top) | assigned)):
+        out.append({"line": 1, "col": 1, "severity": "warning", "code": "NoEntryPoint",
+                    "message": "Define on_bar(ctx) or signals(data): without one there is nothing to backtest."})
+    ctx_names = _members(Context) | _members(PortfolioContext)
+    asset_names = _members(AssetContext)
+    set_on_ctx = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store)}
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) or not fn.args.args or fn.args.args[0].arg != "ctx":
+            continue
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Attribute) or not isinstance(node.ctx, ast.Load) or node.attr in set_on_ctx:
+                continue
+            v = node.value
+            if isinstance(v, ast.Name) and v.id == "ctx":
+                names, what = ctx_names, "ctx"
+            elif isinstance(v, ast.Subscript) and isinstance(v.value, ast.Name) and v.value.id == "ctx":
+                names, what = asset_names, "ctx[...]"
+            else:
+                continue
+            if node.attr not in names and not node.attr.startswith("_"):
+                close = difflib.get_close_matches(node.attr, sorted(names), 1, 0.7)
+                out.append({"line": node.lineno, "col": node.col_offset + len(what) + 2, "severity": "error",
+                            "code": "UnknownAttribute",
+                            "message": "%s has no attribute %r%s" % (what, node.attr, "; did you mean %s?" % close[0] if close else "")})
+    return out
+
+
+# ---- strategy tests ----------------------------------------------------------
+
+def make_data(close, open=None, high=None, low=None, volume=None, start="2020-01-02", ticker="TEST"):
+    """A DataSet for tests: these closes (and optional other columns) on consecutive weekdays from start."""
+    d, dates = _dt.date.fromisoformat(start), []
+    while len(dates) < len(close):
+        if d.weekday() < 5:
+            dates.append(d.isoformat())
+        d += _dt.timedelta(days=1)
+    return DataSet(ticker, dates, list(close), open, high, low, volume)
+
+
+def synthetic_data(n=500, seed=0, drift=0.0003, vol=0.01, price=100.0, start="2020-01-02", ticker="TEST"):
+    """A random-walk DataSet for tests: Gaussian daily returns, with opens, highs, lows and volume."""
+    rng = random.Random(seed)
+    o, h, lo, c = [], [], [], []
+    px = float(price)
+    for _ in range(n):
+        op = px * (1 + rng.gauss(0, vol / 4))
+        px = op * (1 + drift + rng.gauss(0, vol))
+        o.append(op)
+        c.append(px)
+        h.append(max(op, px) * (1 + abs(rng.gauss(0, vol / 3))))
+        lo.append(min(op, px) * (1 - abs(rng.gauss(0, vol / 3))))
+    return make_data(c, o, h, lo, [1e6] * n, start, ticker)
+
+
+def assert_close(actual, expected, tol=1e-9, msg=""):
+    """Assert two numbers (or equal-length lists) agree within tol, relative to their size."""
+    a = list(actual) if isinstance(actual, (list, tuple)) else [actual]
+    b = list(expected) if isinstance(expected, (list, tuple)) else [expected]
+    if len(a) != len(b):
+        raise AssertionError("%slengths differ: %d vs %d" % (msg + ": " if msg else "", len(a), len(b)))
+    for i, (x, y) in enumerate(zip(a, b)):
+        if isnan(x) and isnan(y):
+            continue
+        if isnan(x) or isnan(y) or abs(x - y) > tol * max(1.0, abs(x), abs(y)):
+            raise AssertionError("%s%r != %r%s (tolerance %g)" % (msg + ": " if msg else "", x, y,
+                                                                 " at index %d" % i if len(a) > 1 else "", tol))
+
+
+def _test_helpers(code, kind):
+    def run_strategy(data, params=None, code=code if kind == "strategy" else None, start=None, end=None, **settings):
+        """Backtest this file's strategy (or code=...) on a DataSet, or a list of them for a portfolio."""
+        if code is None:
+            raise ValueError("run_strategy in a module needs code=..., the strategy source to test.")
+        strat = Strategy.from_code(code, params)
+        cfg = Config(**settings)
+        if isinstance(data, (list, tuple)):
+            return backtest_portfolio(strat, list(data), cfg, start, end)
+        return backtest(strat, data, cfg, start, end)
+
+    return {"make_data": make_data, "synthetic_data": synthetic_data, "assert_close": assert_close,
+            "run_strategy": run_strategy, "metrics": lambda res: summarize(res)[0],
+            "DataSet": DataSet, "Config": Config, "DATA": DATA}
+
+
+def _frames_in(exc, filenames):
+    return [f for f in traceback.extract_tb(exc.__traceback__)
+            if f.filename in filenames or _module_of(f.filename) or f.filename == STRATEGY_FILENAME]
+
+
+def run_tests(code, kind="strategy", name=None, only=None):
+    """Run the test_* functions in strategy or module code, like a tiny pytest.
+
+    Tests take no arguments and use plain assert. Besides the strategy helpers they get
+    make_data, synthetic_data, assert_close, metrics(res) and run_strategy(data, params,
+    **settings), which backtests this file's strategy. Returns {tests: [{name, ok,
+    message, line, trace, output, seconds}], passed, failed, error}."""
+    import time
+    fn = STRATEGY_FILENAME if kind == "strategy" else module_filename(name or "module")
+    linecache.cache[fn] = (len(code), None, code.splitlines(True), fn)
+    _forget_modules()
+    ns = _namespace()
+    ns["__name__"] = "strategy" if kind == "strategy" else (name or "module")
+    ns.update(_test_helpers(code, kind))
+    old_out, old_err = sys.stdout, sys.stderr
+    buf = sys.stdout = sys.stderr = io.StringIO()
+    try:
+        exec(compile(code, fn, "exec"), ns)
+    except Exception as e:  # noqa: BLE001
+        return {"tests": [], "passed": 0, "failed": 0, "error": format_error(e)}
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+    tests = [(k, v) for k, v in ns.items() if k.startswith("test") and callable(v) and (only is None or k == only)]
+    results = []
+    for k, f in tests:
+        buf = io.StringIO()
+        sys.stdout = sys.stderr = buf
+        t0 = time.perf_counter()
+        try:
+            f()
+            ok, msg, line, trace = True, "", getattr(getattr(f, "__code__", None), "co_firstlineno", None), ""
+        except Exception as e:  # noqa: BLE001
+            frames = _frames_in(e, {fn})
+            here = [fr for fr in frames if fr.filename == fn]
+            line = here[-1].lineno if here else getattr(f.__code__, "co_firstlineno", None)
+            if isinstance(e, AssertionError):
+                msg = str(e) or "assert failed: %s" % ((here[-1].line or "").strip() if here else "")
+            else:
+                msg = "%s: %s" % (type(e).__name__, e)
+            trace = "\n".join("  %sline %d, in %s\n    %s" % (("%s.py, " % _module_of(fr.filename)) if _module_of(fr.filename) and fr.filename != fn else "",
+                                                          fr.lineno, fr.name, (fr.line or "").strip()) for fr in frames)
+            ok = False
+        finally:
+            sys.stdout, sys.stderr = old_out, old_err
+        results.append({"name": k, "ok": ok, "message": msg, "line": line, "trace": trace,
+                        "output": _log_preview(buf.getvalue()), "seconds": time.perf_counter() - t0})
+    passed = sum(1 for r in results if r["ok"])
+    return {"tests": results, "passed": passed, "failed": len(results) - passed, "error": None}
+
+
+# ---- the console --------------------------------------------------------------
+
+CONSOLE = {"ns": None, "view": None, "n": 0}
+
+
+def console_run(src, tickers=(), reset=False):
+    """Run one console cell. Variables persist between cells until reset. Predefined:
+    data (the selected instrument(s), as signals(data) sees them), result (the latest
+    backtest), DATA, engine, summarize, backtest, the test helpers and the strategy
+    helpers. A final expression is printed, as in the Python prompt, and kept in _."""
+    import ast
+    if reset or CONSOLE["ns"] is None:
+        ns = _namespace()
+        ns.update(_test_helpers(None, "module"))
+        ns.update({"__name__": "__console__", "engine": sys.modules[__name__], "summarize": summarize,
+                   "backtest": backtest, "backtest_portfolio": backtest_portfolio, "Strategy": Strategy})
+        CONSOLE.update(ns=ns, view=None)
+    ns = CONSOLE["ns"]
+    tickers = tuple(t for t in tickers if t in DATA)
+    if tickers != CONSOLE["view"]:
+        if len(tickers) == 1:
+            ns["data"] = DataView(DATA[tickers[0]])
+        elif tickers:
+            ns["data"] = PanelView(shared_panel([DATA[t] for t in tickers]))
+        CONSOLE["view"] = tickers
+    ns["result"] = LAST_RUN.get("res")
+    CONSOLE["n"] += 1
+    fn = "<console-%d>" % CONSOLE["n"]
+    linecache.cache[fn] = (len(src), None, src.splitlines(True), fn)
+    old_out, old_err = sys.stdout, sys.stderr
+    buf = sys.stdout = sys.stderr = io.StringIO()
+    error = None
+    try:
+        tree = ast.parse(src, fn, "exec")
+        last = None
+        if tree.body and isinstance(tree.body[-1], ast.Expr):
+            last = ast.Expression(tree.body.pop().value)
+        exec(compile(tree, fn, "exec"), ns)
+        if last is not None:
+            value = eval(compile(last, fn, "eval"), ns)
+            if value is not None:
+                ns["_"] = value
+                text = repr(value)
+                print(text if len(text) <= 100000 else text[:100000] + " ... (%s characters)" % format(len(text), ","))
+    except SyntaxError as e:
+        error = "SyntaxError: %s (line %s)\n    %s" % (e.msg, e.lineno, (e.text or "").strip())
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        frames = [f for f in traceback.extract_tb(e.__traceback__)
+                  if f.filename.startswith("<console") or f.filename == STRATEGY_FILENAME or _module_of(f.filename)]
+        error = "".join("  %s, line %d, in %s\n    %s\n" % (f.filename.strip("<>"), f.lineno, f.name, (f.line or "").strip())
+                        for f in frames) + "%s: %s" % (type(e).__name__, e)
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+    base = set(_namespace()) | set(_test_helpers(None, "module")) | {"engine", "summarize", "backtest", "backtest_portfolio",
+                                                                    "Strategy", "data", "result", "_"}
+    names = sorted(k for k in ns if not k.startswith("_") and k not in base)
+    return {"output": _log_preview(buf.getvalue()), "error": error,
+            "vars": [{"name": k, "type": type(ns[k]).__name__} for k in names][:200]}
+
+
+# ---- completions ----------------------------------------------------------------
+
+_ATTR_DOCS = {
+    "state": "A dict kept from one bar to the next: remember anything here.",
+    "params": "This strategy's PARAMS (with any values set by a sweep).",
+    "start_index": "Index of the first bar of the backtest window.",
+    "ticker": "The instrument's ticker.", "tickers": "The portfolio's tickers.",
+    "open": "Opens up to today: open[-1] is today's.", "high": "Highs up to today.", "low": "Lows up to today.",
+    "close": "Closes up to today: close[-1] is today's, close[-2] yesterday's.", "volume": "Volumes up to today.",
+}
+
+
+def completions():
+    """Names the editor can complete after ctx., ctx['X']., qt., data. and at the top level."""
+    import inspect
+
+    def doc(o):
+        return (inspect.getdoc(o) or "").split("\n\n")[0].replace("\n", " ")
+
+    def sig(f):
+        try:
+            return str(inspect.signature(f)).replace("(self, ", "(").replace("(self)", "()")
+        except (TypeError, ValueError):
+            return "(...)"
+
+    def entries(cls):
+        out = []
+        for n in sorted(_members(cls)):
+            raw = next((k.__dict__[n] for k in cls.__mro__ if n in k.__dict__), None)
+            if isinstance(raw, property):
+                out.append({"name": n, "kind": "property", "doc": doc(raw.fget) or _ATTR_DOCS.get(n, "")})
+            elif callable(raw):
+                out.append({"name": n, "kind": "method", "sig": sig(raw), "doc": doc(raw)})
+            else:
+                out.append({"name": n, "kind": "attribute", "doc": _ATTR_DOCS.get(n, "")})
+        return out
+
+    def funcs(items):
+        return [{"name": n, "kind": "function" if callable(f) else "constant", "sig": sig(f) if callable(f) else "",
+                 "doc": doc(f) if callable(f) else ""} for n, f in sorted(items) if not n.startswith("_")]
+
+    glob = {k: v for k, v in _namespace().items() if not k.startswith("_")}
+    glob.update({k: v for k, v in _test_helpers(None, "module").items() if k in ("make_data", "synthetic_data", "assert_close")})
+    return {"ctx": entries(Context), "portfolio": entries(PortfolioContext), "asset": entries(AssetContext),
+            "qt": funcs(vars(qt).items()), "data": entries(DataView), "panel": entries(PanelView),
+            "globals": funcs(glob.items())}
+
+
+# =============================================================================
 # 8. JSON API for the web page
 # =============================================================================
 
@@ -4103,15 +4588,17 @@ def _prepare(p):
     return sets, bench, cfg, strat, portfolio, rates
 
 
-def _signal_key(p):
+def _signal_key(p, strat):
+    """What signals(data) depends on besides the data: the code, its parameters and the modules it imported."""
     import hashlib
-    return hashlib.sha256((p["code"] + "\0" + json.dumps(p.get("params"), sort_keys=True)).encode()).hexdigest()
+    mods = "".join("\0%s\0%s" % (n, MODULES.get(n, "")) for n in strat.modules)
+    return hashlib.sha256((p["code"] + "\0" + json.dumps(p.get("params"), sort_keys=True) + mods).encode()).hexdigest()
 
 
 def _run_payload(p, strat=None, cfg=None):
     sets, bench, cfg0, strat0, portfolio, rates = _prepare(p)
     strat, cfg = strat or strat0, cfg or cfg0
-    key = _signal_key(p)
+    key = _signal_key(p, strat)
     if portfolio:
         res = backtest_portfolio(strat, sets, cfg, p.get("start"), p.get("end"), bench, rates=rates, signal_key=key)
     else:
@@ -4209,7 +4696,10 @@ def api_rows(p):
     res = LAST_RUN.get("res")
     if res is None:
         raise ValueError("No run to export yet.")
-    return _fill_rows(res, res.fills) if p.get("kind") == "fills" else res.trades
+    kind = p.get("kind")
+    if kind == "logs":
+        return res.full_logs
+    return _fill_rows(res, res.fills) if kind == "fills" else res.trades
 
 
 def api_run(p):
@@ -4239,9 +4729,9 @@ def api_run(p):
                     "vol_window": 63, "vol": rolling_vol(res.equity, 63), "bench_vol": rolling_vol(res.bench_equity, 63)},
         "annual": [{"year": y, "strategy": a, "bench": b} for (y, a), (_, b) in
                    zip(period_returns(res.dates, res.equity, "year"), period_returns(res.dates, res.bench_equity, "year"))],
-        "logs": res.logs, "notes": res.notes, "config": cfg.as_dict(),
+        "logs": res.logs, "logs_total": len(res.full_logs), "notes": res.notes, "config": cfg.as_dict(),
         "data": {tk: _data_info(ds) for tk, ds in zip(res.tickers, res.panel.sets)},
-        "provenance": provenance(res, p["code"]),
+        "provenance": provenance(res, p["code"], strat.modules),
     }
     if res.portfolio:
         idx = _downsample(len(res.dates))
@@ -4259,11 +4749,12 @@ def api_run(p):
     return out
 
 
-def provenance(res, code):
+def provenance(res, code, modules=()):
     """What exactly produced a result: enough to reproduce it or tell why it changed."""
     import hashlib
     return {"engine_version": ENGINE_VERSION, "python": sys.version.split()[0],
             "code_sha256": hashlib.sha256(code.encode("utf-8")).hexdigest(),
+            "modules": module_hashes(modules),
             "params": dict(res.params), "config": res.config.as_dict(),
             "data": {tk: ds.fingerprint() for tk, ds in zip(res.tickers, res.panel.sets)},
             "start": res.dates[0], "end": res.dates[-1], "bars": len(res.dates), "benchmark": res.benchmark}
@@ -4356,7 +4847,30 @@ def api_metric_list(p):
     return [{"key": k, "label": lab, "group": g, "fmt": f, "tier": t, "desc": d} for k, lab, g, f, t, d in METRICS]
 
 
+def api_lint(p):
+    return lint(p["code"], p.get("kind", "strategy"), p.get("name"))
+
+
+def api_tests(p):
+    return run_tests(p["code"], p.get("kind", "strategy"), p.get("name"), p.get("only"))
+
+
+def api_console(p):
+    tickers = p.get("tickers") or ([p["ticker"]] if p.get("ticker") else [])
+    return console_run(p.get("code", ""), tickers, bool(p.get("reset")))
+
+
+def api_completions(p):
+    return completions()
+
+
+def api_check_module(p):
+    return {"problem": module_name_problem(p.get("name"))}
+
+
 API = {
+    "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
+    "check_module": api_check_module,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,
     "inspect": api_inspect, "run": api_run, "metrics": api_metrics,
@@ -4377,6 +4891,8 @@ def handle(method, payload_json):
     try:
         import time
         p = json.loads(payload_json) if payload_json else {}
+        if isinstance(p, dict) and "modules" in p:
+            set_modules(p["modules"])
         if method not in API:
             raise ValueError("unknown method %r" % method)
         result = API[method](p)

@@ -55,6 +55,20 @@ Every run is saved in the browser with its code hash, parameters, settings, data
 engine version (History tab: compare, restore, re-run to check it reproduces). Export CSVs, the run as
 JSON, or a printable tear sheet; back up or move the whole workspace as one file (Data tab).
 
+## Modules, editor and tests
+
+Shared code lives in **modules**: Python files in the browser's module library that any strategy
+imports (`from my_signals import trend`). The editor has tabs with unsaved markers, pyflakes problems
+(plus checks for `ctx` attributes that don't exist), completions for `ctx.`, `qt.`, `data.` and your
+modules, go-to-definition (F12), and find & replace. Functions named `test_...` are unit tests, run
+from the full editor with helpers such as `run_strategy(make_data([...]))`; the Console there runs
+Python next to your data and latest result. Optional **GitHub Sync** (Data tab, `github-sync.js`)
+pushes and pulls strategies and modules as `.py` files using your own token; nothing else leaves the
+browser.
+
+Sweeps and walk-forward grids run on several Python workers at once, unchanged reruns are shown from
+a cache, and `signals()` output is reused when only settings change.
+
 ## Machine learning
 
 Strategies can `import numpy`, `pandas`, `scipy` and `sklearn`; they load on first use
@@ -81,10 +95,11 @@ print(engine.attribution(res)["rows"])
 | Path | What it is |
 |---|---|
 | `engine.py` | Indicators, backtest loop, statistics, research tools, JSON API (pure Python, no dependencies) |
-| `templates.py` | 29 built-in strategies, including 5 portfolio and 3 machine-learning ones |
+| `templates.py` | 30 built-in strategies, including 5 portfolio and 3 machine-learning ones |
 | `index.html` | The web app |
-| `runtime.js`, `worker.js` | Start Pyodide in a background Web Worker |
+| `runtime.js`, `worker.js` | Start Pyodide in a background Web Worker (plus helper workers for sweeps) |
+| `github-sync.js` | Optional GitHub Sync, loaded only when used |
 | `docs.html` | Documentation (rebuild with `python tools/build_docs.py`) |
-| `pyodide/`, `vendor/` | Bundled Pyodide 0.26.4 runtime and Chart.js 4.4.1, so it works offline |
+| `pyodide/`, `vendor/` | Bundled Pyodide 0.26.4 runtime, Chart.js 4.4.1 and pyflakes 3.2.0 (MIT), so it works offline |
 | `data/` | Bundled Nasdaq CSVs for 23 instruments (10 years, daily); `tests/fixtures/` holds two synthetic series for tests |
 | `tests/test_engine.py` | Unit tests: `python tests/test_engine.py` |

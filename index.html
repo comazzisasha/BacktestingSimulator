@@ -223,6 +223,73 @@ pre.diff .add { color: var(--gain); }
 pre.diff .del { color: var(--loss); }
 tr.detail td { white-space: normal; background: var(--sunk); font-size: 12.5px; color: var(--fg-2); }
 tr.detail ul { margin: 4px 0; padding-left: 18px; }
+/* editor tabs, find bar, completions, problems & the tools pane */
+.seg button[aria-selected="true"] { background: var(--panel); color: var(--fg); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 1px var(--border); }
+.ed-tabs { display: flex; align-items: flex-end; gap: 8px; border-bottom: 1px solid var(--border); margin-bottom: -6px; }
+.ed-tablist { display: flex; gap: 2px; min-width: 0; flex: 1 1 auto; overflow-x: auto; scrollbar-width: thin; }
+.ed-tab { display: inline-flex; align-items: center; gap: 2px; flex: none; border: 1px solid transparent; border-bottom: 0; border-radius: var(--r) var(--r) 0 0; margin-bottom: -1px; }
+.ed-tab[aria-selected="true"] { background: var(--sunk); border-color: var(--border); }
+.ed-tab .open { border: 0; background: none; padding: 6px 4px 6px 10px; font: inherit; font-size: 13px; font-family: var(--f-mono); color: var(--fg-2); cursor: pointer; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ed-tab[aria-selected="true"] .open { color: var(--fg); }
+.ed-tab .dirty { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: none; }
+.ed-tab .close { border: 0; background: none; width: 22px; height: 22px; border-radius: 4px; color: var(--fg-3); cursor: pointer; font-size: 13px; line-height: 1; margin-right: 4px; }
+.ed-tab .close:hover { background: var(--hover); color: var(--fg); }
+.ed-add { flex: none; margin-bottom: 4px; }
+.field.grow { flex: 1 1 180px; }
+.findbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px; border: 1px solid var(--border); border-radius: var(--r); background: var(--sunk); }
+.findbar input { flex: 1 1 140px; min-width: 0; min-height: 30px; font-family: var(--f-mono); font-size: 13px; }
+.btn.tog { min-width: 34px; font-family: var(--f-mono); }
+.btn.tog[aria-pressed="true"] { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); }
+.ed-main pre.ed-marks { color: transparent; }
+.ed-marks mark { background: color-mix(in srgb, var(--warn) 30%, transparent); color: transparent; border-radius: 2px; }
+.ed-marks mark.cur { background: color-mix(in srgb, var(--warn) 65%, transparent); }
+.ed-gutter .lint-error { color: var(--loss); font-weight: 600; box-shadow: inset 2px 0 0 var(--loss); }
+.ed-gutter .lint-warning { color: var(--warn); box-shadow: inset 2px 0 0 var(--warn); }
+.ac { position: absolute; z-index: 5; width: min(440px, calc(100% - 16px)); background: var(--panel); border: 1px solid var(--border-strong); border-radius: var(--r); box-shadow: var(--shadow-pop); font-size: 12.5px; overflow: hidden; }
+.ac ul { list-style: none; margin: 0; padding: 4px; max-height: 196px; overflow-y: auto; }
+.ac li { display: flex; gap: 8px; align-items: baseline; padding: 3px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; overflow: hidden; }
+.ac li[aria-selected="true"] { background: color-mix(in srgb, var(--focus) 18%, transparent); }
+.ac li b { font-weight: 600; color: var(--fg); }
+.ac li .sig { color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; }
+.ac li .kind { margin-left: auto; color: var(--fg-3); font-family: var(--f-sans); font-size: 11px; }
+.ac p { margin: 0; padding: 6px 10px; border-top: 1px solid var(--border); color: var(--fg-2); font-family: var(--f-sans); white-space: normal; }
+.ac p:empty { display: none; }
+.lintline { display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left; border: 0; background: none; padding: 2px 0; font: inherit; font-size: 13px; color: var(--fg-2); cursor: pointer; }
+.lintline:hover { color: var(--fg); }
+.lintline .sev-error, .problems .sev-error { color: var(--loss); font-weight: 600; }
+.lintline .sev-warning, .problems .sev-warning { color: var(--warn); font-weight: 600; }
+.ed-pane { display: none; }
+#view-edit .ed-pane { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--r); background: var(--panel); flex: 0 0 auto; }
+#view-edit .lintline { display: none; }
+.ed-pane-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px; border-bottom: 1px solid var(--border); }
+.ed-pane-h .count { display: inline-flex; min-width: 18px; justify-content: center; padding: 0 5px; border-radius: 999px; background: var(--sunk); font-size: 11.5px; color: var(--fg-2); }
+.ed-pane-b { height: var(--pane-h, 180px); overflow: hidden; display: flex; flex-direction: column; }
+.ed-pane-b[hidden] { display: none; }
+.ed-pane-b > [role="tabpanel"] { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 8px 10px; }
+.ed-pane-b > [role="tabpanel"][hidden] { display: none; }
+#pane-console { display: flex; flex-direction: column; gap: 6px; padding-bottom: 6px; }
+#pane-console[hidden] { display: none; }
+.problems { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; font-size: 13px; }
+.problems button { display: flex; gap: 10px; width: 100%; text-align: left; border: 0; background: none; padding: 3px 6px; border-radius: 4px; font: inherit; color: var(--fg); cursor: pointer; }
+.problems button:hover { background: var(--hover); }
+.problems .where { color: var(--fg-3); font-family: var(--f-mono); flex: none; min-width: 7ch; }
+.con-out { flex: 1 1 auto; min-height: 0; margin: 0; overflow: auto; font-family: var(--f-mono); font-size: 12.5px; white-space: pre-wrap; word-break: break-word; }
+.con-out .in { color: var(--fg-3); }
+.con-out .err { color: var(--loss); }
+.con-in { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--border-strong); border-radius: var(--r); background: var(--sunk); padding: 6px 8px; font-family: var(--f-mono); font-size: 12.5px; }
+.con-in:focus-within { border-color: var(--focus); box-shadow: 0 0 0 1px var(--focus); }
+.con-in .prompt { color: var(--fg-3); line-height: 20px; }
+.con-in textarea { flex: 1; border: 0; outline: none; background: none; resize: none; font: inherit; line-height: 20px; padding: 0; color: var(--fg); min-height: 20px; max-height: 120px; }
+#conHelp { margin: 0; }
+.linkbtn { border: 0; background: none; padding: 0; font: inherit; color: var(--link); cursor: pointer; text-decoration: underline; }
+.tests { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }
+.tests li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 2px 10px; align-items: baseline; }
+.tests .ok { color: var(--gain); font-weight: 600; }
+.tests .bad { color: var(--loss); font-weight: 600; }
+.tests .name { font-family: var(--f-mono); }
+.tests .name button { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline dotted; }
+.tests .msg { grid-column: 2 / -1; color: var(--fg-2); white-space: pre-wrap; font-family: var(--f-mono); font-size: 12px; }
+#modList table td:last-child { text-align: right; white-space: nowrap; }
 .editor[data-size="m"] { font-size: 14px; --lh: 22px; }
 .editor[data-size="l"] { font-size: 16px; --lh: 24px; }
 
@@ -439,15 +506,61 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <div class="panel-b" id="strategyBody">
             <div class="field"><label for="template">Start From</label><select id="template" name="template"></select></div>
             <p class="about" id="about"></p>
+            <div class="ed-tabs" translate="no"><div class="ed-tablist" id="edTabs" role="tablist" aria-label="Open files"></div>
+              <button class="btn small ed-add" id="modBtn" type="button" aria-expanded="false" aria-controls="modPick" title="Modules: code your strategies can import">Modules</button></div>
+            <div class="picker" id="modPick" hidden>
+              <form class="row" id="modNewForm" novalidate>
+                <div class="field grow"><label for="modName">New Module</label><input type="text" id="modName" name="module-name" placeholder="my_signals" maxlength="40" autocomplete="off" spellcheck="false" translate="no" aria-describedby="modName-help modName-err"><p class="ferr" id="modName-err" hidden></p></div>
+                <button class="btn small primary" type="submit">Create</button>
+              </form>
+              <p class="help" id="modName-help">A module is a Python file your strategies import: <code translate="no">from my_signals import trend</code>. Save it with <span class="kbdSave"></span>; runs use what is in the editor.</p>
+              <div class="tablebox" id="modList"></div>
+            </div>
+            <div class="findbar" id="findBar" role="search" aria-label="Find and replace" hidden>
+              <input type="text" id="findInput" placeholder="Find" aria-label="Find" spellcheck="false" autocomplete="off" translate="no">
+              <button class="btn small tog" id="findCase" type="button" aria-pressed="false" title="Match case">Aa</button>
+              <button class="btn small tog" id="findRe" type="button" aria-pressed="false" title="Regular expression" translate="no">.*</button>
+              <span class="muted tnum" id="findCount" aria-live="polite"></span>
+              <button class="btn small" id="findPrev" type="button" aria-label="Previous match" title="Previous (Shift+Enter)">↑</button>
+              <button class="btn small" id="findNext" type="button" aria-label="Next match" title="Next (Enter)">↓</button>
+              <input type="text" id="replInput" placeholder="Replace" aria-label="Replace with" spellcheck="false" autocomplete="off" translate="no">
+              <button class="btn small" id="replOne" type="button">Replace</button>
+              <button class="btn small" id="replAll" type="button">All</button>
+              <button class="btn small" id="findClose" type="button" aria-label="Close find & replace">✕</button>
+            </div>
             <div class="editor" id="editor" translate="no">
               <div class="ed-gutter" id="edGutter" aria-hidden="true"></div>
               <div class="ed-main">
                 <div class="ed-err" id="edErr" hidden></div>
+                <pre class="ed-marks" aria-hidden="true"><code id="edMarks"></code></pre>
                 <pre aria-hidden="true"><code id="edHl"></code></pre>
-                <textarea id="code" name="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-label="Strategy code" aria-describedby="editorHelp"></textarea>
+                <textarea id="code" name="code" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" wrap="off" aria-label="Strategy code" aria-describedby="editorHelp" aria-autocomplete="list" aria-controls="acBox"></textarea>
+                <div class="ac" id="acBox" role="listbox" aria-label="Completions" hidden><ul id="acList"></ul><p id="acDoc"></p></div>
               </div>
             </div>
-            <p class="help kbd-only" id="editorHelp"><span id="kbdRun"></span> runs · Tab indents · <span id="kbdComment"></span> comments · Esc then Tab leaves the editor</p>
+            <button class="lintline" id="lintLine" type="button" hidden></button>
+            <div class="ed-pane" id="edPane">
+              <div class="ed-pane-h">
+                <div class="seg" role="tablist" aria-label="Editor tools">
+                  <button type="button" role="tab" id="paneTab-problems" data-pane="problems" aria-selected="true" aria-controls="pane-problems">Problems <span class="count" id="probCount">0</span></button>
+                  <button type="button" role="tab" id="paneTab-tests" data-pane="tests" aria-selected="false" aria-controls="pane-tests" tabindex="-1">Tests <span class="count" id="testCount" hidden></span></button>
+                  <button type="button" role="tab" id="paneTab-console" data-pane="console" aria-selected="false" aria-controls="pane-console" tabindex="-1">Console</button>
+                </div>
+                <span class="spacer"></span>
+                <button class="btn small" id="testRun" type="button">Run Tests</button>
+                <button class="btn small" id="paneToggle" type="button" aria-expanded="true" aria-controls="paneBody">Hide</button>
+              </div>
+              <div class="ed-pane-b" id="paneBody">
+                <div role="tabpanel" id="pane-problems" aria-labelledby="paneTab-problems"><ul class="problems" id="probList"></ul></div>
+                <div role="tabpanel" id="pane-tests" aria-labelledby="paneTab-tests" hidden><div id="testOut"><p class="out-empty">Functions named <code translate="no">test_…</code> in this file are tests. They can call <code translate="no">run_strategy(make_data([...]))</code> and check the result with <code translate="no">assert</code>. See the docs’ <a href="docs.html#testing">Testing</a> section.</p></div></div>
+                <div role="tabpanel" id="pane-console" aria-labelledby="paneTab-console" hidden>
+                  <pre class="con-out" id="conOut" tabindex="0" translate="no" aria-label="Console output"></pre>
+                  <div class="con-in"><span class="prompt" aria-hidden="true">&gt;&gt;&gt;</span><textarea id="conIn" rows="1" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" translate="no" aria-label="Python console input" aria-describedby="conHelp"></textarea></div>
+                  <p class="help" id="conHelp">Enter runs · Shift+Enter adds a line · ↑ ↓ history · <code translate="no">data</code> is the selected market, <code translate="no">result</code> the latest backtest. <button class="linkbtn" id="conReset" type="button">Reset</button> <button class="linkbtn" id="conClear" type="button">Clear</button></p>
+                </div>
+              </div>
+            </div>
+            <p class="help kbd-only" id="editorHelp"><span id="kbdRun"></span> runs · Tab indents · <span id="kbdComment"></span> comments · <span id="kbdFind"></span> finds · <kbd>F12</kbd> goes to a definition · <kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>Space</kbd> completes · Esc then Tab leaves the editor</p>
             <div class="row">
               <button class="btn primary" id="runBtn" type="button">Run Backtest <kbd aria-hidden="true" id="runKbd"></kbd></button>
               <button class="btn" id="stopBtn" type="button" hidden>Stop Run</button>
@@ -617,7 +730,8 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
 
           <section class="panel" id="logPanel" aria-labelledby="h-logs" hidden>
             <div class="panel-h"><h3 id="h-logs">Output</h3><span class="muted"><code translate="no">print()</code> &amp; <code translate="no">ctx.log()</code> from your strategy</span></div>
-            <div class="panel-b"><pre class="logs" id="logs" translate="no" tabindex="0"></pre></div>
+            <div class="panel-b"><pre class="logs" id="logs" translate="no" tabindex="0"></pre>
+              <div class="row" id="logMore" hidden><span class="muted" id="logMoreText"></span><button class="btn small" id="logDownload" type="button">Download Full Output</button></div></div>
           </section>
         </section>
       </div>
@@ -827,6 +941,23 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       </div>
     </section>
 
+    <section class="panel" aria-labelledby="h-gh">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-gh">GitHub Sync <span class="muted">(optional)</span></h2><p>Keep your saved strategies &amp; modules in a GitHub repository as <code translate="no">.py</code> files, for version history, code review &amp; sharing. This browser talks to api.github.com directly with a token you provide; nothing goes through any other server, and nothing is sent until you press Push or Pull.</p></div></div>
+      <form class="panel-b" id="ghForm" novalidate>
+        <div class="grid3">
+          <div class="field"><label for="ghRepo">Repository</label><input type="text" id="ghRepo" name="gh-repo" placeholder="octocat/quant-research" autocomplete="off" spellcheck="false" translate="no" aria-describedby="ghRepo-err"><p class="ferr" id="ghRepo-err" hidden></p></div>
+          <div class="field"><label for="ghBranch">Branch</label><input type="text" id="ghBranch" name="gh-branch" value="main" autocomplete="off" spellcheck="false" translate="no"></div>
+          <div class="field"><label for="ghDir">Folder</label><input type="text" id="ghDir" name="gh-folder" value="quantlab" autocomplete="off" spellcheck="false" translate="no"></div>
+        </div>
+        <div class="field"><label for="ghToken">Access Token</label><input type="password" id="ghToken" name="gh-token" autocomplete="off" spellcheck="false" aria-describedby="ghToken-help ghToken-err"><p class="ferr" id="ghToken-err" hidden></p>
+          <p class="help" id="ghToken-help">A fine-grained personal access token with <b>Contents: read &amp; write</b> on this one repository (GitHub → Settings → Developer settings). It is kept for this tab only unless you tick Remember, and never goes into workspace exports.</p></div>
+        <div class="row"><label class="check"><input type="checkbox" id="ghRemember" name="gh-remember"> Remember the token in this browser</label></div>
+        <div class="field"><label for="ghMsg">Commit Message</label><input type="text" id="ghMsg" name="gh-message" placeholder="QuantLab: update strategies and modules" autocomplete="off"></div>
+        <div class="row"><button class="btn primary" id="ghPush" type="button">Push to GitHub</button><button class="btn" id="ghPull" type="button">Pull from GitHub</button><span class="muted" id="ghStatus" aria-live="polite"></span></div>
+        <div class="picker" id="ghConfirm" hidden></div>
+      </form>
+    </section>
+
     <section class="panel" aria-labelledby="h-nasdaq">
       <div class="panel-h"><div class="toolhead"><h2 id="h-nasdaq">Getting Files from Nasdaq.com</h2></div></div>
       <div class="panel-b">
@@ -912,6 +1043,7 @@ let METRICS = [];
 const store = {
   get(k, fallback) { try { const v = localStorage.getItem('ql.' + k); return v == null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
   set(k, v) { try { localStorage.setItem('ql.' + k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } },
+  del(k) { try { localStorage.removeItem('ql.' + k); } catch (e) { /* storage unavailable */ } },
 };
 
 /* -------------------------------------------------------------- trials -- */
@@ -926,7 +1058,13 @@ function hash53(str) {   // cyrb53: a fast, stable 53-bit string hash
 }
 const trials = {
   family(p) { return `${currentSource().kind}:${currentSource().name}|${payloadTickers(p).join(',')}`; },
-  key(p, params) { return hash53(JSON.stringify([p.code, params || null, p.config, p.start, p.end, p.benchmark, payloadTickers(p)])); },
+  key(p, params) {
+    // A changed module is a new version of the strategy too (left out when none is imported, so older keys still match).
+    const imp = moduleImports(p.code || ''), used = [...new Set([...Object.values(imp.alias), ...Object.values(imp.from).map(x => x.mod)])].sort();
+    const k = [p.code, params || null, p.config, p.start, p.end, p.benchmark, payloadTickers(p)];
+    if (used.length) k.push(used.map(n => [n, (p.modules || {})[n] ?? null]));
+    return hash53(JSON.stringify(k));
+  },
   all() { return store.get('trials', {}); },
   get(fam) { return this.all()[fam] || {}; },
   add(fam, entries) {
@@ -1204,7 +1342,7 @@ const py = {
   canStop() { return this.mode === 'worker'; },
   async restart() {
     for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
-    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear(); pool.stop();
+    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear(); pool.stop(); pyHolds = null;
     this.ready = (async () => { this._spawn(); await this._post(this.initMsg(), 180000); })();
     return this.ready;
   },
@@ -1366,26 +1504,55 @@ function highlight(src) {
 }
 const editor = {
   init() {
-    this.ta = $('#code'); this.hl = $('#edHl'); this.gutter = $('#edGutter'); this.errEl = $('#edErr');
-    this.ta.addEventListener('input', () => { this.clearError(); this.render(); onCodeChanged(); });
-    this.ta.addEventListener('scroll', () => this.sync());
+    this.ta = $('#code'); this.hl = $('#edHl'); this.marks = $('#edMarks'); this.gutter = $('#edGutter'); this.errEl = $('#edErr');
+    this.lint = new Map();   // line -> {severity, messages}
+    this.ta.addEventListener('input', e => { this.clearError(); this.render(); files.changed(); complete.onInput(e); });
+    this.ta.addEventListener('scroll', () => { this.sync(); complete.close(); });
     this.ta.addEventListener('keydown', e => this.keys(e));
+    this.ta.addEventListener('click', e => { if (IS_MAC ? e.metaKey : e.ctrlKey) { e.preventDefault(); goToDefinition(); } else complete.close(); });
+    this.ta.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== this.ta) complete.close(); }, 150));
     this.render();
   },
   get value() { return this.ta.value; },
   set value(v) { this.ta.value = v; this.clearError(); this.render(); this.ta.scrollTop = 0; },
   lh() { return parseFloat(getComputedStyle($('#editor')).lineHeight) || 20; },
   render() {
-    const v = this.ta.value; this.hl.innerHTML = highlight(v);
+    const v = this.ta.value; this.hl.innerHTML = highlight(v); find.refresh(); this.renderMarks();
     const lines = v.split('\n').length;
     if (this.gutter.childElementCount !== lines) { let h = ''; for (let i = 1; i <= lines; i++) h += `<div>${i}</div>`; this.gutter.innerHTML = h; }
     this.markGutter(); this.sync();
   },
   sync() {
-    const pre = this.hl.parentElement; pre.scrollTop = this.ta.scrollTop; pre.scrollLeft = this.ta.scrollLeft; this.gutter.scrollTop = this.ta.scrollTop;
+    for (const pre of [this.hl.parentElement, this.marks.parentElement]) { pre.scrollTop = this.ta.scrollTop; pre.scrollLeft = this.ta.scrollLeft; }
+    this.gutter.scrollTop = this.ta.scrollTop;
     if (this.errLine) this.errEl.style.transform = `translateY(${10 + (this.errLine - 1) * this.lh() - this.ta.scrollTop}px)`;
   },
-  markGutter() { $$('.ed-gutter div.err').forEach(d => d.classList.remove('err')); if (this.errLine && this.gutter.children[this.errLine - 1]) this.gutter.children[this.errLine - 1].classList.add('err'); },
+  markGutter() {
+    $$('.ed-gutter div.err, .ed-gutter div.lint-error, .ed-gutter div.lint-warning').forEach(d => { d.classList.remove('err', 'lint-error', 'lint-warning'); d.removeAttribute('title'); });
+    for (const [line, x] of this.lint) { const d = this.gutter.children[line - 1]; if (d) { d.classList.add('lint-' + x.severity); d.title = x.messages.join('\n'); } }
+    if (this.errLine && this.gutter.children[this.errLine - 1]) this.gutter.children[this.errLine - 1].classList.add('err');
+  },
+  setLint(list) {
+    this.lint = new Map();
+    for (const m of list) { const x = this.lint.get(m.line) || { severity: 'warning', messages: [] }; if (m.severity === 'error') x.severity = 'error'; x.messages.push(m.message); this.lint.set(m.line, x); }
+    this.markGutter();
+  },
+  // Find matches drawn behind the text: the same characters, transparent, with <mark>s.
+  renderMarks() {
+    const v = this.ta.value, ms = find.matches;
+    if (!ms.length) { this.marks.innerHTML = ''; return; }
+    let h = '', last = 0;
+    ms.forEach(([a, b], i) => { h += esc(v.slice(last, a)) + `<mark${i === find.idx ? ' class="cur"' : ''}>${esc(v.slice(a, b))}</mark>`; last = b; });
+    this.marks.innerHTML = h + esc(v.slice(last)) + '\n ';
+  },
+  lineOf(pos) { let n = 1; const v = this.ta.value; for (let i = v.indexOf('\n'); i >= 0 && i < pos; i = v.indexOf('\n', i + 1)) n++; return n; },
+  posOf(line, col = 1) { const lines = this.ta.value.split('\n'); let pos = 0; for (let i = 0; i < line - 1 && i < lines.length; i++) pos += lines[i].length + 1; return pos + Math.min(Math.max(0, col - 1), (lines[line - 1] || '').length); },
+  reveal(line) {
+    const lh = this.lh(), top = (line - 1) * lh, h = this.ta.clientHeight;
+    if (top < this.ta.scrollTop || top > this.ta.scrollTop + h - 3 * lh) this.ta.scrollTop = Math.max(0, top - h / 3);
+    this.sync();
+  },
+  goTo(line, col = 1) { const p = this.posOf(line, col); this.ta.focus({ preventScroll: true }); this.ta.setSelectionRange(p, p); this.reveal(line); },
   showError(line) {
     this.errLine = line || null; this.errEl.hidden = !line; this.errEl.style.top = '0'; this.markGutter(); this.sync();
     if (line) { const lh = this.lh(), top = (line - 1) * lh, h = this.ta.clientHeight; if (top < this.ta.scrollTop || top > this.ta.scrollTop + h - 3 * lh) this.ta.scrollTop = Math.max(0, top - h / 3); }
@@ -1407,14 +1574,20 @@ const editor = {
   replaceLines(fn) { const ta = this.ta; const [a, b] = this.selectedLines(); const next = fn(ta.value.slice(a, b).split('\n')).join('\n'); ta.setSelectionRange(a, b); this.insert(next); ta.setSelectionRange(a, a + next.length); },
   keys(e) {
     const ta = this.ta, mod = IS_MAC ? e.metaKey : e.ctrlKey;
+    if (complete.keys(e)) return;
     if (mod && e.key === 'Enter') { e.preventDefault(); runBacktest(); return; }
+    if (mod && !e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); find.open(false); return; }
+    if ((mod && !IS_MAC && e.key.toLowerCase() === 'h') || (mod && e.altKey && e.code === 'KeyF')) { e.preventDefault(); find.open(true); return; }
+    if (e.key === 'F12') { e.preventDefault(); goToDefinition(); return; }
+    if (e.ctrlKey && e.code === 'Space') { e.preventDefault(); complete.show(true); return; }
+    if (e.key === 'F3' || (mod && e.key.toLowerCase() === 'g')) { e.preventDefault(); if (find.matches.length) find.go(e.shiftKey ? -1 : 1, true); else find.open(false); return; }
     if (mod && (e.key === '/' || e.code === 'Slash')) {
       e.preventDefault();
       this.replaceLines(ls => { const all = ls.filter(l => l.trim()).every(l => /^\s*#/.test(l)); return ls.map(l => (all ? l.replace(/^(\s*)# ?/, '$1') : l.trim() ? l.replace(/^(\s*)/, '$1# ') : l)); });
       return;
     }
-    if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); openSave(); return; }
-    if (e.key === 'Escape') { this.escaped = true; return; }
+    if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); files.save(); return; }
+    if (e.key === 'Escape') { if (!$('#findBar').hidden) { find.close(); return; } this.escaped = true; return; }
     if (e.key === 'Tab') {
       if (this.escaped) { this.escaped = false; return; }
       e.preventDefault();
@@ -1439,6 +1612,398 @@ const editor = {
     }
   },
 };
+
+/* --------------------------------------------- files: strategy & modules -- */
+// The editor shows one file at a time: the strategy or a module from the library. Modules are
+// Python files strategies import (from my_signals import trend). Each open file keeps its own
+// text, selection & scroll. Runs use what is in the editor; Save keeps a module in the library.
+const MODULE_TEMPLATE = n => `"""${n}: code shared between strategies.
+
+Import it in a strategy with:  from ${n} import trend
+Functions named test_... here are tests: run them from the Tests tab of the full editor.
+"""
+
+
+def trend(ctx, n=50):
+    """1.0 while the price is above its n-day average, else 0.0."""
+    return 1.0 if ctx.price > ctx.sma(n) else 0.0
+
+
+def test_trend_is_long_in_an_uptrend():
+    res = run_strategy(make_data([100 + i for i in range(80)]),
+                       code="from ${n} import trend\\ndef on_bar(ctx):\\n    return trend(ctx, 20)\\n")
+    assert res.exposure[-1] > 0.9
+`;
+const files = {
+  active: 'strategy', strategy: '', view: {},   // view: name -> {sel, top, left} while another file is shown
+  library() { return store.get('modules', {}); },
+  drafts() { return store.get('modDrafts', {}); },
+  open() { const d = this.drafts(); return store.get('openMods', []).filter(n => n in d); },
+  code(name) { return name === 'strategy' ? (this.active === 'strategy' ? editor.ta.value : this.strategy) : (this.active === name ? editor.ta.value : this.drafts()[name]); },
+  dirty(name) {
+    if (name === 'strategy') { const src = currentSource(); return src.kind !== 'none' && this.code('strategy') !== src.code; }
+    return this.code(name) !== this.library()[name];
+  },
+  // Every module a run can import: the library, with the open tabs' text on top.
+  payload() { const out = { ...this.library(), ...this.drafts() }; if (this.active !== 'strategy') out[this.active] = editor.ta.value; delete out.strategy; return out; },
+  label(name) { return name === 'strategy' ? currentSource().name : name + '.py'; },
+  stash() {
+    const ta = editor.ta; this.view[this.active] = { sel: [ta.selectionStart, ta.selectionEnd], top: ta.scrollTop, left: ta.scrollLeft };
+    if (this.active === 'strategy') this.strategy = ta.value; else this.saveDraft(this.active, ta.value);
+  },
+  saveDraft(name, code) { const d = this.drafts(); d[name] = code; store.set('modDrafts', d); },
+  show(name, focus = true) {
+    if (name !== 'strategy' && !(name in this.drafts())) return;
+    if (name !== this.active) {
+      this.stash(); complete.close(); this.active = name;
+      editor.value = name === 'strategy' ? this.strategy : this.drafts()[name];
+      const v = this.view[name]; if (v) { editor.ta.setSelectionRange(v.sel[0], v.sel[1]); editor.ta.scrollTop = v.top; editor.ta.scrollLeft = v.left; editor.sync(); }
+      editor.ta.setAttribute('aria-label', name === 'strategy' ? 'Strategy code' : `Code of module ${name}`);
+      editor.setLint([]); lint.schedule(50); find.refresh(); editor.renderMarks();
+    }
+    this.render(); if (focus) editor.ta.focus({ preventScroll: true });
+  },
+  openModule(name, line) {
+    if (!(name in this.drafts())) this.saveDraft(name, this.library()[name] ?? '');
+    const o = store.get('openMods', []); if (!o.includes(name)) store.set('openMods', [...o, name]);
+    this.show(name); if (line) editor.goTo(line);
+  },
+  close(name) {
+    const code = this.code(name), wasDirty = this.dirty(name);
+    if (this.active === name) this.show('strategy', false);
+    const d = this.drafts(); delete d[name]; store.set('modDrafts', d);
+    store.set('openMods', store.get('openMods', []).filter(n => n !== name)); delete this.view[name]; this.render();
+    if (wasDirty) toast(`Closed ${name}.py without saving.`, { label: 'Undo', run: () => { this.saveDraft(name, code); this.openModule(name); } });
+  },
+  save() {
+    if (this.active === 'strategy') { openSave(); return; }
+    const name = this.active, lib = this.library(); lib[name] = editor.ta.value; store.set('modules', lib);
+    this.saveDraft(name, editor.ta.value); this.render(); renderModules(); toast(`Saved ${name}.py in the module library.`);
+  },
+  // Called on every edit of the visible file.
+  changed() {
+    const name = this.active;
+    if (name === 'strategy') onCodeChanged(); else { clearTimeout(this.timer); this.timer = setTimeout(() => { if (name in this.drafts()) this.saveDraft(name, this.code(name)); }, 400); }
+    lint.schedule(); this.renderDirty();
+  },
+  setStrategy(code) { if (this.active !== 'strategy') this.show('strategy', false); editor.value = code; lint.schedule(50); this.render(); },
+  render() {
+    const tabs = ['strategy', ...this.open()];
+    $('#edTabs').innerHTML = tabs.map(n => `<div class="ed-tab" role="presentation" data-file="${esc(n)}" aria-selected="${n === this.active}">` +
+      `<button class="open" type="button" role="tab" aria-selected="${n === this.active}" tabindex="${n === this.active ? 0 : -1}" title="${esc(this.label(n))}">${esc(this.label(n))}</button>` +
+      `<span class="dirty" hidden title="Unsaved changes"></span>` +
+      (n === 'strategy' ? '' : `<button class="close" type="button" aria-label="Close ${esc(n)}.py" title="Close">✕</button>`) + '</div>').join('');
+    this.renderDirty();
+  },
+  renderDirty() {
+    for (const el of $$('#edTabs .ed-tab')) {
+      const n = el.dataset.file, d = this.dirty(n); el.querySelector('.dirty').hidden = !d;
+      el.querySelector('.open').setAttribute('aria-label', this.label(n) + (d ? ', unsaved changes' : ''));
+    }
+  },
+};
+const strategyCode = () => files.code('strategy');
+
+const RESERVED_MODULES = ['engine', 'templates', 'strategy', 'qt', 'numpy', 'pandas', 'scipy', 'sklearn', 'torch', 'matplotlib', 'math', 'random', 'statistics', 'datetime', 'json', 'os', 'sys', 're', 'time', 'io'];
+async function createModule(ev) {
+  ev.preventDefault();
+  const name = $('#modName').value.trim();
+  let problem = !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? 'Use letters, digits & _, starting with a letter, e.g. my_signals.'
+    : KW.split('|').includes(name) || RESERVED_MODULES.includes(name) ? `${name} is taken by Python or QuantLab. Try ${name}_lib.`
+    : name in files.library() || name in files.drafts() ? `There is already a module called ${name}.` : null;
+  if (!problem && py.ready) { try { await py.ready; problem = (await py.call('check_module', { name })).problem; } catch (e) { /* checked again when it runs */ } }
+  if (!setFieldError('modName', problem)) { $('#modName').focus(); return; }
+  const lib = files.library(); lib[name] = MODULE_TEMPLATE(name); store.set('modules', lib);
+  $('#modName').value = ''; togglePicker($('#modBtn'), $('#modPick')); renderModules(); files.openModule(name);
+  toast(`Created ${name}.py. Import it with: from ${name} import trend`);
+}
+function renderModules() {
+  const lib = files.library(), names = Object.keys({ ...lib, ...files.drafts() }).sort();
+  if (!names.length) { $('#modList').innerHTML = '<p class="muted" style="margin:0">No modules yet.</p>'; return; }
+  const mine = myStrategies(), uses = n => Object.entries(mine).filter(([, c]) => new RegExp(`^\\s*(from\\s+${n}\\s+import|import\\s+(\\w+\\s*,\\s*)*${n}\\b)`, 'm').test(c)).map(([k]) => k);
+  $('#modList').innerHTML = '<table><caption class="sr">Module library</caption><thead><tr><th scope="col">Module</th><th scope="col" class="n">Lines</th><th scope="col">Used By</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>' +
+    names.map(n => { const c = lib[n] ?? files.drafts()[n] ?? ''; const u = uses(n);
+      return `<tr><td translate="no"><b>${esc(n)}.py</b>${n in lib ? '' : ' <span class="chip">not saved</span>'}</td><td class="n">${fmt.int(c.split('\n').length)}</td><td>${u.length ? esc(u.join(', ')) : '<span class="muted">—</span>'}</td>` +
+        `<td><div class="row" style="flex-wrap:nowrap;justify-content:flex-end"><button class="btn small" type="button" data-mod-open="${esc(n)}">Open</button><button class="btn small danger" type="button" data-mod-del="${esc(n)}">Delete</button></div></td></tr>`; }).join('') +
+    '</tbody></table>';
+}
+function deleteModule(name) {
+  const code = files.library()[name], draft = files.drafts()[name], wasOpen = files.open().includes(name);
+  if (wasOpen) { const d = files.drafts(); if (files.active === name) files.show('strategy', false); delete d[name]; store.set('modDrafts', d); store.set('openMods', store.get('openMods', []).filter(n => n !== name)); }
+  const lib = files.library(); delete lib[name]; store.set('modules', lib); files.render(); renderModules();
+  toast(`Deleted ${name}.py.`, { label: 'Undo', run: () => {
+    const l = files.library(); if (code !== undefined) l[name] = code; store.set('modules', l);
+    if (wasOpen) { files.saveDraft(name, draft); files.openModule(name); } renderModules(); } });
+}
+
+/* --------------------------------------------------------------- lint ---- */
+// Python checks the visible file a moment after typing stops (pyflakes, plus QuantLab's own
+// checks such as ctx attributes that don't exist). Results mark the gutter & fill Problems.
+const lint = {
+  timer: null, seq: 0, results: [], file: 'strategy',
+  schedule(delay = 700) { clearTimeout(this.timer); this.timer = setTimeout(() => this.run(), delay); },
+  async run() {
+    if (!py.ready) return;
+    const file = files.active, code = editor.ta.value, seq = ++this.seq;
+    let r; try { await py.ready; r = await py.call('lint', file === 'strategy' ? { code } : { code, kind: 'module', name: file }); } catch (e) { return; }
+    if (seq !== this.seq || file !== files.active || code !== editor.ta.value) return;   // the code changed meanwhile
+    this.results = r; this.file = file; editor.setLint(r); renderProblems();
+  },
+};
+function renderProblems() {
+  const r = lint.results, n = r.length, errs = r.filter(m => m.severity === 'error').length;
+  $('#probCount').textContent = String(n);
+  $('#probList').innerHTML = n ? r.map((m, i) => `<li><button type="button" data-prob="${i}"><span class="where">Ln ${m.line}, Col ${m.col}</span><span class="sev-${m.severity}">${m.severity === 'error' ? 'Error' : 'Warning'}</span><span>${esc(m.message)}</span></button></li>`).join('')
+    : `<li class="muted">No problems found in ${esc(files.label(lint.file))}.</li>`;
+  const ll = $('#lintLine'); ll.hidden = !n;
+  if (n) { const m = r.find(x => x.severity === 'error') || r[0]; ll.innerHTML = `<span class="sev-${m.severity}">${errs ? fmt.int(errs) + ' error' + (errs === 1 ? '' : 's') : fmt.int(n) + ' warning' + (n === 1 ? '' : 's')}</span><span>Line ${m.line}: ${esc(m.message)}${n > 1 ? ` <span class="muted">(+${fmt.int(n - 1)} more)</span>` : ''}</span>`; ll.dataset.line = m.line; ll.dataset.col = m.col; }
+}
+
+/* --------------------------------------------------------- completions ---- */
+// Suggestions after ctx., ctx['SPY']., qt., data., a module name, and for names at the top level.
+let COMPLETE = null;
+const PY_BUILTINS = 'abs all any bool dict enumerate filter float getattr hasattr int isinstance len list map max min print range reversed round set sorted str sum tuple zip'.split(' ');
+const PY_PACKAGES = ['numpy', 'pandas', 'scipy', 'sklearn', 'math', 'statistics', 'random', 'datetime', 'collections', 'itertools', 'functools'];
+function moduleDefs(src) {
+  const out = [], seen = new Set();
+  for (const m of (src || '').matchAll(/^(def|class)\s+([A-Za-z_]\w*)\s*(\([^)]*\))?/gm)) if (!seen.has(m[2])) { seen.add(m[2]); out.push({ name: m[2], kind: m[1] === 'class' ? 'class' : 'function', sig: m[3] || '' }); }
+  for (const m of (src || '').matchAll(/^([A-Za-z_]\w*)\s*=(?!=)/gm)) if (!seen.has(m[1])) { seen.add(m[1]); out.push({ name: m[1], kind: 'variable', sig: '' }); }
+  return out;
+}
+// Names a file imports from the module library: alias -> module (import x as y, from x import a).
+function moduleImports(src) {
+  const mods = files.payload(), alias = {}, from = {};
+  for (const m of src.matchAll(/^[ \t]*import[ \t]+([\w \t,.]+?)[ \t]*(?:#.*)?$/gm))
+    for (const part of m[1].split(',')) { const [mod, as] = part.trim().split(/\s+as\s+/); if (mod in mods) alias[as || mod] = mod; }
+  for (const m of src.matchAll(/^[ \t]*from[ \t]+(\w+)[ \t]+import[ \t]+\(?([\w \t,]+)\)?/gm))
+    if (m[1] in mods) for (const part of m[2].split(',')) { const [nm, as] = part.trim().split(/\s+as\s+/); if (nm) from[as || nm] = { mod: m[1], name: nm }; }
+  return { alias, from };
+}
+const complete = {
+  items: [], sel: 0, from: 0, open: false,
+  async data() { if (!COMPLETE && py.ready) { try { await py.ready; COMPLETE = await py.call('completions', {}); } catch (e) { /* none */ } } return COMPLETE; },
+  // What to suggest at the caret: {from, items} or null.
+  context(force) {
+    const ta = editor.ta, text = ta.value, pos = ta.selectionStart; if (pos !== ta.selectionEnd) return null;
+    const line = text.slice(text.lastIndexOf('\n', pos - 1) + 1, pos);
+    let quote = null;   // no suggestions inside a string or a comment
+    for (const ch of line) { if (quote) { if (ch === quote) quote = null; } else if (ch === '"' || ch === "'") quote = ch; else if (ch === '#') return null; }
+    if (quote) return null;
+    const C = COMPLETE || {}, uniq = list => { const s = new Set(); return list.filter(x => !s.has(x.name) && s.add(x.name)); };
+    let m, items = null, prefix = '';
+    if ((m = line.match(/^\s*from\s+(\w+)\s+import\s+(?:[\w\s,()]*,\s*|\(\s*)?(\w*)$/))) { prefix = m[2]; items = m[1] in files.payload() ? moduleDefs(files.payload()[m[1]]) : []; }
+    else if ((m = line.match(/^\s*(?:import|from)\s+(\w*)$/))) { prefix = m[1]; items = [...Object.keys(files.payload()).map(n => ({ name: n, kind: 'your module' })), ...PY_PACKAGES.map(n => ({ name: n, kind: 'package' }))]; }
+    else if ((m = line.match(/(\bctx\s*\[[^\]]*\]|\b[A-Za-z_]\w*)\.(\w*)$/))) {
+      prefix = m[2]; const base = m[1].replace(/\s/g, ''), imp = moduleImports(text);
+      if (base.startsWith('ctx[')) items = C.asset; else if (base === 'ctx') items = uniq([...(C.ctx || []), ...(C.portfolio || [])]);
+      else if (base === 'qt') items = C.qt; else if (base === 'data') items = uniq([...(C.data || []), ...(C.panel || [])]);
+      else if (imp.alias[base]) items = moduleDefs(files.payload()[imp.alias[base]]);
+      else return null;
+    } else if ((m = line.match(/(?:^|[^\w.])([A-Za-z_]\w*)$/)) && (force || m[1].length >= 2)) {
+      prefix = m[1];
+      const own = [...moduleDefs(text), ...Object.keys(moduleImports(text).from).map(n => ({ name: n, kind: 'imported' }))];
+      items = uniq([...own, ...(C.globals || []), ...['ctx', 'PARAMS', 'UNIVERSE', 'data'].map(n => ({ name: n, kind: 'name' })),
+        ...PY_BUILTINS.map(n => ({ name: n, kind: 'builtin' })), ...KW.split('|').map(n => ({ name: n, kind: 'keyword' }))]);
+    } else if (force) { prefix = ''; items = uniq([...moduleDefs(text), ...(C.globals || [])]); }
+    if (!items) return null;
+    const lo = prefix.toLowerCase();
+    const hit = items.filter(x => x.name.toLowerCase().startsWith(lo) && !(x.name === prefix && !force)).filter(x => !x.name.startsWith('_') || prefix.startsWith('_'));
+    hit.sort((a, b) => (b.name.startsWith(prefix) - a.name.startsWith(prefix)) || a.name.localeCompare(b.name));
+    return hit.length ? { from: pos - prefix.length, items: hit.slice(0, 60) } : null;
+  },
+  async show(force) {
+    if (!COMPLETE) await this.data();
+    const c = this.context(force); if (!c) { this.close(); return; }
+    this.items = c.items; this.from = c.from; this.sel = 0; this.open = true; this.render(); this.place();
+  },
+  onInput(e) {
+    const ch = e && e.data;
+    if (this.open || (ch && /[\w.]/.test(ch) && e.inputType === 'insertText')) this.show(false); else this.close();
+  },
+  render() {
+    const box = $('#acBox'); box.hidden = false; editor.ta.setAttribute('aria-expanded', 'true');
+    $('#acList').innerHTML = this.items.map((x, i) => `<li role="option" id="ac-${i}" aria-selected="${i === this.sel}" data-i="${i}"><b>${esc(x.name)}</b><span class="sig">${esc(x.sig || '')}</span><span class="kind">${esc(x.kind || '')}</span></li>`).join('');
+    editor.ta.setAttribute('aria-activedescendant', 'ac-' + this.sel);
+    const x = this.items[this.sel]; $('#acDoc').textContent = x && x.doc ? x.doc : '';
+    const li = $('#ac-' + this.sel); if (li) li.scrollIntoView({ block: 'nearest' });
+  },
+  place() {
+    const ta = editor.ta, text = ta.value, pos = this.from, ls = text.lastIndexOf('\n', pos - 1) + 1;
+    const lineIdx = text.slice(0, pos).split('\n').length - 1, col = pos - ls, lh = editor.lh(), cw = charWidth();
+    const box = $('#acBox'), main = ta.parentElement, h = box.offsetHeight;
+    let top = 10 + (lineIdx + 1) * lh - ta.scrollTop; if (top + h > main.clientHeight - 4 && top - lh - h > 0) top = top - lh - h;
+    box.style.top = top + 'px'; box.style.left = Math.max(4, Math.min(12 + col * cw - ta.scrollLeft, main.clientWidth - box.offsetWidth - 4)) + 'px';
+  },
+  accept(i = this.sel) {
+    const x = this.items[i]; if (!x) return;
+    const ta = editor.ta; ta.setSelectionRange(this.from, ta.selectionStart); this.close(); editor.insert(x.name);
+  },
+  close() { if (!this.open) return; this.open = false; $('#acBox').hidden = true; editor.ta.setAttribute('aria-expanded', 'false'); editor.ta.removeAttribute('aria-activedescendant'); },
+  // Keys while the list is open; true if handled.
+  keys(e) {
+    if (!this.open) return false;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); this.sel = (this.sel + (e.key === 'ArrowDown' ? 1 : -1) + this.items.length) % this.items.length; this.render(); return true; }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); this.accept(); return true; }
+    if (e.key === 'Escape') { e.preventDefault(); this.close(); return true; }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') this.close();
+    return false;
+  },
+};
+let cwCache = null;
+function charWidth() {
+  const size = $('#editor').dataset.size + getComputedStyle(editor.ta).fontSize;
+  if (!cwCache || cwCache.size !== size) {
+    const sp = document.createElement('span'); sp.style.cssText = 'position:absolute;visibility:hidden;white-space:pre;font:inherit'; sp.textContent = 'x'.repeat(200);
+    editor.ta.parentElement.appendChild(sp); cwCache = { size, w: sp.getBoundingClientRect().width / 200 }; sp.remove();
+  }
+  return cwCache.w;
+}
+
+/* -------------------------------------------------------- go to definition -- */
+function wordAt(text, pos) { let a = pos, b = pos; while (a > 0 && /\w/.test(text[a - 1])) a--; while (b < text.length && /\w/.test(text[b])) b++; return { word: text.slice(a, b), a }; }
+// Line & column of `def word`, `class word` or a top-level `word = ...` in src.
+function findDef(src, word) {
+  const re = new RegExp(`^([ \\t]*)(?:def|class)\\s+${word}\\b|^${word}\\s*=(?!=)`, 'm'), m = re.exec(src); if (!m) return null;
+  const line = src.slice(0, m.index).split('\n').length; return { line, col: (m[1] || '').length + 1 };
+}
+function describe(entry, owner) { toast(`${owner}${entry.name}${entry.sig || ''}${entry.doc ? ': ' + entry.doc : ''}`); }
+async function goToDefinition() {
+  const ta = editor.ta, text = ta.value, { word, a } = wordAt(text, ta.selectionStart);
+  if (!word || /^\d/.test(word)) return;
+  const before = text.slice(text.lastIndexOf('\n', a - 1) + 1, a), owner = (before.match(/(\bctx\s*\[[^\]]*\]|\b\w+)\.$/) || [])[1];
+  const imp = moduleImports(text), C = (await complete.data()) || {};
+  const jump = (mod, name) => { files.openModule(mod); const d = findDef(files.code(mod), name); if (d) editor.goTo(d.line, d.col); else toast(`${name} isn’t defined at the top of ${mod}.py.`); };
+  if (owner) {
+    const o = owner.replace(/\s/g, '');
+    if (imp.alias[o]) return jump(imp.alias[o], word);
+    const list = o.startsWith('ctx[') ? C.asset : o === 'ctx' ? [...(C.ctx || []), ...(C.portfolio || [])] : o === 'qt' ? C.qt : o === 'data' ? [...(C.data || []), ...(C.panel || [])] : null;
+    const e = list && list.find(x => x.name === word); if (e) return describe(e, o + '.');
+    return toast(`Can’t find where ${o}.${word} is defined.`);
+  }
+  const d = findDef(text, word); if (d) { editor.goTo(d.line, d.col); return; }
+  if (imp.from[word]) return jump(imp.from[word].mod, imp.from[word].name);
+  if (imp.alias[word] || word in files.payload()) return files.openModule(imp.alias[word] || word);
+  const g = (C.globals || []).find(x => x.name === word); if (g) return describe(g, '');
+  toast(`No definition of ${word} in this file or your modules.`);
+}
+
+/* ------------------------------------------------------- find & replace -- */
+const find = {
+  matches: [], idx: -1, bad: false,
+  re() {
+    const q = $('#findInput').value; this.bad = false; if (!q) return null;
+    const flags = 'g' + ($('#findCase').getAttribute('aria-pressed') === 'true' ? '' : 'i');
+    try { return new RegExp($('#findRe').getAttribute('aria-pressed') === 'true' ? q : q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), flags); } catch (e) { this.bad = true; return null; }
+  },
+  open(replace) {
+    const bar = $('#findBar'), ta = editor.ta, sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+    bar.hidden = false; if (sel && !sel.includes('\n')) $('#findInput').value = sel;
+    this.refresh(true); const el = replace ? $('#replInput') : $('#findInput'); el.focus(); el.select();
+  },
+  close() { $('#findBar').hidden = true; this.matches = []; this.idx = -1; editor.renderMarks(); editor.ta.focus({ preventScroll: true }); },
+  // Recompute the matches (after typing in the editor or the find box).
+  refresh(fromCaret) {
+    if ($('#findBar').hidden) { this.matches = []; return; }
+    const re = this.re(), v = editor.ta.value, out = [];
+    if (re) { let m; while ((m = re.exec(v)) && out.length < 5000) { if (m[0] === '') { re.lastIndex++; continue; } out.push([m.index, m.index + m[0].length]); } }
+    this.matches = out;
+    if (fromCaret || this.idx >= out.length) { const c = editor.ta.selectionStart; this.idx = out.length ? Math.max(0, out.findIndex(([a]) => a >= c)) : -1; }
+    this.count();
+  },
+  count() { $('#findCount').textContent = this.bad ? 'Invalid pattern' : !$('#findInput').value ? '' : this.matches.length ? `${fmt.int(this.idx + 1)} of ${fmt.int(this.matches.length)}${this.matches.length >= 5000 ? '+' : ''}` : 'No results'; },
+  go(dir, select) {
+    const n = this.matches.length; if (!n) return;
+    this.idx = (this.idx + dir + n) % n; const [a, b] = this.matches[this.idx];
+    editor.ta.setSelectionRange(a, b); if (select) editor.ta.focus({ preventScroll: true });
+    editor.reveal(editor.lineOf(a)); editor.renderMarks(); this.count();
+  },
+  replaceOne() {
+    const re = this.re(); if (!re || this.idx < 0) return;
+    const [a, b] = this.matches[this.idx], v = editor.ta.value;
+    const rep = v.slice(a, b).replace(new RegExp(re.source, re.flags.replace('g', '')), $('#replInput').value);
+    editor.ta.setSelectionRange(a, b); editor.insert(rep); $('#replInput').focus();
+    this.refresh(); this.idx = this.matches.findIndex(([x]) => x >= a + rep.length); if (this.idx < 0 && this.matches.length) this.idx = 0;
+    if (this.idx >= 0) { const [x, y] = this.matches[this.idx]; editor.ta.setSelectionRange(x, y); editor.reveal(editor.lineOf(x)); }
+    editor.renderMarks(); this.count();
+  },
+  replaceAll() {
+    const re = this.re(); if (!re || !this.matches.length) return;
+    const n = this.matches.length, ta = editor.ta, next = ta.value.replace(re, $('#replInput').value);
+    const top = ta.scrollTop; ta.setSelectionRange(0, ta.value.length); editor.insert(next); ta.setSelectionRange(0, 0); ta.scrollTop = top; editor.sync();
+    $('#replInput').focus(); toast(`Replaced ${fmt.int(n)} match${n === 1 ? '' : 'es'}.`);
+  },
+};
+
+/* ------------------------------------------- tools pane: problems, tests, console -- */
+function showPane(name, focus = false) {
+  for (const b of $$('#edPane [role="tab"]')) { const on = b.dataset.pane === name; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; $('#pane-' + b.dataset.pane).hidden = !on; }
+  store.set('pane', name); if (focus && name === 'console') setTimeout(() => $('#conIn').focus(), 0);
+}
+function setPaneOpen(open) { $('#paneBody').hidden = !open; $('#paneToggle').textContent = open ? 'Hide' : 'Show'; $('#paneToggle').setAttribute('aria-expanded', String(open)); store.set('paneOpen', open); }
+async function runTests() {
+  const btn = $('#testRun'); if (btn.disabled || !py.ready) return;
+  const file = files.active, code = editor.ta.value; setPaneOpen(true); showPane('tests');
+  const out = $('#testOut'); loadingOn(btn); busy(true, 'Running tests…');
+  try {
+    await ensurePayload(payloadBase()).catch(() => {});
+    const r = await py.call('tests', { code, kind: file === 'strategy' ? 'strategy' : 'module', name: file === 'strategy' ? null : file, modules: files.payload() });
+    renderTests(r, file);
+  } catch (e) { out.innerHTML = `<p class="err">${esc((e.info && e.info.message) || e.message)}</p>`; }
+  finally { busy(false); await loadingOff(btn); }
+}
+function renderTests(r, file) {
+  const out = $('#testOut'), cnt = $('#testCount');
+  if (r.error) { cnt.hidden = true; out.innerHTML = `<p><span class="sev-error">Couldn’t load ${esc(files.label(file))}:</span> ${esc(r.error.message)}${r.error.line ? ` <button class="linkbtn" type="button" data-goto="${r.error.line}">Line ${r.error.line}</button>` : ''}</p>`; return; }
+  if (!r.tests.length) { cnt.hidden = true; out.innerHTML = `<p class="out-empty">No tests in ${esc(files.label(file))}. Add a function named <code translate="no">test_something()</code> that uses <code translate="no">assert</code>; it can call <code translate="no">run_strategy(make_data([...]))</code> to backtest this strategy on prices you choose.</p>`; return; }
+  cnt.hidden = false; cnt.textContent = `${r.passed}/${r.tests.length}`; cnt.style.color = r.failed ? 'var(--loss)' : 'var(--gain)';
+  out.innerHTML = `<p style="margin:0 0 6px"><b>${r.failed ? `${fmt.int(r.failed)} failed` : 'All passed'}</b>, ${fmt.int(r.passed)} of ${fmt.int(r.tests.length)} passed in ${esc(files.label(file))}.</p><ul class="tests">` +
+    r.tests.map(t => `<li><span class="${t.ok ? 'ok' : 'bad'}">${t.ok ? 'Pass' : 'Fail'}</span><span class="name"><button type="button" data-goto="${t.line || 1}">${esc(t.name)}</button></span><span class="muted tnum">${fmt.num(t.seconds, 2)} s</span>` +
+      (t.ok ? '' : `<span class="msg">Line ${t.line}: ${esc(t.message)}${t.trace ? '\n' + esc(t.trace) : ''}</span>`) + (t.output ? `<span class="msg">${esc(t.output.trimEnd())}</span>` : '') + '</li>').join('') + '</ul>';
+}
+const con = { hist: store.get('conHist', []), hi: null, draft: '', queue: Promise.resolve() };
+function conWrite(text, cls) {
+  const out = $('#conOut'), sp = document.createElement('span'); if (cls) sp.className = cls; sp.textContent = text.endsWith('\n') ? text : text + '\n'; out.appendChild(sp);
+  while (out.textContent.length > 200000 && out.firstChild) out.firstChild.remove();
+  out.scrollTop = out.scrollHeight;
+}
+function conSize() { const t = $('#conIn'); t.style.height = 'auto'; t.style.height = Math.min(120, t.scrollHeight) + 'px'; }
+function conRun() {
+  const ta = $('#conIn'), src = ta.value; if (!src.trim()) return;
+  if (con.hist[con.hist.length - 1] !== src) { con.hist.push(src); con.hist = con.hist.slice(-100); store.set('conHist', con.hist); }
+  con.hi = null; ta.value = ''; conSize();
+  con.queue = con.queue.then(() => conExec(src));   // one cell at a time, in order
+}
+async function conExec(src) {
+  conWrite(src.split('\n').map((l, i) => (i ? '... ' : '>>> ') + l).join('\n'), 'in');
+  const p = payloadBase();
+  try {
+    await py.ready; await ensurePayload(p).catch(() => {}); await holdShown();
+    const r = await py.call('console', { code: src, ticker: p.ticker || null, tickers: p.tickers || null, modules: files.payload() });
+    if (r.output) conWrite(r.output); if (r.error) conWrite(r.error, 'err');
+  } catch (e) { conWrite((e.info && e.info.message) || e.message, 'err'); }
+}
+function conKeys(e) {
+  const ta = e.target, v = ta.value;
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); conRun(); return; }
+  if (e.key === 'Tab' && !e.shiftKey) { e.preventDefault(); ta.setRangeText('    ', ta.selectionStart, ta.selectionEnd, 'end'); return; }
+  const first = !v.slice(0, ta.selectionStart).includes('\n'), last = !v.slice(ta.selectionEnd).includes('\n');
+  if ((e.key === 'ArrowUp' && first) || (e.key === 'ArrowDown' && last)) {
+    if (!con.hist.length) return; e.preventDefault();
+    if (con.hi === null) { if (e.key === 'ArrowDown') return; con.draft = v; con.hi = con.hist.length; }
+    con.hi += e.key === 'ArrowUp' ? -1 : 1;
+    if (con.hi < 0) con.hi = 0;
+    if (con.hi >= con.hist.length) { con.hi = null; ta.value = con.draft; } else ta.value = con.hist[con.hi];
+    conSize(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+}
+// Python keeps the full rows of its latest run only. If the result on screen is an earlier one
+// (shown again from the cache), run it again first, so exports & the console see the same run.
+let pyHolds = null;
+async function holdShown() {
+  if (!lastRun) return; const src = lastRun.result._origin || lastRun.result;
+  if (pyHolds === src || !src._call) return;
+  await ensurePayload(src._call); await py.call('run', src._call); pyHolds = src;
+}
 
 /* ---------------------------------------------------------- templates --- */
 let templates = [];
@@ -1467,12 +2032,12 @@ function currentSource() {
   return t ? { kind: 'tpl', name: t.name, code: t.code, about: t.about || '' } : { kind: 'none', name: 'Custom Strategy', code: '', about: '' };
 }
 function loadSelectedTemplate() {
-  const src = currentSource(); editor.value = src.code; $('#about').textContent = src.about; $('#delBtn').hidden = src.kind !== 'mine';
-  store.set('draft', { template: $('#template').value, code: editor.value }); url.write(); onCodeChanged(); hideError();
+  const src = currentSource(); files.setStrategy(src.code); $('#about').textContent = src.about; $('#delBtn').hidden = src.kind !== 'mine';
+  store.set('draft', { template: $('#template').value, code: strategyCode() }); url.write(); onCodeChanged(); hideError();
 }
 let codeTimer = null, paramsCache = null;
 function onCodeChanged() {
-  store.set('draft', { template: $('#template').value, code: editor.value });
+  store.set('draft', { template: $('#template').value, code: strategyCode() });
   paramsCache = null; clearTimeout(codeTimer); codeTimer = setTimeout(refreshParams, 600);
 }
 function openSave() {
@@ -1488,8 +2053,8 @@ function doSave(e) {
   e.preventDefault();
   const name = $('#saveName').value.trim();
   if (!name) { setFieldError('saveName', 'Enter a name, e.g. “My trend filter”.'); $('#saveName').focus(); return; }
-  const mine = myStrategies(); mine[name] = editor.value; store.set('mine', mine);
-  fillTemplateSelect('mine:' + name); $('#about').textContent = 'Your saved strategy, stored in this browser.'; $('#delBtn').hidden = false;
+  const mine = myStrategies(); mine[name] = strategyCode(); store.set('mine', mine);
+  fillTemplateSelect('mine:' + name); files.render(); $('#about').textContent = 'Your saved strategy, stored in this browser.'; $('#delBtn').hidden = false;
   closeSave(); store.set('template', 'mine:' + name); url.write(); toast(`Saved “${name}” in this browser.`);
 }
 function armConfirm(btn, label, onConfirm) {
@@ -1601,12 +2166,12 @@ function summarizeSettings() {
   $('#settingsSummary').textContent = bits.join(' · ');
 }
 function payloadBase() {
-  const p = { benchmark: $('#benchmark').value, code: editor.value, config: readConfig(), start: $('#start').value || null, end: $('#end').value || null };
+  const p = { benchmark: $('#benchmark').value, code: strategyCode(), modules: files.payload(), config: readConfig(), start: $('#start').value || null, end: $('#end').value || null };
   if (isPortfolio()) p.tickers = pickedUniverse(); else p.ticker = $('#instrument').value;
   return p;
 }
 // The payload for the code in the editor right now (inspects it first, so a UNIVERSE is never missed).
-async function freshPayload() { if (codeInfo.for !== editor.value) await refreshParams(); return payloadBase(); }
+async function freshPayload() { if (codeInfo.for !== strategyCode()) await refreshParams(); return payloadBase(); }
 const payloadTickers = p => (p.tickers ? [...p.tickers] : [p.ticker]).filter(Boolean);
 // Load what a payload needs into Python: its instruments, benchmark & rate series.
 async function ensurePayload(p, client = py) { await client.ensure([...payloadTickers(p), p.benchmark]); await client.ensureRate(p.config.rate_ticker); }
@@ -1658,11 +2223,12 @@ function validInputs() {
 function whenRunIdle() { return new Promise(res => { const tick = () => ($('#runBtn').disabled ? setTimeout(tick, 50) : res()); tick(); }); }
 // Returns the result it produced, or null if it didn't run (busy, invalid inputs, or an error).
 // fresh: run even if this exact setup has a cached result (Reproduce must really re-run).
-async function runBacktest({ fresh = false } = {}) {
+// modules: module versions to use instead of the library's (Reproduce uses the recorded ones).
+async function runBacktest({ fresh = false, modules = null } = {}) {
   if (!py.ready) return null;
   const btn = $('#runBtn'); if (btn.disabled) return null;
-  if (codeInfo.for !== editor.value) await refreshParams();
-  const p = payloadBase();
+  if (codeInfo.for !== strategyCode()) await refreshParams();
+  const p = payloadBase(); if (modules) p.modules = { ...p.modules, ...modules };
   if (!payloadTickers(p).length) { if (isPortfolio()) { toast('Pick at least one instrument for the portfolio in the Market panel.'); $('#univBtn').focus(); } else showEmptyData(); return null; }
   if (!validInputs()) return null;
   closeSave(false);
@@ -1673,10 +2239,10 @@ async function runBacktest({ fresh = false } = {}) {
     const fam = trials.family(p), tk = trials.key(p);
     const call = { ...p, trials: trials.stats(fam, tk) };
     const ck = resultCache.key(call); let r = fresh ? null : resultCache.get(ck);
-    if (r) r = { ...r, cached: true };
+    if (r) r = { ...r, cached: true, _origin: r };
     else {
       await ensurePayload(p);
-      r = await py.call('run', call);
+      r = await py.call('run', call); r._call = call; pyHolds = r;
       trials.add(fam, [[tk, r.metrics.sharpe]]); r.trialFamily = fam;
       resultCache.set(ck, r);
     }
@@ -1697,10 +2263,12 @@ function showError(e) {
   if (info.message === 'Stopped') { toast('Run stopped. Edit your code & run again.'); return; }
   $('#errBox').hidden = false;
   $('#errMsg').textContent = info.message; $('#errTrace').textContent = info.trace || ''; $('#errTrace').hidden = !info.trace;
-  const jump = $('#errJump');
+  const jump = $('#errJump'), file = info.file || 'strategy';
   if (info.line) {
-    editor.showError(info.line); jump.hidden = false; jump.textContent = `Jump to Line ${info.line}`; jump.onclick = () => editor.goToLine(info.line);
-    $('#errHint').textContent = `Fix line ${info.line} in the editor, then run again. Earlier results are kept below.`;
+    const show = () => { if (file === 'strategy') files.show('strategy', false); else files.openModule(file); editor.showError(info.line); };
+    show(); jump.hidden = false; jump.textContent = file === 'strategy' ? `Jump to Line ${info.line}` : `Open ${file}.py, Line ${info.line}`;
+    jump.onclick = () => { show(); editor.goToLine(info.line); };
+    $('#errHint').textContent = `Fix line ${info.line}${file === 'strategy' ? '' : ` of ${file}.py`} in the editor, then run again. Earlier results are kept below.`;
   } else { jump.hidden = true; $('#errHint').textContent = info.user === false ? 'This looks like a problem in QuantLab itself. Reset the code to a template to check, or reload the page.' : 'Fix the problem in the editor, then run again.'; }
   $('#errBox').focus({ preventScroll: true }); $('#errBox').scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
   setStatus('error', 'Strategy error');
@@ -1759,6 +2327,8 @@ function renderResults(r) {
   $('#rollInfo').textContent = `${r.rolling.window}-day window, annualized`;
   $('#volInfo').textContent = `${r.rolling.vol_window}-day window, annualized`;
   $('#logPanel').hidden = !r.logs; $('#logs').textContent = r.logs || '';
+  const more = (r.logs_total || 0) > (r.logs || '').length; $('#logMore').hidden = !more;
+  if (more) $('#logMoreText').textContent = `Showing the start & end of ${fmt.int(r.logs_total)} characters.`;
 }
 
 function drawResultCharts(r) {
@@ -1949,8 +2519,8 @@ function toolContext() {
 }
 async function refreshParams() {
   if (!py.ready) return;
-  const code = editor.value;
-  try { await py.ready; const r = await py.call('inspect', { code }); paramsCache = r.params; applyCodeInfo(r, code); } catch (e) { paramsCache = {}; applyCodeInfo(null, code); }
+  const code = strategyCode();
+  try { await py.ready; const r = await py.call('inspect', { code, modules: files.payload() }); paramsCache = r.params; applyCodeInfo(r, code); } catch (e) { paramsCache = {}; applyCodeInfo(null, code); }
   fillParamSelects();
 }
 function fillParamSelects() {
@@ -2085,12 +2655,12 @@ function renderSweep(s) {
   }
 }
 function applyParams(values) {
-  let code = editor.value; const missing = [];
+  let code = strategyCode(); const missing = [];
   for (const [k, v] of Object.entries(values)) {
     const re = new RegExp(`(["']${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\s*:\\s*)([^,}\\n]+)`);
     if (re.test(code)) code = code.replace(re, `$1${v}`); else missing.push(k);
   }
-  editor.value = code; onCodeChanged(); location.hash = '#backtest';
+  files.setStrategy(code); onCodeChanged(); location.hash = '#backtest';
   toast(missing.length ? `Couldn’t find ${missing.join(', ')} in PARAMS. Edit them by hand.` : 'Updated PARAMS. Run the backtest to see the full result.');
 }
 
@@ -2490,7 +3060,8 @@ async function saveRun(p, r) {
   const rec = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: new Date().toISOString(),
     strategy: { kind: currentSource().kind, name: currentSource().name, template: $('#template').value },
-    code: p.code, market: { ticker: p.ticker || null, tickers: p.tickers || null, benchmark: r.benchmark, start: p.start, end: p.end },
+    code: p.code, modules: Object.fromEntries(Object.keys(r.provenance.modules || {}).map(n => [n, (p.modules || {})[n]])),
+    market: { ticker: p.ticker || null, tickers: p.tickers || null, benchmark: r.benchmark, start: p.start, end: p.end },
     provenance: { ...r.provenance, engine_file: engineHash }, metrics: r.metrics, bench_metrics: r.bench_metrics,
     curve: { dates: idx.map(i => r.dates[i]), equity: idx.map(i => r.equity[i]), bench: idx.map(i => r.bench_equity[i]) },
     notes: r.notes, label: '',
@@ -2536,8 +3107,17 @@ function applyConfig(c) {
 async function restoreRun(x) {
   const tpl = x.strategy.template;
   if (tpl && [...$('#template').options].some(o => o.value === tpl)) $('#template').value = tpl;
-  editor.value = x.code; store.set('draft', { template: $('#template').value, code: x.code });
+  files.setStrategy(x.code); store.set('draft', { template: $('#template').value, code: x.code });
   const s = currentSource(); $('#about').textContent = s.about; $('#delBtn').hidden = s.kind !== 'mine';
+  // Modules the run imported: open the recorded version in a tab (unsaved) where it differs,
+  // unless that module has unsaved edits of its own.
+  const opened = [], kept = [];
+  for (const [n, src] of Object.entries(x.modules || {})) {
+    if (src == null || files.payload()[n] === src) continue;
+    if (n in files.drafts() && files.dirty(n)) { kept.push(n); continue; }
+    files.saveDraft(n, src); files.openModule(n); opened.push(n);
+  }
+  if (opened.length || kept.length) { files.show('strategy', false); toast([opened.length ? `Opened ${opened.map(n => n + '.py').join(', ')} as ${opened.length === 1 ? 'it was' : 'they were'} for this run (not saved).` : '', kept.length ? `${kept.map(n => n + '.py').join(', ')} has unsaved edits, so it was left as it is.` : ''].filter(Boolean).join(' ')); }
   applyConfig(x.provenance.config);
   await refreshParams();
   if (x.market.tickers) setPicked(x.market.tickers);
@@ -2550,10 +3130,12 @@ async function restoreRun(x) {
 async function reproduceRun(x) {
   await py.ready; await whenRunIdle();
   await restoreRun(x); await whenRunIdle();
-  const now = await runBacktest({ fresh: true });
+  const now = await runBacktest({ fresh: true, modules: x.modules || null });
   if (!now) { toast('The re-run didn’t finish; see the Backtest tab.'); return; }
   const was = x.provenance, diffs = [];
   if (now.provenance.code_sha256 !== was.code_sha256) diffs.push('the code');
+  const wm = was.modules || {}, nm = now.provenance.modules || {}, modDiff = Object.keys({ ...wm, ...nm }).filter(n => wm[n] !== nm[n]);
+  if (was.modules && modDiff.length) diffs.push(`module${modDiff.length === 1 ? '' : 's'} ${modDiff.join(', ')}`);
   if (JSON.stringify(now.provenance.config) !== JSON.stringify(was.config)) diffs.push('the settings');
   const dataDiff = Object.keys({ ...was.data, ...now.provenance.data }).filter(t => was.data[t] !== now.provenance.data[t]);
   if (dataDiff.length) diffs.push(`the data for ${dataDiff.join(', ')}`);
@@ -2625,7 +3207,8 @@ function provenanceLines(r) {
 // The run output carries the latest fills & trades only; exports fetch all of them from Python.
 async function allRows(r, kind) {
   const have = r[kind], total = r[kind + '_total'];
-  return total != null && total > have.length ? py.call('rows', { kind }) : have;
+  if (total == null || total <= have.length) return have;
+  await holdShown(); return py.call('rows', { kind });
 }
 async function exportRun(kind) {
   if (!lastRun) return;
@@ -2692,7 +3275,7 @@ ${r.notes.length ? `<p><b>Notes.</b> ${r.notes.map(esc).join(' ')}</p>` : ''}
 
 /* ----------------------------------------------------------- workspace -- */
 async function exportWorkspace() {
-  const local = {}; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('ql.')) local[k.slice(3)] = JSON.parse(localStorage.getItem(k)); } } catch (e) { /* storage unavailable */ }
+  const local = {}; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.startsWith('ql.') && k !== 'ql.ghToken') local[k.slice(3)] = JSON.parse(localStorage.getItem(k)); } } catch (e) { /* storage unavailable */ }
   const recs = await idb.all(); const runs = $('#wsRuns').checked ? await idb.all('runs') : [];
   const ws = { format: 'quantlab-workspace', version: 1, exported: new Date().toISOString(), engine: engineHash, local, instruments: recs, runs };
   downloadFile(`quantlab-workspace-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(ws), 'application/json');
@@ -2714,14 +3297,77 @@ async function applyWorkspace() {
   const ws = wsPending; if (!ws) return; wsPending = null; $('#wsConfirm').hidden = true;
   const local = ws.local || {};
   for (const [k, v] of Object.entries(local)) {
+    if (k === 'ghToken') continue;
     if (k === 'mine') store.set('mine', { ...myStrategies(), ...v });
+    else if (k === 'modules') store.set('modules', { ...files.library(), ...v });
     else if (k === 'trials') store.set('trials', { ...trials.all(), ...v });
     else store.set(k, v);
   }
   for (const rec of ws.instruments || []) { await idb.put(rec); addInstrument(rec); }
   for (const run of ws.runs || []) await idb.put(run, 'runs');
-  fillTemplateSelect($('#template').value); fillInstrumentSelects(); fillRateSelect(); restoreSettings(); summarizeSettings(); renderInstTable(); renderRateTable(); renderDownloadList();
+  fillTemplateSelect($('#template').value); fillInstrumentSelects(); fillRateSelect(); restoreSettings(); summarizeSettings(); renderInstTable(); renderRateTable(); renderDownloadList(); files.render(); renderModules();
   toast(`Imported ${fmt.int(Object.keys(local.mine || {}).length)} strategies, ${fmt.int((ws.instruments || []).length)} files & ${fmt.int((ws.runs || []).length)} runs.`);
+}
+
+/* --------------------------------------------- GitHub sync (optional) -- */
+// github-sync.js does the talking to api.github.com; it loads the first time it is used.
+let ghLib = null;
+function ghScript() { return ghLib || (ghLib = new Promise((res, rej) => { const s = document.createElement('script'); s.src = 'github-sync.js'; s.onload = () => res(window.QLGitHub); s.onerror = () => { ghLib = null; rej(new Error('github-sync.js is missing')); }; document.head.appendChild(s); })); }
+function ghToken() { try { return sessionStorage.getItem('ql.ghToken') || store.get('ghToken', '') || ''; } catch (e) { return store.get('ghToken', '') || ''; } }
+function ghRestore() {
+  const c = store.get('gh', {}); $('#ghRepo').value = c.repo || ''; $('#ghBranch').value = c.branch || 'main'; $('#ghDir').value = c.dir ?? 'quantlab';
+  $('#ghRemember').checked = !!c.remember; $('#ghToken').value = ghToken();
+}
+function ghConfig() {
+  const repo = $('#ghRepo').value.trim().replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '').replace(/\/+$/, '');
+  const ok = validate([['ghRepo', () => (/^[\w.-]+\/[\w.-]+$/.test(repo) ? null : 'Enter owner/name, e.g. octocat/quant-research.')],
+    ['ghToken', v => (v.trim() ? null : 'Paste a GitHub access token.')]]);
+  if (!ok) return null;
+  const cfg = { repo, branch: $('#ghBranch').value.trim() || 'main', dir: $('#ghDir').value.trim(), token: $('#ghToken').value.trim() };
+  const remember = $('#ghRemember').checked;
+  store.set('gh', { repo: cfg.repo, branch: cfg.branch, dir: cfg.dir, remember });
+  if (remember) store.set('ghToken', cfg.token); else { store.del('ghToken'); try { sessionStorage.setItem('ql.ghToken', cfg.token); } catch (e) { /* this page only */ } }
+  return cfg;
+}
+async function ghPush() {
+  const cfg = ghConfig(); if (!cfg) return; const btn = $('#ghPush'), st = $('#ghStatus');
+  const strategies = myStrategies(), modules = files.library();
+  if (!Object.keys(strategies).length && !Object.keys(modules).length) { st.textContent = 'Nothing to push: save a strategy or a module first.'; return; }
+  loadingOn(btn); st.textContent = 'Pushing…';
+  try {
+    const gh = await ghScript(); const r = await gh.push(cfg, { strategies, modules }, $('#ghMsg').value.trim());
+    const n = `${fmt.int(Object.keys(strategies).length)} strateg${Object.keys(strategies).length === 1 ? 'y' : 'ies'} & ${fmt.int(Object.keys(modules).length)} module${Object.keys(modules).length === 1 ? '' : 's'}`;
+    const unsaved = files.open().filter(n => files.dirty(n)).length;
+    st.innerHTML = r.unchanged ? `Already up to date: ${n} on ${esc(cfg.branch)}.` : `Pushed ${n} to ${esc(cfg.repo)}@${esc(cfg.branch)}: <a href="${esc(r.url)}" target="_blank" rel="noopener">commit ${esc(r.commit.slice(0, 7))}</a>.`;
+    if (unsaved) st.innerHTML += ` ${fmt.int(unsaved)} module tab${unsaved === 1 ? ' has' : 's have'} unsaved edits that weren’t pushed.`;
+  } catch (e) { st.textContent = e.message; }
+  finally { await loadingOff(btn); }
+}
+async function ghPull() {
+  const cfg = ghConfig(); if (!cfg) return; const btn = $('#ghPull'), st = $('#ghStatus'), box = $('#ghConfirm');
+  loadingOn(btn); st.textContent = 'Reading the repository…'; box.hidden = true;
+  try {
+    const gh = await ghScript(); const r = await gh.pull(cfg);
+    const mine = myStrategies(), lib = files.library();
+    const sNew = Object.keys(r.strategies).filter(n => !(n in mine)), sRep = Object.keys(r.strategies).filter(n => n in mine && mine[n] !== r.strategies[n]);
+    const mNew = Object.keys(r.modules).filter(n => !(n in lib)), mRep = Object.keys(r.modules).filter(n => n in lib && lib[n] !== r.modules[n]);
+    if (!sNew.length && !sRep.length && !mNew.length && !mRep.length) { st.textContent = r.commit ? `Nothing new in ${cfg.repo}@${cfg.branch}.` : 'The repository is empty.'; return; }
+    st.textContent = '';
+    const list = (xs, k) => xs.length ? `<li>${k}: ${xs.map(esc).join(', ')}</li>` : '';
+    box.innerHTML = `<p style="margin:0">Pulling from <b translate="no">${esc(cfg.repo)}@${esc(cfg.branch)}</b> (${esc((r.commit || '').slice(0, 7))}) will change:</p><ul style="margin:0">` +
+      list(sNew, 'New strategies') + list(sRep, 'Strategies replaced') + list(mNew.map(n => n + '.py'), 'New modules') + list(mRep.map(n => n + '.py'), 'Modules replaced') + '</ul>' +
+      `${r.truncated ? '<p class="help">The repository is too large to list completely; some files may be missing.</p>' : ''}<div class="row"><button class="btn small primary" type="button" id="ghDo">Pull</button><button class="btn small" type="button" id="ghCancel">Cancel</button></div>`;
+    box.hidden = false; $('#ghDo').focus();
+    $('#ghCancel').onclick = () => { box.hidden = true; };
+    $('#ghDo').onclick = () => {
+      const before = { mine: myStrategies(), lib: files.library() };
+      store.set('mine', { ...before.mine, ...r.strategies }); store.set('modules', { ...before.lib, ...r.modules });
+      for (const n of Object.keys(r.modules)) if (n in files.drafts() && !files.dirty(n)) files.saveDraft(n, r.modules[n]);
+      box.hidden = true; fillTemplateSelect($('#template').value); files.render(); renderModules();
+      toast(`Pulled ${fmt.int(sNew.length + sRep.length)} strategies & ${fmt.int(mNew.length + mRep.length)} modules.`, { label: 'Undo', run: () => { store.set('mine', before.mine); store.set('modules', before.lib); fillTemplateSelect($('#template').value); files.render(); renderModules(); toast('Pull undone.'); } });
+    };
+  } catch (e) { st.textContent = e.message; }
+  finally { await loadingOff(btn); }
 }
 
 /* ---------------------------------------------------------------- tabs -- */
@@ -2778,6 +3424,8 @@ function wire() {
   window.addEventListener('hashchange', route);
   $('#kbdRun').innerHTML = IS_MAC ? '<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>Return</kbd>' : '<kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>Enter</kbd>';
   $('#kbdComment').innerHTML = IS_MAC ? '<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>/</kbd>' : '<kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>/</kbd>';
+  $('#kbdFind').innerHTML = IS_MAC ? '<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>F</kbd>' : '<kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>F</kbd>';
+  for (const el of $$('.kbdSave')) el.innerHTML = IS_MAC ? '<kbd>⌘</kbd>&nbsp;+&nbsp;<kbd>S</kbd>' : '<kbd>Ctrl</kbd>&nbsp;+&nbsp;<kbd>S</kbd>';
   $('#runKbd').textContent = IS_MAC ? '⌘ ↵' : 'Ctrl ↵';
   $('#runBtn').onclick = runBacktest;
   $('#marketForm').addEventListener('submit', e => { e.preventDefault(); runBacktest(); });
@@ -2790,6 +3438,52 @@ function wire() {
   $('#saveBtn').onclick = () => ($('#saveForm').hidden ? openSave() : closeSave());
   $('#saveForm').addEventListener('submit', doSave);
   $('#saveCancel').onclick = closeSave;
+  // editor files, modules, find, problems, tests & console
+  $('#edTabs').addEventListener('click', e => {
+    const tab = e.target.closest('.ed-tab'); if (!tab) return;
+    if (e.target.closest('.close')) files.close(tab.dataset.file); else files.show(tab.dataset.file);
+  });
+  $('#edTabs').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const tabs = $$('#edTabs .open'), i = tabs.indexOf(document.activeElement); if (i < 0) return;
+    e.preventDefault(); const next = tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]; next.focus();
+  });
+  $('#edTabs').addEventListener('auxclick', e => { const tab = e.target.closest('.ed-tab'); if (e.button === 1 && tab && tab.dataset.file !== 'strategy') files.close(tab.dataset.file); });
+  $('#modBtn').onclick = () => { togglePicker($('#modBtn'), $('#modPick')); if (!$('#modPick').hidden) { renderModules(); $('#modName').focus(); } };
+  $('#modNewForm').addEventListener('submit', createModule);
+  $('#modList').addEventListener('click', e => {
+    const o = e.target.closest('[data-mod-open]'); if (o) { togglePicker($('#modBtn'), $('#modPick')); files.openModule(o.dataset.modOpen); return; }
+    const d = e.target.closest('[data-mod-del]'); if (d) armConfirm(d, 'Confirm Delete', () => deleteModule(d.dataset.modDel));
+  });
+  $('#findInput').addEventListener('input', () => { find.refresh(true); editor.renderMarks(); if (find.matches.length) editor.reveal(editor.lineOf(find.matches[find.idx][0])); });
+  $('#findBar').addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); find.close(); }
+    else if (e.key === 'Enter' && e.target.id === 'findInput') { e.preventDefault(); find.go(e.shiftKey ? -1 : 1); }
+    else if (e.key === 'Enter' && e.target.id === 'replInput') { e.preventDefault(); if (IS_MAC ? e.metaKey : e.ctrlKey) find.replaceAll(); else find.replaceOne(); }
+  });
+  for (const id of ['findCase', 'findRe']) $('#' + id).onclick = () => { const b = $('#' + id); b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true')); find.refresh(true); editor.renderMarks(); };
+  $('#findNext').onclick = () => find.go(1); $('#findPrev').onclick = () => find.go(-1);
+  $('#replOne').onclick = () => find.replaceOne(); $('#replAll').onclick = () => find.replaceAll(); $('#findClose').onclick = () => find.close();
+  $('#acList').addEventListener('mousedown', e => { const li = e.target.closest('li'); if (li) { e.preventDefault(); complete.accept(+li.dataset.i); } });
+  $('#lintLine').onclick = () => { location.hash = '#edit'; setPaneOpen(true); showPane('problems'); requestAnimationFrame(() => editor.goTo(+$('#lintLine').dataset.line, +$('#lintLine').dataset.col)); };
+  $('#probList').addEventListener('click', e => { const b = e.target.closest('[data-prob]'); if (!b) return; const m = lint.results[+b.dataset.prob]; if (m) editor.goTo(m.line, m.col); });
+  $('#edPane').addEventListener('click', e => { const t = e.target.closest('[role="tab"]'); if (t) showPane(t.dataset.pane, true); });
+  $('#edPane .seg').addEventListener('keydown', e => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const tabs = $$('#edPane [role="tab"]'), i = tabs.findIndex(t => t.getAttribute('aria-selected') === 'true');
+    e.preventDefault(); const n = tabs[(i + (e.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length]; showPane(n.dataset.pane); n.focus();
+  });
+  $('#paneToggle').onclick = () => setPaneOpen($('#paneBody').hidden);
+  $('#testRun').onclick = runTests;
+  $('#testOut').addEventListener('click', e => { const b = e.target.closest('[data-goto]'); if (b) editor.goTo(+b.dataset.goto); });
+  $('#conIn').addEventListener('keydown', conKeys); $('#conIn').addEventListener('input', conSize);
+  $('#conClear').onclick = () => { $('#conOut').textContent = ''; $('#conIn').focus(); };
+  $('#conReset').onclick = async () => { try { await py.ready; await py.call('console', { code: '', reset: true }); conWrite('Variables cleared.', 'in'); } catch (e) { conWrite(e.message, 'err'); } $('#conIn').focus(); };
+  $('#logDownload').onclick = async () => {
+    if (!lastRun) return; const btn = $('#logDownload'); loadingOn(btn);
+    try { await holdShown(); downloadFile(exportStem(lastRun.result) + '_output.txt', await py.call('rows', { kind: 'logs' }), 'text/plain'); }
+    catch (e) { toast('Couldn’t get the output: ' + e.message); } finally { await loadingOff(btn); }
+  };
   $('#saveName').addEventListener('keydown', e => { if (e.key === 'Escape') closeSave(); });
   $('#delBtn').onclick = doDelete;
   $('#instrument').onchange = () => { updateDateBounds(); saveSettings(); runBacktest(); };
@@ -2817,6 +3511,8 @@ function wire() {
   $('#runClear').onclick = () => armConfirm($('#runClear'), 'Confirm Clear', async () => { await idb.clear('runs'); runSel.clear(); renderRuns(); $('#cmpPanel').hidden = true; toast('Run history cleared.'); });
   $('#cmpClose').onclick = () => { $('#cmpPanel').hidden = true; kill('cmp'); };
   $('#wsExport').onclick = exportWorkspace;
+  $('#ghPush').onclick = ghPush; $('#ghPull').onclick = ghPull; $('#ghForm').addEventListener('submit', e => e.preventDefault());
+  $('#ghRemember').onchange = () => { if (!$('#ghRemember').checked) store.del('ghToken'); };
   $('#wsFile').onchange = e => { if (e.target.files[0]) readWorkspace(e.target.files[0]); e.target.value = ''; };
   $('#panelChecks').addEventListener('change', e => { shown.set('panels', { [e.target.value]: e.target.checked }); applyPanels(true); });
   $('#panelDefaults').onclick = () => { shown.reset('panels'); renderPanelChecks(); applyPanels(true); };
@@ -2933,10 +3629,12 @@ async function boot() {
   const wanted = qs && templates.some(t => t.id === qs) ? 'tpl:' + qs : draft ? draft.template : 'tpl:sma_cross';
   fillTemplateSelect(wanted);
   if (!$('#template').value) $('#template').value = 'tpl:sma_cross';
-  if (draft && draft.code && draft.template === $('#template').value) { editor.value = draft.code; const s = currentSource(); $('#about').textContent = s.about; $('#delBtn').hidden = s.kind !== 'mine'; }
+  files.render(); renderModules(); ghRestore(); showPane(store.get('pane', 'problems')); setPaneOpen(store.get('paneOpen', true));
+  if (draft && draft.code && draft.template === $('#template').value) { files.setStrategy(draft.code); const s = currentSource(); $('#about').textContent = s.about; $('#delBtn').hidden = s.kind !== 'mine'; }
   else loadSelectedTemplate();
 
   const pyReady = py.start(engineSrc);
+  pyReady.then(() => { lint.schedule(0); complete.data(); }, () => {});
   await Promise.all([loadUploads(), loadBundled(), ensureChartLib().catch(() => toast('Charts couldn’t load. Numbers & tables still work; reload to try again.'))]);
   if (window.Chart) { Chart.defaults.font.family = cssVar('--f-sans'); Chart.defaults.font.size = 12; }
   const prefer = { ...(settings || {}) };

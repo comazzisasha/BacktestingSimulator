@@ -201,7 +201,40 @@ def on_bar(ctx):
     if ctx.price &lt; 0.9 * ctx.state["peak"]:
         return 0.0
     return 1.0 if ctx.sma(PARAMS["fast"]) &gt; ctx.sma(PARAMS["slow"]) else 0.0</code></pre>
-    <p><code>print()</code> and <code>ctx.log(...)</code> output appears in the <b>Output</b> panel under the results. <code>ctx.log</code> prefixes each line with the bar's date. If your code raises an error, the message, the line number and the bar's date are shown, and the line is marked in the editor.</p>
+    <p><code>print()</code> and <code>ctx.log(...)</code> output appears in the <b>Output</b> panel under the results. <code>ctx.log</code> prefixes each line with the bar's date. If your code raises an error, the message, the line number and the bar's date are shown, and the line is marked in the editor. The Output panel shows the first and last 20,000 characters of long output; <b>Download Full Output</b> saves all of it (up to 5&nbsp;MB).</p>
+
+    <h3 id="modules">Modules: Code Shared Between Strategies</h3>
+    <p>A module is a Python file in your browser's module library that any strategy can import. Click <b>Modules</b> above the editor, enter a name such as <code>my_signals</code> and press <b>Create</b>; the module opens in its own tab. Then, in a strategy:</p>
+<pre><code>from my_signals import trend        # or: import my_signals
+
+def on_bar(ctx):
+    return trend(ctx, 50)</code></pre>
+    <p>Modules get the same helpers as strategies (<code>qt</code>, <code>isnan</code>, <code>math</code> …) and may import each other and any package. Every run imports them afresh, so a module-level variable never carries over from one run to the next. Runs use the text in the editor, saved or not; <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>S</kbd> saves the visible module to the library, and an orange dot marks a tab with unsaved changes. A module can't take the name of a Python or QuantLab module (<code>math</code>, <code>numpy</code>, <code>engine</code> …). Errors inside a module open it at the failing line. Each run records a SHA-256 of every module it imported; <b>Re-run</b> in the History tab uses the recorded versions, and <b>Restore</b> opens them in tabs where they differ from yours. Modules are part of workspace backups and of <a href="#github">GitHub Sync</a>.</p>
+
+    <h3 id="editor">Editor</h3>
+    <ul>
+      <li><b>Problems.</b> A moment after you stop typing, the visible file is checked with pyflakes (bundled, loaded on first use) for undefined names, unused imports and variables, and similar mistakes, plus QuantLab's own checks: a missing <code>on_bar</code>/<code>signals</code>, and <code>ctx</code> attributes that don't exist (<code>ctx.smaa(20)</code> → “did you mean sma?”). Marked lines are highlighted in the gutter; hover a line number for the message. The full editor lists all problems; the Backtest tab shows the first under the editor.</li>
+      <li><b>Completions.</b> Typing after <code>ctx.</code>, <code>ctx["SPY"].</code>, <code>qt.</code>, <code>data.</code> or a module name lists what is there, with signatures and the first line of the documentation; at the top level it suggests your own names, imported names and Python's. <kbd>Ctrl</kbd>+<kbd>Space</kbd> opens the list anywhere; <kbd>↑</kbd> <kbd>↓</kbd> choose, <kbd>Enter</kbd> or <kbd>Tab</kbd> accept.</li>
+      <li><b>Go to definition.</b> <kbd>F12</kbd>, or <kbd>Ctrl</kbd>/<kbd>⌘</kbd>-click, on a name jumps to its <code>def</code>, <code>class</code> or assignment, opening the module it was imported from if needed. On a <code>ctx</code> or <code>qt</code> name it shows the signature and documentation.</li>
+      <li><b>Find &amp; replace.</b> <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>F</kbd> finds, <kbd>Ctrl</kbd>+<kbd>H</kbd> (<kbd>⌘</kbd>+<kbd>⌥</kbd>+<kbd>F</kbd> on a Mac) replaces. <b>Aa</b> matches case, <b>.*</b> uses a regular expression (<code>$1</code> in the replacement inserts a group). <kbd>Enter</kbd> and <kbd>Shift</kbd>+<kbd>Enter</kbd> step through matches; <b>All</b> replaces every match in one step you can undo.</li>
+      <li><b>Console.</b> On the full editor page, the Console runs Python in the same engine as your backtests. <code>data</code> is the market selected on the Backtest tab, as <code>signals(data)</code> sees it; <code>result</code> is the backtest on screen, with <code>.equity</code>, <code>.trades</code>, <code>.fills</code> and <code>.weights</code>; <code>summarize(result)</code> recomputes its statistics. Variables persist until <b>Reset</b>. A final expression is printed, as at the Python prompt.</li>
+    </ul>
+
+    <h3 id="testing">Testing a Strategy</h3>
+    <p>Functions named <code>test_…</code> in a strategy or module are tests; backtests ignore them. <b>Run Tests</b> on the full editor runs those in the visible file and shows which passed, with the failing line and message for the rest. Tests use plain <code>assert</code> and can use these helpers:</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Helper</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>make_data(close, open=None, high=None, low=None, volume=None, start="2020-01-02")</code></td><td>A price history from lists, on consecutive weekdays: the situation you want to test.</td></tr>
+        <tr><td><code>synthetic_data(n=500, seed=0, drift=0.0003, vol=0.01)</code></td><td>A reproducible random walk with opens, highs, lows and volume.</td></tr>
+        <tr><td><code>run_strategy(data, params=None, **settings)</code></td><td>Backtests this file's strategy on <code>data</code> (a list of them for a portfolio) and returns the result: <code>.equity</code>, <code>.exposure</code>, <code>.trades</code>, <code>.fills</code>. Settings are those of <code>engine.Config</code>, e.g. <code>slippage_bps=0</code>. In a module, pass <code>code="..."</code>.</td></tr>
+        <tr><td><code>metrics(result)</code></td><td>The statistics dictionary (<code>sharpe</code>, <code>max_drawdown</code> …).</td></tr>
+        <tr><td><code>assert_close(a, b, tol=1e-9)</code></td><td>Numbers or lists equal within a relative tolerance.</td></tr>
+      </tbody>
+    </table></div>
+<pre><code>def test_flat_in_a_downtrend():
+    res = run_strategy(make_data([200 - i for i in range(300)]))
+    assert max(res.exposure) == 0, "a falling market should never trigger a buy"</code></pre>
 
     <h2 id="ctx">The ctx Object</h2>
     <p>On each bar, <code>ctx</code> holds everything known at that day's close, and nothing from later days.</p>
@@ -561,6 +594,9 @@ for train, test, groups in cpcv_splits(len(y), n_groups=6, n_test=2, horizon=5):
     <p><b>Exports.</b> <b>Export</b> under the results title downloads the equity and exposure series (with per-instrument weights for portfolios), the trades, the fills (with arrival prices), every statistic including hidden ones, or the whole run as JSON. Each file starts with comment lines naming the run, code hash, data fingerprints, parameters, settings and engine. <b>Tear Sheet</b> opens a printable one-page report (save it as PDF from the print dialog) with the provenance and the strategy code on its second page.</p>
     <p><b>Workspace backup.</b> On the Data tab, <b>Export Workspace</b> saves everything QuantLab keeps in the browser (your strategies, uploaded prices, dividend files and rate series, settings, trial counts and, optionally, run history) as one JSON file. <b>Import Workspace</b> adds a file's contents to this browser: use it to back up, to move to another computer, or to hand a colleague the exact setup behind a result.</p>
 
+    <h3 id="github">GitHub Sync <span class="muted">(optional)</span></h3>
+    <p>On the Data tab, GitHub Sync keeps your saved strategies and modules in a GitHub repository as <code>.py</code> files: <code>&lt;folder&gt;/strategies/&lt;name&gt;.py</code>, <code>&lt;folder&gt;/modules/&lt;name&gt;.py</code> and a <code>quantlab.json</code> with the strategy names. <b>Push</b> makes one commit with all of them (unchanged files make no commit; files you deleted in QuantLab stay in the repository). <b>Pull</b> lists what would be added or replaced before changing anything, and can be undone. It needs a fine-grained personal access token with <b>Contents: read &amp; write</b> on that repository. The page sends it only to api.github.com, keeps it for the tab unless you tick Remember, and leaves it out of workspace exports. The code for this is in <code>github-sync.js</code>, which loads only when you use it.</p>
+
     <h2 id="pitfalls">Pitfalls</h2>
     <ul>
       <li><b>Overfitting.</b> With enough parameters, any rule fits the past. Prefer few parameters and round numbers, and always check out of sample.</li>
@@ -590,13 +626,15 @@ print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['ma
     <div class="scroll"><table>
       <thead><tr><th>File</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, about 1900 lines.</td></tr>
+        <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, no dependencies.</td></tr>
         <tr><td><code>templates.py</code></td><td>The built-in strategies, separated by <code>#%% id:</code> markers. Add your own by following the same format.</td></tr>
         <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
-        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports.</td></tr>
+        <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports. Sweeps and walk-forward grids start helper workers too.</td></tr>
+        <tr><td><code>github-sync.js</code></td><td>Optional GitHub Sync; loaded only when used.</td></tr>
+        <tr><td><code>vendor/</code></td><td>Chart.js and the pyflakes wheel (MIT licence) used for the editor's Problems.</td></tr>
         <tr><td><code>pyodide/</code></td><td>The Python runtime and the NumPy wheel. Other package wheels from the Pyodide 0.26.4 release placed here are used instead of the CDN.</td></tr>
         <tr><td><code>data/</code></td><td>Bundled CSV files and <code>manifest.json</code>.</td></tr>
-        <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics and the look-ahead detector.</td></tr>
+        <tr><td><code>tests/test_engine.py</code></td><td>Unit tests: indicator correctness and causality, fill timing, costs, trade bookkeeping, metrics, the look-ahead detector, modules, lint, the test runner and the console.</td></tr>
         <tr><td><code>tools/build_docs.py</code></td><td>Regenerates this page's statistics and strategy tables from the code.</td></tr>
       </tbody>
     </table></div>

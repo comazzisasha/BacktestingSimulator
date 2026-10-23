@@ -1110,6 +1110,179 @@ def test_json_api_roundtrip():
         assert out["ok"], (method, out)
 
 
+# ------------------------------------------------- modules & dev tools -----
+
+MOD_STRAT = ("from my_signals import trend\n"
+             "PARAMS = {'n': 50}\n"
+             "def on_bar(ctx):\n"
+             "    return trend(ctx, PARAMS['n'])\n")
+MOD_SRC = "def trend(ctx, n):\n    return 1.0 if ctx.price > ctx.sma(n) else 0.0\n"
+INLINE = "PARAMS = {'n': 50}\ndef on_bar(ctx):\n    return 1.0 if ctx.price > ctx.sma(PARAMS['n']) else 0.0\n"
+
+
+def test_user_module_matches_inline_code_and_reloads_fresh():
+    try:
+        engine.set_modules({"my_signals": MOD_SRC})
+        a, b = run(MOD_STRAT), run(INLINE)
+        assert a.equity == b.equity and len(a.fills) == len(b.fills) > 0
+        strat = engine.Strategy.from_code(MOD_STRAT)
+        assert strat.modules == ["my_signals"]
+        # a changed module is picked up on the next compile, without restarting Python
+        engine.set_modules({"my_signals": MOD_SRC.replace("else 0.0", "else 0.5")})
+        c = run(MOD_STRAT)
+        assert any(0.45 < x < 0.55 for x in c.exposure) and max(c.exposure) < 1.01 and c.equity != a.equity
+        # module-level state doesn't leak from one run into the next
+        engine.set_modules({"counter": "calls = []\ndef hit():\n    calls.append(1)\n    return len(calls)\n"})
+        code = "import counter\ndef on_bar(ctx):\n    ctx.state['n'] = counter.hit()\n    return 0.0\n"
+        assert run(code).equity == run(code).equity
+        n1 = engine.Strategy.from_code(code)
+        import counter
+        assert counter.calls == [], "each compile imports the module afresh"
+    finally:
+        engine.set_modules({})
+
+
+def test_user_module_errors_point_at_the_module_and_bad_names_are_refused():
+    engine.DATA["DEMO-STOCK"] = DEMO
+    try:
+        engine.set_modules({"helpers": "def f(x):\n    return x / 0\n"})
+        out = json.loads(engine.handle("run", json.dumps({
+            "ticker": "DEMO-STOCK", "code": "from helpers import f\ndef on_bar(ctx):\n    return f(1)\n",
+            "modules": {"helpers": "def f(x):\n    return x / 0\n"}})))
+        err = out["error"]
+        assert not out["ok"] and err["file"] == "helpers" and err["line"] == 2 and "helpers.py, line 2" in err["trace"]
+        syn = json.loads(engine.handle("inspect", json.dumps({"code": "import broken\ndef on_bar(ctx):\n    return 0\n",
+                                                               "modules": {"broken": "def f(:\n"}})))
+        assert syn["error"]["file"] == "broken" and syn["error"]["line"] == 1
+        for bad in ("math", "numpy", "engine", "2fast", "my-lib", "class"):
+            assert engine.module_name_problem(bad), bad
+        assert engine.module_name_problem("my_lib") is None
+        refused = json.loads(engine.handle("inspect", json.dumps({"code": INLINE, "modules": {"json": "x = 1\n"}})))
+        assert not refused["ok"] and "can't be called json" in refused["error"]["message"]
+        # a real package always wins over a module of the same name: the finder comes after Python's own
+        import importlib.machinery
+        mine = next(i for i, f in enumerate(sys.meta_path) if isinstance(f, engine._ModuleFinder))
+        path = next(i for i, f in enumerate(sys.meta_path) if f is importlib.machinery.PathFinder)
+        assert mine > path
+    finally:
+        engine.set_modules({})
+
+
+def test_module_changes_invalidate_signal_cache_and_show_in_provenance():
+    code = "import sig_lib\ndef signals(data):\n    return sig_lib.weights(data.close)\n"
+    m1 = "def weights(c):\n    return [1.0] * len(c)\n"
+    m2 = "def weights(c):\n    return [0.5] * len(c)\n"
+    engine.DATA["DEMO-STOCK"] = DEMO
+    try:
+        base = {"ticker": "DEMO-STOCK", "code": code}
+        r1 = json.loads(engine.handle("run", json.dumps(dict(base, modules={"sig_lib": m1}))))["result"]
+        r2 = json.loads(engine.handle("run", json.dumps(dict(base, modules={"sig_lib": m2}))))["result"]
+        assert max(r1["exposure"]) > 0.9 and max(r2["exposure"]) < 0.6, "the cache must not serve the old module's signals"
+        h1, h2 = r1["provenance"]["modules"]["sig_lib"], r2["provenance"]["modules"]["sig_lib"]
+        import hashlib
+        assert h1 == hashlib.sha256(m1.encode()).hexdigest() and h1 != h2
+        plain = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": INLINE, "modules": {"sig_lib": m1}})))
+        assert plain["result"]["provenance"]["modules"] == {}, "only modules the strategy imports are recorded"
+    finally:
+        engine.set_modules({})
+
+
+def test_lint_reports_undefined_names_unused_imports_and_ctx_typos():
+    code = "import os\ndef on_bar(ctx):\n    if ctx.smaa(20) > 0:\n        return y\n    return ctx['SPY'].pricee\n"
+    for use_pyflakes in (True, False):
+        saved = sys.modules.get("pyflakes")
+        if not use_pyflakes:
+            sys.modules["pyflakes"] = None          # import pyflakes -> ImportError: the built-in check runs
+        try:
+            msgs = engine.lint(code)
+        finally:
+            if not use_pyflakes:
+                if saved is None:
+                    del sys.modules["pyflakes"]
+                else:
+                    sys.modules["pyflakes"] = saved
+        got = {(m["line"], m["code"]) for m in msgs}
+        assert (1, "UnusedImport") in got and (4, "UndefinedName") in got, (use_pyflakes, msgs)
+        assert (3, "UnknownAttribute") in got and (5, "UnknownAttribute") in got
+        typo = [m for m in msgs if m["line"] == 3][0]
+        assert "did you mean sma" in typo["message"] and typo["col"] == 12
+    assert engine.lint("def on_bar(ctx):\n    return ctx.sma(20) > ctx.price and ctx.state.get('x')\n") == []
+    assert engine.lint("def on_bar(ctx:\n")[0]["code"] == "SyntaxError"
+    assert engine.lint("x = 1\n")[0]["code"] == "NoEntryPoint"
+    assert engine.lint("def helper(x):\n    return qt.sma(x, 5)\n", kind="module", name="m") == []
+    for tid, tpl in load_templates().items():
+        errors = [m for m in engine.lint(tpl) if m["severity"] == "error"]
+        assert not errors, (tid, errors)
+
+
+def test_strategy_tests_runner():
+    code = (INLINE +
+            "def test_long_in_uptrend():\n"
+            "    res = run_strategy(make_data([100 + i for i in range(120)]))\n"
+            "    assert res.exposure[-1] > 0.9\n"
+            "def test_flat_in_downtrend():\n"
+            "    res = run_strategy(make_data([200 - i for i in range(120)]), params={'n': 20})\n"
+            "    assert max(res.exposure) == 0, 'should never buy'\n"
+            "def test_fails():\n"
+            "    print('checking')\n"
+            "    assert_close(1.0, 1.1)\n"
+            "def test_errors():\n"
+            "    return {}['missing']\n")
+    out = engine.run_tests(code)
+    by = {t["name"]: t for t in out["tests"]}
+    assert out["passed"] == 2 and out["failed"] == 2 and out["error"] is None
+    assert by["test_long_in_uptrend"]["ok"] and by["test_flat_in_downtrend"]["ok"]
+    f = by["test_fails"]
+    assert not f["ok"] and "1.0 != 1.1" in f["message"] and f["output"] == "checking\n" and f["line"] == 12
+    assert by["test_errors"]["message"].startswith("KeyError") and by["test_errors"]["line"] == 14
+    only = engine.run_tests(code, only="test_fails")
+    assert [t["name"] for t in only["tests"]] == ["test_fails"]
+    broken = engine.run_tests("x = 1 / 0\n")
+    assert broken["error"]["line"] == 1 and broken["tests"] == []
+    mod = engine.run_tests("def double(x):\n    return 2 * x\ndef test_double():\n    assert double(2) == 5\n",
+                           kind="module", name="mathx")
+    assert mod["failed"] == 1 and "assert double(2) == 5" in mod["tests"][0]["message"]
+    ds = engine.synthetic_data(300, seed=3)
+    assert ds.n == 300 and ds.dates[0] == "2020-01-02" and all(h >= c >= l for h, c, l in zip(ds.high, ds.close, ds.low))
+    assert engine.synthetic_data(300, seed=3).close == ds.close
+
+
+def test_console_keeps_variables_and_sees_data_and_last_run():
+    engine.DATA["DEMO-STOCK"] = DEMO
+    engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": INLINE}))
+    r = engine.console_run("x = 21\nx * 2", ["DEMO-STOCK"], reset=True)
+    assert r["output"] == "42\n" and r["error"] is None and {"name": "x", "type": "int"} in r["vars"]
+    r = engine.console_run("print(len(data.close), data.ticker)\nround(summarize(result)[0]['sharpe'], 6)", ["DEMO-STOCK"])
+    assert r["output"].splitlines()[0] == "%d DEMO-STOCK" % DEMO.n
+    assert abs(float(r["output"].splitlines()[1]) - engine.summarize(run(INLINE, slippage_bps=2.0))[0]["sharpe"]) < 1e-6
+    assert engine.console_run("x + 1", ["DEMO-STOCK"])["output"] == "22\n", "variables persist"
+    e = engine.console_run("def f():\n    return 1 / 0\nf()", ["DEMO-STOCK"])
+    assert e["error"].endswith("ZeroDivisionError: division by zero") and "line 2, in f" in e["error"]
+    assert engine.console_run("x", ["DEMO-STOCK"], reset=True)["error"].startswith("  console")
+    assert "SyntaxError" in engine.console_run("for", [])["error"]
+    assert "<Result DEMO-STOCK" in engine.console_run("result", [])["output"]
+
+
+def test_long_output_is_kept_in_full():
+    code = "def on_bar(ctx):\n    print('bar', ctx.i, 'x' * 40)\n    return 0.0\n"
+    engine.DATA["DEMO-STOCK"] = DEMO
+    out = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code})))["result"]
+    full = json.loads(engine.handle("rows", json.dumps({"kind": "logs"})))["result"]
+    assert out["logs_total"] == len(full) > engine.LOG_SHOW
+    assert full.count("\n") == DEMO.n - 1 and full.startswith("bar 0 ") and full.rstrip().endswith("x" * 40)
+    assert len(out["logs"]) < engine.LOG_SHOW + 200 and "characters (" in out["logs"]
+    assert out["logs"].startswith(full[:1000]) and out["logs"].endswith(full[-1000:])
+
+
+def test_completions_describe_ctx_and_qt():
+    c = engine.completions()
+    ctx = {e["name"]: e for e in c["ctx"]}
+    assert ctx["sma"]["kind"] == "method" and ctx["sma"]["sig"].startswith("(n")
+    assert ctx["state"]["kind"] == "attribute" and ctx["price"]["kind"] == "property"
+    assert "rsi" in {e["name"] for e in c["qt"]} and "isnan" in {e["name"] for e in c["globals"]}
+    assert "weights" in {e["name"] for e in c["portfolio"]} and "close" in {e["name"] for e in c["data"]}
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
