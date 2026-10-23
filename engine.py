@@ -800,6 +800,9 @@ def _iso_date(raw):
         if "/" in raw:
             m, d, y = raw.split("/")[:3]
             return _dt.date(int(y[:4]), int(m), int(d)).isoformat()
+        if raw[:10].count(".") == 2:                  # DD.MM.YYYY (European)
+            d, m, y = raw[:10].split(".")
+            return _dt.date(int(y[:4]), int(m), int(d)).isoformat()
         return _dt.date.fromisoformat(raw[:10]).isoformat()
     except ValueError:
         return None
@@ -1166,6 +1169,152 @@ def _col(header, key):
         if n in header:
             return header.index(n)
     return None
+
+
+# Generic tables: any delimiter, decimal commas, other column names (mapped to ours).
+TABLE_ALIASES = {
+    "date": ("date", "datetime", "timestamp", "time", "dt", "day", "trade date", "trading date", "date/time", "observation_date"),
+    "time": ("time",),
+    "open": ("open", "o", "open price", "opening price", "first"),
+    "high": ("high", "h", "high price", "max"),
+    "low": ("low", "l", "low price", "min"),
+    "close": ("close", "c", "close/last", "close price", "closing price", "last", "last price", "price", "settle", "settlement"),
+    "adj_close": ("adj close", "adj. close", "adj_close", "adjusted close", "adjclose"),
+    "volume": ("volume", "v", "vol", "vol.", "volume traded", "qty", "quantity"),
+}
+TABLE_ORDER = ("date", "time", "open", "high", "low", "close", "adj_close", "volume")
+TABLE_HEADERS = {"date": "Date", "time": "Time", "open": "Open", "high": "High", "low": "Low", "close": "Close",
+                 "adj_close": "Adj Close", "volume": "Volume"}
+
+
+def _split_line(line, sep):
+    out, cur, q, i = [], "", False, 0
+    while i < len(line):
+        ch = line[i]
+        if ch == '"':
+            if q and i + 1 < len(line) and line[i + 1] == '"':
+                cur += '"'
+                i += 1
+            else:
+                q = not q
+        elif ch == sep and not q:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+        i += 1
+    out.append(cur)
+    return [c.strip() for c in out]
+
+
+def sniff_delimiter(line):
+    """The most frequent of , ; tab | outside quotes (',' on a tie)."""
+    counts, q = {",": 0, ";": 0, "\t": 0, "|": 0}, False
+    for ch in line:
+        if ch == '"':
+            q = not q
+        elif not q and ch in counts:
+            counts[ch] += 1
+    best = max(counts.values())
+    return "," if best == 0 or counts[","] == best else max(counts, key=lambda k: (counts[k], k == ";"))
+
+
+def _is_decimal_comma(cells):
+    import re
+    hits = sum(1 for c in cells if re.fullmatch(r"-?\d{1,3}(\.\d{3})*,\d+|-?\d+,\d+", c.strip()))
+    dots = sum(1 for c in cells if re.fullmatch(r"-?\d+\.\d+", c.strip()))
+    return hits > 0 and hits >= dots
+
+
+def guess_table_columns(header):
+    """{our column: index} for the columns a header's names match (case-insensitive)."""
+    low = [h.strip().strip('"').lower() for h in header]
+    out = {}
+    for key in TABLE_ORDER:
+        for alias in TABLE_ALIASES[key]:
+            if alias in low and low.index(alias) not in out.values():
+                if key == "time" and out.get("date") == low.index(alias):
+                    continue
+                out[key] = low.index(alias)
+                break
+    return out
+
+
+def normalize_table(text, mapping=None, delimiter=None, decimal_comma=None):
+    """Any delimited price table -> a standard comma CSV with Date, (Time,) Open, High, Low,
+    Close, (Adj Close,) Volume, which parse_csv_text reads. `mapping` is {our column: header
+    name or index}; without it, column names are matched against TABLE_ALIASES. The
+    delimiter (, ; tab |) and a decimal comma (1.234,56) are detected unless given."""
+    lines = [ln for ln in text.lstrip("﻿").replace("\r", "").split("\n") if ln.strip()]
+    if len(lines) < 2:
+        raise ValueError("The file has no data rows.")
+    sep = delimiter or sniff_delimiter(lines[0])
+    header = _split_line(lines[0], sep)
+    rows = [_split_line(ln, sep) for ln in lines[1:]]
+    if mapping:
+        low = [h.lower() for h in header]
+        cols = {}
+        for k, v in mapping.items():
+            if v is None or v == "":
+                continue
+            cols[k] = int(v) if isinstance(v, int) or str(v).isdigit() else low.index(str(v).lower())
+    else:
+        cols = guess_table_columns(header)
+    if "date" not in cols or ("close" not in cols and "adj_close" not in cols):
+        raise ValueError("Couldn't tell which columns hold the date and the close: %s." % ", ".join(header))
+    if decimal_comma is None:
+        sample = [r[cols[k]] for r in rows[:200] for k in ("open", "high", "low", "close") if k in cols and cols[k] < len(r)]
+        decimal_comma = sep != "," and _is_decimal_comma(sample)
+    keys = [k for k in TABLE_ORDER if k in cols]
+
+    def num(cell):
+        c = cell.strip()
+        if decimal_comma:
+            c = c.replace(".", "").replace(" ", "").replace(",", ".")
+        return c
+
+    def q(cell):
+        return '"%s"' % cell.replace('"', '""') if ("," in cell or '"' in cell) else cell
+
+    out = [",".join(TABLE_HEADERS[k] for k in keys)]
+    for r in rows:
+        cells = []
+        for k in keys:
+            v = r[cols[k]] if cols[k] < len(r) else ""
+            cells.append(q(v if k in ("date", "time") else num(v)))
+        out.append(",".join(cells))
+    return "\n".join(out) + "\n"
+
+
+def parquet_to_csv(data):
+    """A Parquet file's bytes -> CSV text (needs pandas and fastparquet or pyarrow). Date
+    and datetime columns are written as ISO text; a named index becomes a column."""
+    import pandas as pd
+    df = pd.read_parquet(io.BytesIO(data))
+    if df.index.name is not None or not isinstance(df.index, pd.RangeIndex):
+        df = df.reset_index()
+    for c in df.columns:
+        if str(df[c].dtype).startswith("datetime"):
+            ser = df[c]
+            if getattr(ser.dt, "tz", None) is not None:
+                ser = ser.dt.tz_localize(None)
+            midnight = bool(((ser.dt.hour == 0) & (ser.dt.minute == 0) & (ser.dt.second == 0)).all())
+            df[c] = ser.dt.strftime("%Y-%m-%d" if midnight else "%Y-%m-%dT%H:%M:%S")
+    return df.to_csv(index=False)
+
+
+def load_table(path, ticker=None, mapping=None, delimiter=None, decimal_comma=None):
+    """Load a price file of any common layout: CSV/TSV/TXT with any delimiter and column
+    names, or Parquet. Returns a DataSet."""
+    import os
+    ticker = ticker or os.path.splitext(os.path.basename(path))[0].upper()
+    if path.lower().endswith((".parquet", ".pq")):
+        with open(path, "rb") as f:
+            text = parquet_to_csv(f.read())
+    else:
+        with open(path, encoding="utf-8-sig") as f:
+            text = f.read()
+    return parse_csv_text(normalize_table(text, mapping, delimiter, decimal_comma), ticker)
 
 
 def parse_csv_text(text, ticker="DATA"):
@@ -3779,14 +3928,21 @@ METRICS = [
     ("limit_unfilled", "Resting orders unfilled", "Execution", "int", "extra", "Limit and stop orders that expired or were cancelled without filling completely."),
 
     ("t_stat", "t-statistic (mean return)", "Statistical tests", "num", "extra", "Mean daily excess return / its standard error. Above 2 suggests the mean is not zero."),
-    ("p_value", "p-value (mean return > 0)", "Statistical tests", "pval", "extra", "Chance of a t-statistic this high if the true mean return were zero (one-sided, normal approximation). Below 0.05 is the usual bar."),
+    ("p_value", "p-value (mean return > 0)", "Statistical tests", "pval", "extra", "Chance of a t-statistic this high if the true mean return were zero (one-sided, Student's t). Below 0.05 is the usual bar."),
+    ("t_stat_hac", "t-statistic (Newey-West)", "Statistical tests", "num", "extra", "The t-statistic with Newey-West standard errors, valid when returns are autocorrelated or their volatility changes. Trust it over the plain one when they differ."),
+    ("p_value_hac", "p-value (Newey-West)", "Statistical tests", "pval", "extra", "One-sided p-value of the Newey-West t-statistic."),
+    ("sharpe_lo_adj", "Sharpe (Lo-adjusted)", "Statistical tests", "num", "extra", "Sharpe ratio annualized with the returns' autocorrelations (Lo 2002) instead of sqrt(252). Lower than the plain Sharpe when returns trend from day to day (smoothed or illiquid prices)."),
+    ("n_eff", "Effective sample size", "Statistical tests", "int", "extra", "How many independent days of returns the autocorrelated returns are worth (Bartlett-weighted autocorrelations)."),
+    ("eff_years", "Effective track record", "Statistical tests", "years", "extra", "Effective sample size in years. Compare with the minimum track record length."),
     ("psr", "Probabilistic Sharpe", "Statistical tests", "pct", "extra", "Probability that the true Sharpe ratio is above 0, allowing for skew, fat tails and track length (Bailey & Lopez de Prado)."),
     ("sharpe_lo", "Sharpe 95% CI low", "Statistical tests", "num", "extra", "Lower end of a 95% confidence interval for the annualized Sharpe ratio."),
     ("sharpe_hi", "Sharpe 95% CI high", "Statistical tests", "num", "extra", "Upper end of a 95% confidence interval for the annualized Sharpe ratio."),
     ("min_trl", "Min. track record", "Statistical tests", "years", "extra", "Years of data needed to be 95% sure the Sharpe ratio is above 0. Longer than the backtest = not proven yet."),
     ("alpha_t", "Alpha t-statistic", "Statistical tests", "num", "extra", "Alpha / its standard error from the regression on the benchmark. Above 2 suggests real alpha."),
-    ("alpha_p", "Alpha p-value", "Statistical tests", "pval", "extra", "Chance of an alpha t-statistic this high if true alpha were zero (one-sided, normal approximation)."),
-    ("win_rate_p", "Win-rate p-value", "Statistical tests", "pval", "extra", "Chance of at least this many winning trades if each trade were a coin flip (one-sided binomial, normal approximation)."),
+    ("alpha_p", "Alpha p-value", "Statistical tests", "pval", "extra", "Chance of an alpha t-statistic this high if true alpha were zero (one-sided, Student's t)."),
+    ("alpha_t_hac", "Alpha t (Newey-West)", "Statistical tests", "num", "extra", "Alpha's t-statistic with Newey-West standard errors."),
+    ("alpha_p_hac", "Alpha p (Newey-West)", "Statistical tests", "pval", "extra", "One-sided p-value of alpha's Newey-West t-statistic."),
+    ("win_rate_p", "Win-rate p-value", "Statistical tests", "pval", "extra", "Chance of at least this many winning trades if each trade were a coin flip (one-sided, exact binomial)."),
     ("autocorr", "Autocorrelation (1 day)", "Statistical tests", "num", "extra", "Correlation of each day's return with the previous day's. Far from 0 means returns are not independent."),
     ("autocorr_p", "Autocorrelation p-value", "Statistical tests", "pval", "extra", "Two-sided p-value that the 1-day autocorrelation is zero. Below 0.05 = significant serial correlation."),
     ("dsr", "Deflated Sharpe", "Statistical tests", "pct", "std", "Probability that the true Sharpe ratio beats the best you'd expect from this many trials with no skill (Bailey & Lopez de Prado). Below 95%: the result may be the luck of trying many versions."),
@@ -3861,8 +4017,11 @@ def return_tests(r, rfd=0.0, ann=None):
 
     The Sharpe ratio's standard error follows Lo (2002) / Mertens (2002), which
     widens it for negative skew and fat tails; PSR and the minimum track record
-    length follow Bailey & Lopez de Prado (2012). p-values use the normal
-    approximation, which is accurate for the hundreds of days a backtest has.
+    length follow Bailey & Lopez de Prado (2012). The t-test's p-value is exact
+    (Student's t, n - 1 degrees of freedom); its Newey-West version allows for
+    autocorrelated and heteroskedastic returns. The Lo-adjusted Sharpe annualizes
+    with the autocorrelations instead of sqrt(periods per year), and the effective
+    sample size says how many independent observations the returns are worth.
     """
     out = {}
     n = len(r)
@@ -3873,7 +4032,18 @@ def return_tests(r, rfd=0.0, ann=None):
     if sd > 0:
         sr = (mu - rfd) / sd
         out["t_stat"] = sr * math.sqrt(n)
-        out["p_value"] = 1 - norm_cdf(out["t_stat"])
+        out["p_value"] = t_sf(out["t_stat"], n - 1)
+        hac = newey_west_mean(r, rfd)
+        if hac:
+            out["t_stat_hac"], out["p_value_hac"] = hac
+        P = ann or TRADING_DAYS
+        rhos = autocorrelations(r, min(10, n // 4))
+        q = int(round(P))
+        denom = q + 2 * sum((q - k) * rho for k, rho in enumerate(rhos, 1) if k < q)
+        if denom > 0:
+            out["sharpe_lo_adj"] = sr * q / math.sqrt(denom)
+        out["n_eff"] = effective_sample_size(r)
+        out["eff_years"] = out["n_eff"] / P
         if not isnan(g3) and not isnan(g4):
             spread = 1 - g3 * sr + (g4 + 2) / 4 * sr * sr   # (g4 + 2) = raw kurtosis - 1
             if spread > 0:
@@ -3892,6 +4062,51 @@ def return_tests(r, rfd=0.0, ann=None):
         out["autocorr"] = rho
         out["autocorr_p"] = math.erfc(abs(rho) * math.sqrt(n) / math.sqrt(2))
     return out
+
+
+def autocorrelations(r, max_lag):
+    """Sample autocorrelations rho_1 .. rho_max_lag (the usual biased estimator)."""
+    n = len(r)
+    if n < 3 or max_lag < 1:
+        return []
+    m = sum(r) / n
+    d = [x - m for x in r]
+    c0 = sum(x * x for x in d)
+    if c0 <= 0:
+        return [0.0] * max_lag
+    return [sum(d[t] * d[t - k] for t in range(k, n)) / c0 for k in range(1, max_lag + 1)]
+
+
+def effective_sample_size(r, lags=None):
+    """n / (1 + 2 sum of Bartlett-weighted autocorrelations), between 1 and n: how many
+    independent observations autocorrelated returns are worth."""
+    n = len(r)
+    L = newey_west_lags(n) if lags is None else lags
+    rho = autocorrelations(r, L)
+    f = 1 + 2 * sum((1 - k / (L + 1.0)) * x for k, x in enumerate(rho, 1))
+    return min(float(n), max(1.0, n / f)) if f > 0 else float(n)
+
+
+def newey_west_mean(r, rfd=0.0):
+    """(t-statistic, one-sided p-value) of the mean excess return with Newey-West errors."""
+    n = len(r)
+    if n < 10:
+        return None
+    try:
+        fit = ols([x - rfd for x in r], [[1.0] for _ in r])
+    except ValueError:
+        return None
+    t = fit["t_hac"][0]
+    return (t, t_sf(t, n - 1)) if not isnan(t) else None
+
+
+def binom_sf(k, n, p=0.5):
+    """P(X >= k) for X ~ Binomial(n, p), exact (via the incomplete beta function)."""
+    if k <= 0:
+        return 1.0
+    if k > n:
+        return 0.0
+    return betainc(k, n - k + 1, p)
 
 
 def trade_stats(trades, ret_key="ret"):
@@ -3923,7 +4138,7 @@ def trade_stats(trades, ret_key="ret"):
     m["sqn"] = math.sqrt(len(rets)) * mean(rets) / sd if len(rets) >= 2 and sd > 0 else NAN
     # One-sided binomial test of the win rate against a coin flip, with continuity correction.
     n = len(closed)
-    m["win_rate_p"] = 1 - norm_cdf((len(wins) - 0.5 - n / 2) / math.sqrt(n / 4))
+    m["win_rate_p"] = binom_sf(len(wins), n)
     best = worst = cw = cl = 0
     for p in pnls:
         if p > 0:
@@ -4063,7 +4278,15 @@ def performance(dates, equity, rf=0.0, bench_equity=None, trades=None, exposure=
             se = math.sqrt(s2 * (1 / len(x) + mx * mx / sxx)) if sxx > 0 else 0.0
             if se > 1e-15:
                 m["alpha_t"] = a / se
-                m["alpha_p"] = 1 - norm_cdf(a / se)
+                m["alpha_p"] = t_sf(a / se, len(x) - 2)
+            try:
+                fit = ols(y, [[1.0, v] for v in x]) if len(x) > 10 else None
+            except ValueError:            # the benchmark's returns don't vary
+                fit = None
+            if fit is not None:
+                if not isnan(fit["t_hac"][0]):
+                    m["alpha_t_hac"] = fit["t_hac"][0]
+                    m["alpha_p_hac"] = t_sf(fit["t_hac"][0], len(x) - 2)
     return m
 
 
@@ -6153,13 +6376,23 @@ def api_build_futures(p):
             "rolls": ds.rolls, "issues": ds.issues}
 
 
+def api_normalize_table(p):
+    return {"text": normalize_table(p["text"], p.get("mapping"), p.get("delimiter"), p.get("decimal_comma"))}
+
+
+def api_read_parquet(p):
+    import base64
+    return {"text": parquet_to_csv(base64.b64decode(p["data"]))}
+
+
 def api_check_module(p):
     return {"problem": module_name_problem(p.get("name"))}
 
 
 API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
-    "check_module": api_check_module, "build_futures": api_build_futures, "risk": api_risk, "capacity": api_capacity,
+    "check_module": api_check_module, "build_futures": api_build_futures,
+    "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

@@ -970,7 +970,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
         <label class="drop" id="drop" for="fileInput">
           <strong>Drop CSV Files Here</strong>
           <span>or click to choose files · <code translate="no">SPY.csv</code> & <code translate="no">SPY_dividends.csv</code> are recognized automatically</span>
-          <input type="file" id="fileInput" name="files" accept=".csv,text/csv" multiple class="sr">
+          <input type="file" id="fileInput" name="files" accept=".csv,.tsv,.txt,.parquet,.pq,text/csv" multiple class="sr">
         </label>
         <div class="pending" id="pending" aria-live="polite"></div>
       </div>
@@ -1289,9 +1289,66 @@ function csvNum(s) {
 function csvDate(s) {
   s = String(s || '').replace(/"/g, '').trim();
   let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/), y, mo, d;
-  if (m) { y = +m[3]; mo = +m[1]; d = +m[2]; } else { m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return null; y = +m[1]; mo = +m[2]; d = +m[3]; }
+  const eu = s.slice(0, 10).match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/);   // DD.MM.YYYY (European)
+  if (m) { y = +m[3]; mo = +m[1]; d = +m[2]; } else if (eu) { y = +eu[3]; mo = +eu[2]; d = +eu[1]; } else { m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (!m) return null; y = +m[1]; mo = +m[2]; d = +m[3]; }
   const dt = new Date(Date.UTC(y, mo - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? dt.toISOString().slice(0, 10) : null;
+}
+// Generic tables, exactly as engine.normalize_table: any delimiter, decimal commas & other
+// column names -> a standard comma CSV (Date, Time, Open, High, Low, Close, Adj Close, Volume).
+const TABLE_ALIASES = {
+  date: ['date', 'datetime', 'timestamp', 'time', 'dt', 'day', 'trade date', 'trading date', 'date/time', 'observation_date'],
+  time: ['time'],
+  open: ['open', 'o', 'open price', 'opening price', 'first'], high: ['high', 'h', 'high price', 'max'], low: ['low', 'l', 'low price', 'min'],
+  close: ['close', 'c', 'close/last', 'close price', 'closing price', 'last', 'last price', 'price', 'settle', 'settlement'],
+  adj_close: ['adj close', 'adj. close', 'adj_close', 'adjusted close', 'adjclose'],
+  volume: ['volume', 'v', 'vol', 'vol.', 'volume traded', 'qty', 'quantity'],
+};
+const TABLE_ORDER = ['date', 'time', 'open', 'high', 'low', 'close', 'adj_close', 'volume'];
+const TABLE_HEADERS = { date: 'Date', time: 'Time', open: 'Open', high: 'High', low: 'Low', close: 'Close', adj_close: 'Adj Close', volume: 'Volume' };
+function splitLine(line, sep) {
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') { if (q && line[i + 1] === '"') { cur += '"'; i++; } else q = !q; }
+    else if (ch === sep && !q) { out.push(cur); cur = ''; } else cur += ch;
+  }
+  out.push(cur); return out.map(x => x.trim());
+}
+function sniffDelimiter(line) {
+  const c = { ',': 0, ';': 0, '\t': 0, '|': 0 }; let q = false;
+  for (const ch of line) { if (ch === '"') q = !q; else if (!q && ch in c) c[ch]++; }
+  const best = Math.max(...Object.values(c));
+  if (best === 0 || c[','] === best) return ',';
+  return c[';'] === best ? ';' : Object.keys(c).find(k => c[k] === best);
+}
+function guessTableColumns(header) {
+  const low = header.map(h => h.trim().replace(/^"|"$/g, '').toLowerCase()), out = {};
+  for (const key of TABLE_ORDER) for (const alias of TABLE_ALIASES[key]) {
+    const i = low.indexOf(alias);
+    if (i >= 0 && !Object.values(out).includes(i)) { if (key === 'time' && out.date === i) continue; out[key] = i; break; }
+  }
+  return out;
+}
+function normalizeTable(text, mapping = null, delimiter = null, decimalComma = null) {
+  const lines = text.replace(/^﻿/, '').replace(/\r/g, '').split('\n').filter(l => l.trim());
+  if (lines.length < 2) throw new Error('The file has no data rows.');
+  const sep = delimiter || sniffDelimiter(lines[0]), header = splitLine(lines[0], sep), rows = lines.slice(1).map(l => splitLine(l, sep));
+  let cols = {};
+  if (mapping) { const low = header.map(h => h.toLowerCase()); for (const [k, v] of Object.entries(mapping)) { if (v === null || v === '') continue; cols[k] = /^\d+$/.test(String(v)) ? +v : low.indexOf(String(v).toLowerCase()); } }
+  else cols = guessTableColumns(header);
+  if (!('date' in cols) || !('close' in cols || 'adj_close' in cols)) throw new Error(`Couldn’t tell which columns hold the date and the close: ${header.join(', ')}.`);
+  if (decimalComma === null) {
+    const sample = rows.slice(0, 200).flatMap(r => ['open', 'high', 'low', 'close'].filter(k => k in cols && cols[k] < r.length).map(k => r[cols[k]].trim()));
+    const hits = sample.filter(c => /^-?\d{1,3}(\.\d{3})*,\d+$|^-?\d+,\d+$/.test(c)).length, dots = sample.filter(c => /^-?\d+\.\d+$/.test(c)).length;
+    decimalComma = sep !== ',' && hits > 0 && hits >= dots;
+  }
+  const keys = TABLE_ORDER.filter(k => k in cols);
+  const num = c => (decimalComma ? c.trim().replace(/\./g, '').replace(/ /g, '').replace(/,/g, '.') : c.trim());
+  const q = c => (c.includes(',') || c.includes('"') ? `"${c.replace(/"/g, '""')}"` : c);
+  const out = [keys.map(k => TABLE_HEADERS[k]).join(',')];
+  for (const r of rows) out.push(keys.map(k => { const v = cols[k] < r.length ? r[cols[k]] : ''; return q(k === 'date' || k === 'time' ? v : num(v)); }).join(','));
+  return out.join('\n') + '\n';
 }
 // A bar's time stamp, exactly as engine._iso_stamp: 'YYYY-MM-DD', or 'YYYY-MM-DDTHH:MM[:SS]' for
 // intraday bars. Also YYYYMMDD and Unix seconds / milliseconds; midnight is a plain date.
@@ -3222,9 +3279,15 @@ function tickerFromEventsFilename(name) {
 async function handleFiles(files) {
   let added = 0;
   for (const f of files) {
-    if (!/\.csv$/i.test(f.name) && f.type !== 'text/csv') { toast(`${f.name} isn’t a CSV file. Export the download as .csv & try again.`); continue; }
+    if (!/\.(csv|tsv|txt|parquet|pq)$/i.test(f.name) && f.type !== 'text/csv') { toast(`${f.name} isn’t a CSV, TSV, TXT or Parquet file.`); continue; }
     try {
-      const text = await f.text(); const kind = csvKind(csvHeader(text));
+      let text = /\.(parquet|pq)$/i.test(f.name) ? await parquetText(f) : await f.text();
+      let kind = null; try { kind = csvKind(csvHeader(text)); } catch (e) { /* another layout: try the generic reader */ }
+      if (!kind || (kind === 'prices' && !csvHeader(text).some(h => CSV_COLUMNS.close.includes(h) || CSV_COLUMNS.adj_close.includes(h)))) kind = null;
+      if (!kind) {
+        try { text = normalizeTable(text); kind = 'prices'; }
+        catch (e) { const sep = sniffDelimiter(text.split(/\r?\n/)[0] || ''); pendingFiles.push({ kind: 'map', file: f.name, text, sep, header: splitLine(text.replace(/^﻿/, '').split(/\r?\n/)[0], sep), id: newId() }); continue; }
+      }
       if (kind === 'prices') {
         const data = parseCSV(text); const t = tickerFromFilename(f.name);
         if (t) { await saveUpload(t, guessName(t), data, f.name, true); added++; }
@@ -3287,8 +3350,29 @@ async function saveRate(name, text, filename) {
   toast(`Added the rate series ${name}: ${fmt.int(rec.dates.length)} observations, latest ${fmt.num(rec.values[rec.values.length - 1], 2)}%. Pick it under Account & Execution.`);
 }
 function guessName(t) { const r = RECOMMENDED.find(x => x[0] === t); return r ? r[1] : t; }
+// Parquet: read in Python with pandas & fastparquet (downloaded the first time), returned as CSV text.
+async function parquetText(file) {
+  await py.ready;
+  const bytes = new Uint8Array(await file.arrayBuffer()); let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  busy(true, 'Reading Parquet…');
+  try { return (await py.call('read_parquet', { data: btoa(bin), code: 'import pandas\nimport fastparquet\n' })).text; }
+  catch (e) {
+    const msg = (e.info && e.info.message) || e.message;
+    if (/ModuleNotFoundError/.test(msg)) throw new Error('reading Parquet needs pandas & fastparquet, which download from the Pyodide CDN (cdn.jsdelivr.net) the first time, and it couldn’t be reached. Connect to the internet, or save the file as CSV.');
+    throw e;
+  } finally { busy(false); }
+}
 function renderPending() {
   $('#pending').innerHTML = pendingFiles.map(p => {
+    if (p.kind === 'map') {
+      const g = guessTableColumns(p.header), opt = key => `<option value="">${key === 'date' || key === 'close' ? 'Choose…' : 'None'}</option>` + p.header.map((h, i) => `<option value="${i}"${g[key] === i ? ' selected' : ''}>${esc(h || 'column ' + (i + 1))}</option>`).join('');
+      return `<form data-id="${p.id}" novalidate aria-label="Map the columns of ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">Columns weren’t recognized. Say which is which (${p.sep === '\t' ? 'tab' : `“${esc(p.sep)}”`}-separated).</span></div>` +
+        `<div class="grid3" style="grid-column:1 / -1">${['date', 'time', 'open', 'high', 'low', 'close', 'volume'].map(k => `<div class="field"><label for="mp-${k}-${p.id}">${TABLE_HEADERS[k]}</label><select id="mp-${k}-${p.id}" data-map="${k}" translate="no">${opt(k)}</select></div>`).join('')}` +
+        `<div class="field"><label for="tk-${p.id}">Ticker</label><input type="text" id="tk-${p.id}" name="ticker" maxlength="15" autocomplete="off" spellcheck="false" autocapitalize="characters" translate="no" value="${esc(tickerFromFilename(p.file.replace(/\.[^.]+$/, '.csv')) || '')}" aria-describedby="tk-${p.id}-err"><p class="ferr" id="tk-${p.id}-err" hidden></p></div></div>` +
+        `<label class="check" style="grid-column:1 / -1"><input type="checkbox" id="dc-${p.id}"${p.sep !== ',' ? ' checked' : ''}> Decimal comma (1.234,56)</label>` +
+        `<button class="btn primary small" type="submit">Add Instrument</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
+    }
     if (p.kind !== 'prices') {
       const opts = sortedTickers().map(t => `<option${t === p.guess ? ' selected' : ''}>${esc(t)}</option>`).join('');
       return `<form data-id="${p.id}" novalidate aria-label="Attach ${esc(p.file)}"><div class="field"><span class="label">File</span><span class="fname" translate="no">${esc(p.file)}</span><span class="help">${p.kind === 'dividends' ? 'Dividend history' : p.kind === 'fundamentals' ? 'Fundamentals' : 'Split history'}</span></div>` +
@@ -3974,6 +4058,16 @@ function wire() {
   $('#fileInput').onchange = e => { handleFiles([...e.target.files]); e.target.value = ''; };
   $('#pending').addEventListener('submit', async e => {
     e.preventDefault(); const form = e.target; const p = pendingFiles.find(x => x.id === form.dataset.id); if (!p) return;
+    if (p.kind === 'map') {
+      const mapping = Object.fromEntries($$('select[data-map]', form).map(s => [s.dataset.map, s.value]));
+      const t = $('#tk-' + p.id).value.trim().toUpperCase();
+      if (!/^[A-Z0-9.^=\-]{1,15}$/.test(t)) { setFieldError('tk-' + p.id, 'Enter a ticker such as SPY (letters, digits, “.” or “-”).'); $('#tk-' + p.id).focus(); return; }
+      try {
+        const data = parseCSV(normalizeTable(p.text, mapping, p.sep, $('#dc-' + p.id).checked));
+        pendingFiles.splice(pendingFiles.indexOf(p), 1); await saveUpload(t, guessName(t), data, p.file); renderPending();
+      } catch (err) { setFieldError('tk-' + p.id, err.message); }
+      return;
+    }
     if (p.kind !== 'prices') {
       const t = $('#tk-' + p.id).value; if (!t) return;
       try { await (p.kind === 'fundamentals' ? attachFundamentals(p.text, p.file, t) : attachEvents(t, p.kind, p.text, p.file)); pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); } catch (err) { toast(`${p.file}: ${err.message}`); }

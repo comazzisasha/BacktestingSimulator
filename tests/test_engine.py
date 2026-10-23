@@ -1911,6 +1911,80 @@ def test_futures_take_no_cash_and_pay_no_borrow():
     assert fut.fingerprint() != stock.fingerprint()
 
 
+# ----------------------------------------------------------- generic tables -----
+
+GERMAN = ("Datum;Eröffnung;Hoch;Tief;Schluss;Volumen\n"
+          "02.01.2024;1.234,50;1.240,00;1.230,10;1.238,25;12.345\n"
+          "03.01.2024;1.238,25;1.250,00;1.235,00;1.249,75;10.001\n")
+TABS = "datetime\to\th\tl\tc\tv\n2024-01-02 09:30\t10\t11\t9\t10.5\t100\n2024-01-02 09:35\t10.5\t12\t10\t11.5\t120\n"
+PIPES = 'Trade Date|Last Price|Qty\n2024-03-01|"1,005.5"|7\n2024-03-04|1010|8\n'
+
+
+def browser_normalize(cases):
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        return None
+    page = open(os.path.join(ROOT, "index.html"), encoding="utf-8").read()
+    a = page.index("const TABLE_ALIASES = {")
+    b = page.index("// A bar's time stamp, exactly as engine._iso_stamp:")
+    js = page[a:b] + "\nconst cases = JSON.parse(require('fs').readFileSync(0, 'utf8'));\n" \
+        "process.stdout.write(JSON.stringify(cases.map(c => { try { return normalizeTable(c[0], c[1], c[2], c[3]); } catch (e) { return {error: e.message}; } })));\n"
+    out = subprocess.run([node, "-e", js], input=json.dumps(cases), capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_generic_tables_normalize_identically_in_page_and_engine():
+    mapping = {"date": "Datum", "open": "Eröffnung", "high": "Hoch", "low": "Tief", "close": "Schluss", "volume": "Volumen"}
+    cases = [[GERMAN, mapping, None, None], [TABS, None, None, None], [PIPES, None, None, None], [GERMAN, None, None, None]]
+    py = []
+    for text, m, d, dc in cases:
+        try:
+            py.append(engine.normalize_table(text, m, d, dc))
+        except ValueError as e:
+            py.append({"error": str(e)})
+    de = engine.parse_csv_text(py[0], "DAX")
+    assert de.dates == ["2024-01-02", "2024-01-03"] and de.close == [1238.25, 1249.75] and de.volume[0] == 12345
+    tb = engine.parse_csv_text(py[1], "X")
+    assert tb.dates == ["2024-01-02T09:30", "2024-01-02T09:35"] and tb.high == [11.0, 12.0]
+    pp = engine.parse_csv_text(py[2], "X")
+    assert pp.close == [1005.5, 1010.0] and pp.volume == [7.0, 8.0]
+    assert "error" in py[3], "German names aren't guessed: the page asks for a mapping"
+    js = browser_normalize(cases)
+    if js is None:
+        print("skip  browser/Python table parity (needs node)")
+        return
+    for a, b in zip(py, js):
+        assert (a == b) or ("error" in a and "error" in b), (a, b)
+
+
+def test_parquet_files_load():
+    try:
+        import pandas as pd
+        pd.io.parquet.get_engine("auto")
+    except Exception:  # noqa: BLE001
+        print("skip  parquet (needs pandas with pyarrow or fastparquet)")
+        return
+    import tempfile
+    df = pd.DataFrame({"open": [10.0, 11.0, 12.0], "high": [11.0, 12.0, 13.0], "low": [9.0, 10.0, 11.0],
+                       "close": [10.5, 11.5, 12.5], "volume": [100, 200, 300]},
+                      index=pd.DatetimeIndex(["2024-01-02", "2024-01-03", "2024-01-04"], name="date"))
+    intr = pd.DataFrame({"timestamp": pd.to_datetime(["2024-01-02 09:30", "2024-01-02 09:35"]), "price": [1.0, 2.0]})
+    with tempfile.TemporaryDirectory() as tmp:
+        p1, p2 = os.path.join(tmp, "abc.parquet"), os.path.join(tmp, "bars.parquet")
+        df.to_parquet(p1)
+        intr.to_parquet(p2)
+        ds = engine.load_table(p1)
+        assert ds.ticker == "ABC" and ds.dates == ["2024-01-02", "2024-01-03", "2024-01-04"] and ds.close == [10.5, 11.5, 12.5]
+        b = engine.load_table(p2, "BARS")
+        assert b.dates == ["2024-01-02T09:30", "2024-01-02T09:35"] and b.close == [1.0, 2.0]
+        import base64
+        out = json.loads(engine.handle("read_parquet", json.dumps({"data": base64.b64encode(open(p1, "rb").read()).decode()})))
+        assert out["ok"] and out["result"]["text"].startswith("date,open")
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
