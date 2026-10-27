@@ -68,7 +68,15 @@ trailing realized volatility or a loaded volatility index), not market quotes.
 **Start/End Surfaces** score every window: S(s, e), the strategy backtested from s to e, and B(s, e),
 the benchmark over the same window, for a chosen statistic (return, CAGR, Sharpe, drawdown …), as
 heatmaps or 3D surfaces. **Strategy Ranking** backtests every built-in strategy on your market and settings,
-ranks them by a chosen statistic, and deflates the winner's Sharpe ratio for the number tried.
+ranks them by a chosen statistic, and deflates the winner's Sharpe ratio for the number tried. **Every Instrument** runs the
+strategy in the editor on every loaded instrument against each one's buy & hold.
+
+## Stock dashboard
+
+The **Charts** tab shows one instrument with moving averages, Bollinger, Keltner and Donchian channels
+(line or candles) above panes for volume, RSI, MACD, stochastics, ADX, ATR, OBV, Williams %R, CCI, rate
+of change and volatility, with a shared crosshair, the latest readings, and a table of classic patterns
+(golden crosses, MACD and RSI signals, band breaks, 52-week highs …) with the returns that followed them.
 
 ## Paper trading
 

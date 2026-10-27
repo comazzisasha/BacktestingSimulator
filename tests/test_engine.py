@@ -2529,6 +2529,112 @@ def test_ranking_deflates_the_winner_and_measures_overfitting():
     assert 0 <= sel["pbo"] <= 1
 
 
+# --------------------------------------------- one strategy on every instrument -----
+
+def test_breadth_counts_improvements_and_tests_them():
+    from scipy import stats
+    rng = random.Random(5)
+    rows = []
+    for i in range(23):
+        a, b = rng.gauss(0.5, 0.4), rng.gauss(0.4, 0.3)
+        rows.append({"ticker": "T%02d" % i, "metrics": {"sharpe": a, "volatility": abs(a) / 3}, "bench": {"sharpe": b, "volatility": abs(b) / 3}})
+    rows.append({"ticker": "TIE", "metrics": {"sharpe": 0.3}, "bench": {"sharpe": 0.3}})
+    rows.append({"ticker": "NAN", "metrics": {"sharpe": float("nan")}, "bench": {"sharpe": 0.2}})
+    rows.append({"ticker": "BAD", "error": "No data"})
+    out = engine.strategy_breadth(rows, "sharpe")
+    imp = [r["metrics"]["sharpe"] - r["bench"]["sharpe"] for r in rows[:24]]
+    wins, losses = sum(1 for d in imp if d > 0), sum(1 for d in imp if d < 0)
+    assert (out["wins"], out["losses"], out["ties"], out["n"]) == (wins, losses, 1, 24)
+    assert approx(out["sign_p"], stats.binomtest(wins, wins + losses, 0.5, alternative="greater").pvalue, 1e-9)
+    tt = stats.ttest_1samp(imp, 0.0, alternative="greater")
+    assert approx(out["t_stat"], tt.statistic, 1e-9) and approx(out["t_p"], tt.pvalue, 1e-7)
+    assert out["missing"] == ["NAN"] and out["failed"] == [{"ticker": "BAD", "error": "No data"}]
+    vals = [r["value"] for r in out["rows"]]
+    assert vals == sorted(vals, reverse=True) and [r["rank"] for r in out["rows"]] == list(range(1, 25))
+    vol = engine.strategy_breadth(rows, "volatility")
+    assert vol["lower_better"] and all(approx(r["improvement"], r["bench"] - r["value"]) for r in vol["rows"]), "lower volatility is the improvement"
+    assert [r["value"] for r in vol["rows"]] == sorted(r["value"] for r in vol["rows"])
+
+
+def test_breadth_api_with_real_runs():
+    engine.DATA["DEMO-STOCK"], engine.DATA["DEMO-BOND"] = DEMO, BOND
+    rows = []
+    for t in ("DEMO-STOCK", "DEMO-BOND", "MISSING"):
+        out = json.loads(engine.handle("metrics", json.dumps({"ticker": t, "code": load_templates()["sma_cross"], "bench_metrics": True})))
+        rows.append({"ticker": t, "metrics": out["result"]["full"], "bench": out["result"]["bench"]} if out["ok"] else {"ticker": t, "error": out["error"]["message"]})
+        if out["ok"]:
+            res = engine.backtest(engine.Strategy.from_code(load_templates()["sma_cross"]), engine.DATA[t], engine.Config())
+            m, b = engine.summarize(res)
+            assert approx(out["result"]["bench"]["cagr"], b["cagr"]) and approx(out["result"]["full"]["sharpe"], m["sharpe"])
+    r = json.loads(engine.handle("breadth", json.dumps({"rows": rows, "stat": "cagr"})))
+    assert r["ok"] and r["result"]["n"] == 2 and r["result"]["failed"][0]["ticker"] == "MISSING"
+
+
+# --------------------------------------------------------------- stock dashboard -----
+
+def _np_cross(a, b):
+    import numpy as np
+    a, b = np.array(a, float), np.array(b, float)
+    ok = ~(np.isnan(a) | np.isnan(b))
+    up = np.zeros(len(a), bool)
+    up[1:] = ok[1:] & ok[:-1] & (a[1:] > b[1:]) & (a[:-1] <= b[:-1])
+    return set(np.nonzero(up)[0].tolist())
+
+
+def test_dashboard_events_and_study_match_independent_checks():
+    import numpy as np
+    ds = bundled("SPY")
+    start = ds.dates[600]
+    d = engine.dashboard(ds, start=start)
+    s = 600
+    c = np.array(ds.close)
+    sma = lambda k: np.convolve(c, np.ones(k) / k, "valid")
+    s50 = np.r_[np.full(49, np.nan), sma(50)]
+    s200 = np.r_[np.full(199, np.nan), sma(200)]
+    ev = {x["key"]: x for x in d["events"]}
+    want = sorted(t for t in _np_cross(s50, s200) if t >= s)
+    assert [ds.dates[t] for t in want] == ev["golden_cross"]["dates"] and ev["golden_cross"]["index"] == [t - s for t in want]
+    assert ev["death_cross"]["dates"] == [ds.dates[t] for t in sorted(t for t in _np_cross(s200, s50) if t >= s)]
+    # 52-week highs: close above the prior 252 closes' high, the first bar of a run
+    hi = [t for t in range(253, ds.n) if c[t] > c[t - 252:t].max() and not c[t - 1] > c[t - 253:t - 1].max() and t >= s]
+    assert ev["high_52w"]["dates"] == [ds.dates[t] for t in hi]
+    # event study: forward total return after each golden cross vs all bars in the range
+    tr = np.array(ds.total_return_index())
+    for hz in d["horizons"]:
+        f = [tr[t + hz] / tr[t] - 1 for t in want if t + hz < ds.n]
+        st = ev["golden_cross"]["study"][hz]
+        assert st["n"] == len(f) and (not f or approx(st["mean"], float(np.mean(f)), 1e-12))
+        allf = [tr[t + hz] / tr[t] - 1 for t in range(s, ds.n) if t + hz < ds.n]
+        assert approx(d["baseline"][hz]["mean"], float(np.mean(allf)), 1e-12)
+        assert approx(d["baseline"][hz]["hit"], float(np.mean(np.array(allf) > 0)), 1e-12)
+    # overlays are warmed up on bars before the start, and match the library functions
+    assert d["dates"][0] == start and d["overlays"]["sma_200"][0] is not None
+    assert approx(d["overlays"]["sma_200"][0], float(s200[s]), 1e-6)
+    full_rsi = engine.rsi(ds.close, 14)
+    assert approx(d["panes"]["rsi"][100], full_rsi[s + 100], 1e-6)
+    r = d["readings"]
+    assert r["date"] == ds.dates[-1] and approx(r["pct_vs_sma200"], c[-1] / s200[-1] - 1, 1e-9)
+    assert approx(r["high_52w"], float(c[-252:].max())) and approx(r["ret_1y"], tr[-1] / tr[-253] - 1, 1e-12)
+    assert r["trend"] == ("up" if s50[-1] > s200[-1] else "down")
+
+
+def test_dashboard_events_use_no_future_data():
+    ds = bundled("QQQ")
+    k = 900
+    cut = engine.DataSet("CUT", ds.dates[:k], ds.close[:k], ds.open[:k], ds.high[:k], ds.low[:k], ds.volume[:k])
+    full, part = engine.dashboard(ds, end=ds.dates[k - 1]), engine.dashboard(cut)
+    for a, b in zip(full["events"], part["events"]):
+        assert a["dates"] == b["dates"], a["key"]
+    assert full["panes"]["macd"] == part["panes"]["macd"] and full["overlays"]["bb_up"] == part["overlays"]["bb_up"]
+    out = json.loads(engine.handle("dashboard", json.dumps({"ticker": "NOPE"})))
+    assert not out["ok"]
+    engine.DATA["QQQ"] = ds
+    bad = json.loads(engine.handle("dashboard", json.dumps({"ticker": "QQQ", "sma": [1]})))
+    assert not bad["ok"] and "periods" in bad["error"]["message"]
+    ok = json.loads(engine.handle("dashboard", json.dumps({"ticker": "QQQ", "sma": [10, 30], "ema": [9]})))["result"]
+    assert set(ok["overlays"]) >= {"sma_10", "sma_30", "ema_9"} and "sma_200" not in ok["overlays"]
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

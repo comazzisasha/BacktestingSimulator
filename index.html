@@ -218,8 +218,7 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--border); background: var(--sunk); color: var(--fg-2); white-space: nowrap; }
 .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .badge.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
-.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 4px 12px; }
-.checks .check { white-space: nowrap; }
+.optlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 4px 12px; }
 fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .rank-bars { position: relative; width: 100%; }
 .surf-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
@@ -231,7 +230,30 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .surf-legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-3); }
 .surf-legend .ramp { flex: 0 1 220px; height: 10px; border-radius: 3px; border: 1px solid var(--border); }
 .surf-read { min-height: 2.6em; margin: 0; font-variant-numeric: tabular-nums; }
-.seg { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.db-row { align-items: flex-end; gap: 12px 24px; }
+.db-row .field { margin: 0; min-width: 0; max-width: 100%; }
+.db-row select { max-width: 100%; }
+#dbRange { flex-wrap: wrap; }
+.db-over { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.db-over input.small { width: 110px; min-height: 30px; padding: 0 8px; }
+.db-over .check + input.small { margin-right: 12px; }
+.db-chartsb, #dbEvents { grid-template-columns: minmax(0, 1fr); }   /* let the canvases & table shrink with the window */
+.db-hover { margin: 0 0 8px; min-height: 2.8em; font-size: 12.5px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.db-hover b { color: var(--fg); font-weight: 600; }
+.db-pane { position: relative; }
+.db-pane + .db-pane { margin-top: 6px; }
+.db-pane h3 { margin: 0; font-size: 12px; font-weight: 500; color: var(--fg-3); }
+.db-pane .chart { height: 120px; }
+.db-pane.price .chart { height: 360px; }
+.db-pane.vol .chart { height: 90px; }
+.db-pane canvas:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.db-legend { display: flex; flex-wrap: wrap; gap: 2px 14px; margin: 0 0 4px; padding: 0; list-style: none; font-size: 12px; color: var(--fg-2); }
+.db-legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.evside { font-size: 12px; font-weight: 500; }
+.evside.bull { color: var(--gain); }
+.evside.bear { color: var(--loss); }
+@media (max-width: 720px) { .db-pane.price .chart { height: 280px; } }
+.radios { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .divcell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .divwait { margin: 0; padding: 10px 16px 14px; }
 .badge.ok { color: var(--gain); }
@@ -480,6 +502,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
     <nav class="tabs" aria-label="Sections">
       <a href="#backtest" data-tab="backtest">Backtest</a>
       <a href="#edit" data-tab="edit">Editor</a>
+      <a href="#charts" data-tab="charts">Charts</a>
       <a href="#tools" data-tab="tools">Research Tools</a>
       <a href="#data" data-tab="data">Data</a>
       <a href="#history" data-tab="history">History</a>
@@ -821,6 +844,46 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
   </section>
 
   <!-- ================================================================ TOOLS -->
+  <section class="view stack" id="view-charts" aria-labelledby="h-charts" hidden>
+    <div class="viewhead"><h1 id="h-charts">Stock Dashboard</h1><p>One instrument’s price, moving averages, channels & oscillators on one screen, the classic patterns they flag, and what followed those patterns in the past.</p></div>
+    <section class="panel" aria-labelledby="h-dbset">
+      <div class="panel-h"><h2 id="h-dbset">Chart Settings</h2><span class="muted" id="dbAsOf"></span></div>
+      <div class="panel-b stack db-set">
+        <div class="row db-row">
+          <div class="field"><label for="dbTicker">Instrument</label><select id="dbTicker" name="dashboard-instrument" translate="no"></select></div>
+          <div class="field"><span class="label" id="dbRange-l">Range</span><div class="seg" id="dbRange" role="group" aria-labelledby="dbRange-l"></div></div>
+          <div class="field"><span class="label" id="dbStyle-l">Price</span><div class="seg" id="dbStyle" role="group" aria-labelledby="dbStyle-l"><button type="button" data-style="line" aria-pressed="true">Line</button><button type="button" data-style="candles" aria-pressed="false">Candles</button></div></div>
+        </div>
+        <fieldset class="field"><legend class="label">On the Price Chart</legend>
+          <div class="db-over">
+            <label class="check"><input type="checkbox" data-over="sma"> SMA</label><input type="text" id="dbSma" class="small" name="sma-periods" value="20, 50, 200" autocomplete="off" spellcheck="false" aria-label="SMA periods" aria-describedby="dbSma-err">
+            <label class="check"><input type="checkbox" data-over="ema"> EMA</label><input type="text" id="dbEma" class="small" name="ema-periods" value="12, 26" autocomplete="off" spellcheck="false" aria-label="EMA periods" aria-describedby="dbEma-err">
+            <label class="check"><input type="checkbox" data-over="bb"> Bollinger (20, 2)</label>
+            <label class="check"><input type="checkbox" data-over="kc"> Keltner (20, 2 ATR)</label>
+            <label class="check"><input type="checkbox" data-over="dc"> Donchian (20)</label>
+          </div>
+          <p class="ferr" id="dbSma-err" hidden></p><p class="ferr" id="dbEma-err" hidden></p>
+        </fieldset>
+        <fieldset class="field"><legend class="label">Indicator Panes</legend><div class="optlist" id="dbPanes"></div></fieldset>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="h-dbread">
+      <div class="panel-h"><h2 id="h-dbread">Latest Readings</h2><span class="muted" id="dbReadDate"></span></div>
+      <dl class="kpis" id="dbRead"><div class="kpi"><dt>Loading…</dt><dd><span class="v">—</span></dd></div></dl>
+    </section>
+    <section class="panel" aria-labelledby="h-dbch">
+      <div class="panel-h"><h2 id="h-dbch">Charts</h2><span class="muted">Hover, or focus the price chart & use the arrow keys, to read every line on one day.</span></div>
+      <div class="panel-b db-chartsb">
+        <p class="db-hover" id="dbHover"></p>
+        <div id="dbCharts"><p class="out-empty">Loading…</p></div>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="h-dbpat">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-dbpat">Patterns</h2><p>Each classic signal in the chosen range, and the return over the next 5, 20 & 60 trading days compared with all days. Tick a pattern to mark it on the price chart.</p></div></div>
+      <div class="panel-b" id="dbEvents"></div>
+    </section>
+  </section>
+
   <section class="view stack" id="view-tools" aria-labelledby="h-tools" hidden>
     <div class="viewhead"><h1 id="h-tools">Research Tools</h1><p>Stress-test your strategy before you trust it.</p></div>
     <div class="panel ctxline" id="toolCtx"></div>
@@ -920,7 +983,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
             <div class="field"><label for="sfMin">Shortest Window</label><select id="sfMin" name="shortest-window"><option value="0">Any</option><option value="182">6 months</option><option value="365" selected>1 year</option><option value="1095">3 years</option></select></div>
           </div>
           <p class="help" id="sfStep-help">Windows start & end on the first trading day of each month, quarter or year in your date range. One backtest per start date; monthly over 10 years is 120 backtests. Short windows make annualized statistics swing wildly, so they’re hidden by default.</p>
-          <div class="field"><span class="label" id="sfView-l">View</span><div class="seg" role="radiogroup" aria-labelledby="sfView-l"><label class="check"><input type="radio" name="sf-view" value="heat" checked> Heatmap</label><label class="check"><input type="radio" name="sf-view" value="3d"> 3D surface</label></div></div>
+          <div class="field"><span class="label" id="sfView-l">View</span><div class="radios" role="radiogroup" aria-labelledby="sfView-l"><label class="check"><input type="radio" name="sf-view" value="heat" checked> Heatmap</label><label class="check"><input type="radio" name="sf-view" value="3d"> 3D surface</label></div></div>
           <div class="row"><button class="btn primary" id="sfRun" type="submit">Build Surfaces</button><button class="btn" id="sfStop" type="button" hidden>Cancel</button><span class="muted tnum" id="sfCount" aria-live="polite"></span></div>
           <div class="bar" id="sfBar" hidden role="progressbar" aria-label="Surface progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
         </form>
@@ -933,12 +996,26 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       <div class="panel-b toolgrid">
         <form class="toolform" id="rankForm" novalidate>
           <div class="field"><label for="rnBy">Rank By</label><select id="rnBy" name="rank-by"><option value="sharpe" selected>Sharpe ratio</option><option value="cagr">CAGR</option><option value="total_return">Total return</option><option value="sortino">Sortino ratio</option><option value="calmar">Calmar ratio</option><option value="max_drawdown">Max drawdown (shallowest first)</option><option value="volatility">Volatility (lowest first)</option><option value="information_ratio">Information ratio</option><option value="alpha">Alpha</option><option value="psr">Probabilistic Sharpe</option></select></div>
-          <fieldset class="field"><legend class="label">Strategies</legend><div class="checks" id="rnGroups"></div></fieldset>
+          <fieldset class="field"><legend class="label">Strategies</legend><div class="optlist" id="rnGroups"></div></fieldset>
           <p class="help" id="rnWhere"></p>
           <div class="row"><button class="btn primary" id="rnRun" type="submit">Rank Strategies</button><button class="btn" id="rnStop" type="button" hidden>Cancel</button><span class="muted tnum" id="rnCount" aria-live="polite"></span></div>
           <div class="bar" id="rnBar" hidden role="progressbar" aria-label="Ranking progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
         </form>
         <div class="out" id="rnOut" aria-live="polite"><p class="out-empty">Runs each strategy once, in parallel where your browser allows.</p></div>
+      </div>
+    </section>
+
+    <section class="panel" id="breadth" data-opt="breadth" aria-labelledby="h-breadth">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-breadth">Every Instrument</h2><p>Run your current strategy on every loaded instrument & compare each run with buying & holding that instrument. A strategy that only works on one ticker probably learned that ticker’s history, not a market effect.</p></div></div>
+      <div class="panel-b toolgrid">
+        <form class="toolform" id="breadthForm" novalidate>
+          <div class="field"><label for="ewBy">Compare By</label><select id="ewBy" name="compare-by"><option value="sharpe" selected>Sharpe ratio</option><option value="cagr">CAGR</option><option value="total_return">Total return</option><option value="sortino">Sortino ratio</option><option value="calmar">Calmar ratio</option><option value="max_drawdown">Max drawdown (shallowest first)</option><option value="volatility">Volatility (lowest first)</option></select></div>
+          <label class="check"><input type="checkbox" id="ewSynth" name="skip-synthetic" checked> Skip synthetic demo data</label>
+          <p class="help" id="ewWhere"></p>
+          <div class="row"><button class="btn primary" id="ewRun" type="submit">Run on Every Instrument</button><button class="btn" id="ewStop" type="button" hidden>Cancel</button><span class="muted tnum" id="ewCount" aria-live="polite"></span></div>
+          <div class="bar" id="ewBar" hidden role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+        </form>
+        <div class="out" id="ewOut" aria-live="polite"><p class="out-empty">Uses the code in the editor with its default parameters, your date range & settings. Single-instrument strategies only.</p></div>
       </div>
     </section>
 
@@ -1237,7 +1314,7 @@ const LOCALE = (() => {
   }
   return 'en-US';
 })();
-const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'surface', 'ranking', 'risk', 'capacity', 'options', 'subperiods', 'costs', 'permutation', 'analytics'];
+const TOOL_SECTIONS = ['sweep', 'wfo', 'montecarlo', 'split', 'surface', 'ranking', 'breadth', 'risk', 'capacity', 'options', 'subperiods', 'costs', 'permutation', 'analytics'];
 
 const RECOMMENDED = [
   ['SPY', 'S&P 500', 'etf'], ['QQQ', 'Nasdaq-100', 'etf'], ['IWM', 'Russell 2000', 'etf'], ['DIA', 'Dow Jones 30', 'etf'],
@@ -1255,6 +1332,7 @@ function NF(key, opts) { return nf[key] || (nf[key] = new Intl.NumberFormat(LOCA
 const UTC_DAY = { timeZone: 'UTC' };
 const dfDay = new Intl.DateTimeFormat(LOCALE, { year: 'numeric', month: 'short', day: 'numeric', ...UTC_DAY });
 const dfMonth = new Intl.DateTimeFormat(LOCALE, { year: 'numeric', month: 'short', ...UTC_DAY });
+const dfDayShort = new Intl.DateTimeFormat(LOCALE, { month: 'short', day: 'numeric', ...UTC_DAY });
 const toDate = iso => new Date(iso.slice(0, 10) + 'T00:00:00Z');   // intraday stamps: the date part
 const fmt = {
   pct: (v, d = 2, signed = false) => (v == null ? '—' : NF(`p${d}${signed}`, { style: 'percent', minimumFractionDigits: d, maximumFractionDigits: d, signDisplay: signed ? 'exceptZero' : 'auto' }).format(v)),
@@ -1267,6 +1345,7 @@ const fmt = {
   years: v => (v == null ? '—' : NF('n1', { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(v) + ' years'),
   pval: v => (v == null ? '—' : v < 0.001 ? '< ' + NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(0.001) : NF('n3', { minimumFractionDigits: 3, maximumFractionDigits: 3 }).format(v)),
   price: v => (v == null ? '—' : NF('px', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(v)),
+  compact: v => (v == null || !isFinite(v) ? '—' : NF('compact', { notation: 'compact', maximumFractionDigits: 1 }).format(v)),
   date: iso => (iso ? dfDay.format(toDate(iso)) + (iso.length > 10 ? ' ' + iso.slice(11, 16) : '') : '—'),
   month: iso => (iso ? dfMonth.format(toDate(iso)) : ''),
 };
@@ -1325,7 +1404,7 @@ const trials = {
 // Choices are remembered in this browser, separately for panels, statistics & tools.
 const PANELS = [['relative', 'Relative Performance', 'std'], ['heat', 'Monthly Returns', 'std'], ['hist', 'Daily Return Distribution', 'std'], ['annual', 'Annual Returns', 'extra'],
   ['roll', 'Rolling Sharpe Ratio', 'std'], ['vol', 'Rolling Volatility', 'extra']];
-const TOOLS = [['surface', 'Start/End Surfaces', 'std'], ['ranking', 'Strategy Ranking', 'std'], ['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['options', 'Options Overlay', 'extra'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
+const TOOLS = [['surface', 'Start/End Surfaces', 'std'], ['ranking', 'Strategy Ranking', 'std'], ['breadth', 'Every Instrument', 'std'], ['risk', 'Risk Report', 'std'], ['capacity', 'Capacity', 'std'], ['options', 'Options Overlay', 'extra'], ['subperiods', 'Sub-Period Consistency', 'extra'], ['costs', 'Cost Sensitivity', 'extra'], ['permutation', 'Random-Timing Test', 'extra'],
   ['analytics', 'Instrument Analytics', 'std']];
 const shown = {
   is(kind, key, tier) { if (tier === 'core') return true; const o = store.get('show.' + kind, {}); return key in o ? !!o[key] : tier === 'std'; },
@@ -2580,7 +2659,7 @@ function applyCodeInfo(info, code) {
   if (before !== isPortfolio()) { const b = $('#benchmark'); if (b.options.length) b.options[0].textContent = isPortfolio() ? 'Equal weight (universe)' : 'Same instrument (buy & hold)'; }
   $('#instField').hidden = isPortfolio(); $('#univField').hidden = !isPortfolio();
   if (!isPortfolio()) { $('#univPick').hidden = true; $('#univBtn').setAttribute('aria-expanded', 'false'); }
-  renderUniverse(); updateDateBounds(); toolContext();
+  renderUniverse(); updateDateBounds(); toolContext(); ewWhere();
 }
 function renderUniverse() {
   if (!isPortfolio()) return;
@@ -3845,6 +3924,307 @@ function renderRanking(r) {
   });
 }
 
+/* ------------------------------------------------------ every instrument -- */
+// The strategy in the editor on every loaded instrument, each against its own buy & hold;
+// Python counts the improvements & tests whether they are more than chance.
+let ewCancel = false, ewRunning = false, ewLast = null;
+const ewTickers = () => sortedTickers().filter(t => !($('#ewSynth').checked && instruments.get(t).synthetic));
+function ewWhere() {
+  const el = $('#ewWhere'); if (!el) return;
+  const n = ewTickers().length;
+  el.innerHTML = isPortfolio() ? 'The strategy in the editor defines <code translate="no">UNIVERSE</code>, so it already trades several instruments. Pick a single-instrument strategy to use this tool.'
+    : `<b>${esc(currentSource().name)}</b> on ${fmt.int(n)} instrument${n === 1 ? '' : 's'}, each compared with its own buy & hold (your benchmark setting is ignored here).`;
+}
+async function runBreadth(ev) {
+  ev.preventDefault();
+  if (ewRunning) return;
+  const out = $('#ewOut'), btn = $('#ewRun'), bar = $('#ewBar');
+  const base = await freshPayload(); ewWhere();
+  if (isPortfolio()) { out.innerHTML = '<p class="ferr">This strategy defines UNIVERSE, so it already trades several instruments. Open a single-instrument strategy first.</p>'; return; }
+  const tickers = ewTickers();
+  if (tickers.length < 2) { out.innerHTML = '<p class="ferr">Load at least two instruments on the Data tab.</p>'; return; }
+  ewCancel = false; ewRunning = true; loadingOn(btn); busy(true, 'Running on every instrument…');
+  $('#ewStop').hidden = false; bar.hidden = false; progress(bar, 0);
+  try {
+    const res = await pool.map(tickers, async (client, t) => {
+      const pl = { ...base, ticker: t, benchmark: '', benchmarks: undefined, bench_metrics: true };
+      try { await ensurePayload(pl, client); return await client.call('metrics', pl); }
+      catch (e) { if (e instanceof PyError) return { error: (e.info && e.info.message) || e.message }; throw e; }
+    }, { cancelled: () => ewCancel, onDone: n => { progress(bar, n / tickers.length); $('#ewCount').textContent = `${fmt.int(n)} of ${fmt.int(tickers.length)}`; } });
+    const rows = tickers.map((t, i) => (res[i] ? (res[i].error ? { ticker: t, error: res[i].error } : { ticker: t, metrics: res[i].full, bench: res[i].bench, start: res[i].start, end: res[i].end }) : null)).filter(Boolean);
+    ewLast = { rows, strategy: currentSource().name, template: $('#template').value, cancelled: ewCancel, total: tickers.length };
+    await ewRender();
+  } catch (e) { toolError(out, e); }
+  finally { ewRunning = false; busy(false); $('#ewStop').hidden = true; bar.hidden = true; $('#ewCount').textContent = ''; await loadingOff(btn); }
+}
+async function ewRender() {
+  const L = ewLast; if (!L) return;
+  const stat = $('#ewBy').value, out = $('#ewOut');
+  let r; try { r = await py.call('breadth', { rows: L.rows, stat }); } catch (e) { toolError(out, e); return; }
+  out.innerHTML = ''; const P = palette();
+  const meta = METRICS.find(m => m.key === stat) || { label: stat, fmt: 'num' };
+  const pctish = meta.fmt === 'pct', F = v => (v == null ? '—' : pctish ? fmt.pct(v, 1, stat !== 'volatility' && stat !== 'max_drawdown') : fmt.num(v));
+  const Fd = v => (v == null ? '—' : pctish ? fmt.pct(v, 1, true) : (v >= 0 ? '+' : '') + fmt.num(v));
+  const add = html => { const d = document.createElement('div'); d.className = 'stack'; d.innerHTML = html; out.appendChild(d); return d; };
+  const by = $('#ewBy').selectedOptions[0].textContent.replace(/\s*\(.*\)$/, ''), noun = /^(Sharpe|Sortino|Calmar|CAGR)/.test(by) ? by : by.toLowerCase();
+  const better = stat === 'volatility' ? 'lower volatility than' : stat === 'max_drawdown' ? 'a shallower max drawdown than' : `a higher ${noun} than`;
+  if (!r.n) { add(`<p class="ferr">No instrument gave a ${esc(noun)} for both the strategy & buy & hold.</p>`); }
+  else {
+    let txt = `${L.cancelled ? `<b>Cancelled</b>: ${fmt.int(L.rows.length)} of ${fmt.int(L.total)} instruments finished. ` : ''}<b>${esc(L.strategy)}</b> had ${better} buy & hold on <b>${fmt.int(r.wins)} of ${fmt.int(r.n)}</b> instruments (${fmt.pct(r.share, 0)})${r.ties ? `, ${fmt.int(r.ties)} tied` : ''}. ` +
+      `Median ${esc(noun)}: strategy ${F(r.median_value)}, buy & hold ${F(r.median_bench)}; average improvement ${Fd(r.mean_improvement)}.`;
+    if (r.sign_p != null) txt += ` If the strategy were no better than buy & hold, doing better on ${fmt.int(r.wins)} or more of ${fmt.int(r.wins + r.losses)} would happen with probability <b>${fmt.pval(r.sign_p)}</b> (sign test)${r.t_p != null ? `; the average improvement has t = ${fmt.num(r.t_stat)}, p = ${fmt.pval(r.t_p)}` : ''}.`;
+    txt += ' Instruments move together, so they aren’t fully independent tests: read the p-values as optimistic.';
+    add(`<p style="margin:0">${txt}</p>`);
+    // strategy vs buy & hold, one point per instrument; above the line = the strategy did better
+    const box = add(`<div class="chart mid"><canvas role="img" aria-label="${esc(meta.label)} of the strategy against buy & hold, one point per instrument"></canvas></div>`);
+    const pts = r.rows.map(x => ({ x: x.bench, y: x.value, t: x.ticker, win: x.improvement > 0 }));
+    const lo = Math.min(...pts.map(p => Math.min(p.x, p.y))), hi = Math.max(...pts.map(p => Math.max(p.x, p.y))), pad = (hi - lo) * 0.06 || 0.1;
+    kill('breadth');
+    charts.breadth = new Chart(box.querySelector('canvas'), { type: 'scatter', data: { datasets: [
+      { label: 'Instruments', data: pts, pointRadius: 5, pointHoverRadius: 7, backgroundColor: pts.map(p => alpha(p.win ? P.gain : P.loss, 0.8)), borderColor: pts.map(p => (p.win ? P.gain : P.loss)) },
+      { type: 'line', label: 'Equal', data: [{ x: lo - pad, y: lo - pad }, { x: hi + pad, y: hi + pad }], borderColor: P.fg3, borderDash: [4, 4], borderWidth: 1, pointRadius: 0 },
+    ] }, options: { animation: false, responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false },
+      tooltip: { ...tipStyle(P), filter: it => it.datasetIndex === 0, callbacks: { label: c => ` ${c.raw.t}: strategy ${F(c.raw.y)}, buy & hold ${F(c.raw.x)}` } } },
+      scales: { x: { min: lo - pad, max: hi + pad, title: { display: true, text: `Buy & hold ${meta.label}`, color: P.fg3 }, grid: { color: P.grid }, ticks: { color: P.fg3, callback: v => F(v) } },
+        y: { min: lo - pad, max: hi + pad, title: { display: true, text: `Strategy ${meta.label}`, color: P.fg3 }, grid: { color: P.grid }, ticks: { color: P.fg3, callback: v => F(v) } } } } });
+    add(`<p class="help" style="margin:0">One point per instrument. ${r.lower_better ? 'Below' : 'Above'} the dashed line the strategy did better (green).</p>`);
+  }
+  const yrs = x => { const row = L.rows.find(y => y.ticker === x.ticker); return row && row.start ? fmt.num(surfDays(row.start, row.end) / 365.25, 1) : '—'; };
+  const rows = r.rows.map(x => [fmt.int(x.rank), `<b translate="no" title="${esc((instruments.get(x.ticker) || {}).name || '')}">${esc(x.ticker)}</b>`, `<b>${F(x.value)}</b>`, F(x.bench),
+    `<span class="${sign(x.improvement)}">${Fd(r.lower_better ? -x.improvement : x.improvement)}</span>`, fmt.pct(x.metrics.cagr, 1, true), fmt.pct(x.metrics.max_drawdown, 1), fmt.int(x.metrics.n_trades), fmt.pct(x.metrics.exposure, 0), yrs(x),
+    `<button class="btn small" type="button" data-ew-open="${esc(x.ticker)}">Open</button>`]);
+  const head = ['Rank', 'Instrument', 'Strategy', 'Buy & Hold', 'Difference', 'CAGR', 'Max Drawdown', 'Trades', 'Time in Market', 'Years', '<span class="sr">Open</span>'];
+  const t = add(`<div class="tablebox" tabindex="0" aria-label="Results by instrument"><table><caption class="sr">Results by instrument</caption><thead><tr>${head.map((h, i) => `<th scope="col"${i === 1 ? '' : ' class="n"'}>${h}</th>`).join('')}</tr></thead><tbody>` +
+    rows.map(rw => `<tr>${rw.map((c, i) => (i === 1 ? `<th scope="row">${c}</th>` : `<td class="n">${c}</td>`)).join('')}</tr>`).join('') + '</tbody></table></div>' +
+    (r.failed.length ? `<p class="help">Didn’t run: ${r.failed.map(f => `<b translate="no">${esc(f.ticker)}</b> (${esc(rankErr(f.error))})`).join('; ')}.</p>` : '') +
+    (r.missing.length ? `<p class="help">No ${esc(noun)} for <span translate="no">${esc(r.missing.join(', '))}</span> (too few returns, or no volatility).</p>` : '') +
+    `<p class="help">Difference is strategy minus buy & hold. Each instrument runs over the part of your date range it has data for (the Years column). <b>Open</b> shows the strategy on that instrument on the Backtest tab.</p>` +
+    `<div class="row"><button class="btn small" type="button" id="ewCsv">Download CSV</button></div>`);
+  $('#ewCsv').onclick = () => {
+    const keys = ['cagr', 'total_return', 'sharpe', 'sortino', 'volatility', 'max_drawdown', 'n_trades', 'exposure'];
+    const lines = [['rank', 'ticker', stat, 'buy_hold_' + stat, 'difference', 'start', 'end', ...keys].join(',')].concat(r.rows.map(x => {
+      const row = L.rows.find(y => y.ticker === x.ticker) || {};
+      return [x.rank, x.ticker, x.value, x.bench, r.lower_better ? -x.improvement : x.improvement, row.start || '', row.end || '', ...keys.map(k => (x.metrics[k] == null ? '' : x.metrics[k]))].join(',');
+    }));
+    downloadFile(`quantlab_every_instrument_${stat}.csv`, lines.join('\n') + '\n', 'text/csv');
+  };
+  t.addEventListener('click', e => {
+    const b = e.target.closest('button[data-ew-open]'); if (!b) return;
+    if (L.template && $('#template').value !== L.template) { $('#template').value = L.template; loadSelectedTemplate(); }
+    location.hash = '#backtest'; $('#instrument').value = b.dataset.ewOpen; $('#instrument').dispatchEvent(new Event('change'));   // its handler re-runs
+  });
+}
+
+/* ------------------------------------------------------- stock dashboard -- */
+// Python computes every indicator on the full history (so they're warmed up), the pattern
+// events & their event study; the page draws a price chart plus one pane per oscillator,
+// all on the same bar axis with one shared crosshair.
+const DB_PANES = [['volume', 'Volume'], ['rsi', 'RSI (14)'], ['macd', 'MACD (12, 26, 9)'], ['stoch', 'Stochastic (14, 3)'], ['adx', 'ADX & DI (14)'],
+  ['atr', 'ATR (14), % of price'], ['obv', 'On-Balance Volume'], ['wr', 'Williams %R (14)'], ['cci', 'CCI (20)'], ['roc', 'Rate of Change (20)'], ['vol', 'Volatility (20-day)']];
+const DB_RANGES = [['1M', 1], ['3M', 3], ['6M', 6], ['YTD', 'ytd'], ['1Y', 12], ['3Y', 36], ['5Y', 60], ['All', null]];
+const DB_CANDLE_MAX = 400;   // more bars than this & candles are thinner than a pixel: draw the line
+let dbData = null, dbHoverIdx = null, dbSeq = 0, dbNames = [];
+const dbState = () => ({ ticker: null, range: '1Y', style: 'line', over: { sma: true, ema: false, bb: true, kc: false, dc: false }, panes: { volume: true, rsi: true, macd: true },
+  sma: '20, 50, 200', ema: '12, 26', marks: { golden_cross: true, death_cross: true }, ...store.get('dash', {}) });
+const dbSave = ch => store.set('dash', { ...dbState(), ...ch });
+function dbPeriods(id) {
+  const raw = $('#' + id).value, vals = raw.split(/[,;\s]+/).filter(Boolean).map(Number);
+  const err = !vals.length ? 'Enter one or more periods, e.g. 20, 50, 200.' : vals.some(v => !Number.isInteger(v) || v < 2 || v > 1000) ? 'Use whole numbers from 2 to 1,000.' : vals.length > 6 ? 'Use 6 periods or fewer.' : null;
+  setFieldError(id, err);
+  return err ? null : [...new Set(vals)].sort((a, b) => a - b);
+}
+function dbStart(t, range) {
+  const r = instruments.get(t); if (!r) return null;
+  const end = r.end.slice(0, 10), spec = DB_RANGES.find(x => x[0] === range);
+  if (!spec || spec[1] == null) return null;
+  if (spec[1] === 'ytd') return end.slice(0, 4) + '-01-01';
+  const d = new Date(end + 'T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() - spec[1]); return d.toISOString().slice(0, 10);
+}
+function dbControls() {
+  const st = dbState(), list = sortedTickers(), sel = $('#dbTicker');
+  const want = st.ticker && list.includes(st.ticker) ? st.ticker : list.includes($('#instrument').value) ? $('#instrument').value : list[0];
+  sel.innerHTML = list.map(t => `<option value="${esc(t)}">${esc(t)} · ${esc(instruments.get(t).name || '')}</option>`).join(''); if (want) sel.value = want;
+  $('#dbRange').innerHTML = DB_RANGES.map(([k]) => `<button type="button" data-range="${k}" aria-pressed="${k === st.range}">${k}</button>`).join('');
+  $$('#dbStyle button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.style === st.style)));
+  $$('#view-charts [data-over]').forEach(i => { i.checked = !!st.over[i.dataset.over]; });
+  $('#dbSma').value = st.sma; $('#dbEma').value = st.ema;
+  $('#dbPanes').innerHTML = DB_PANES.map(([k, lab]) => checkbox('db-pane', k, lab, !!st.panes[k])).join('');
+}
+async function dbOpen() { dbControls(); await dbLoad(); }
+async function dbLoad() {
+  const t = $('#dbTicker').value, sma = dbPeriods('dbSma'), ema = dbPeriods('dbEma');
+  if (!t) { $('#dbCharts').innerHTML = '<p class="out-empty">Add an instrument on the Data tab first.</p>'; return; }
+  if (!sma || !ema) return;
+  const st = dbState(), seq = ++dbSeq;
+  dbSave({ ticker: t, sma: $('#dbSma').value, ema: $('#dbEma').value });
+  try {
+    await py.ready; await py.ensure([t]);
+    const d = await py.call('dashboard', { ticker: t, start: dbStart(t, st.range), sma, ema });
+    if (seq !== dbSeq) return;   // a newer request is on its way
+    dbData = d; dbHoverIdx = null; renderDash();
+  } catch (e) { if (seq === dbSeq) $('#dbCharts').innerHTML = `<p class="ferr">${esc((e.info && e.info.message) || e.message)}</p>`; }
+}
+const dbFmtPx = v => (v == null || !isFinite(v) ? '—' : fmt.price(v));
+function dbReadings(d) {
+  const r = d.readings, n = (v, k = 1) => (v == null || !isFinite(v) ? '—' : fmt.num(v, k));
+  const zone = v => (v == null ? '' : v >= 70 ? 'overbought (above 70)' : v <= 30 ? 'oversold (below 30)' : 'neutral');
+  const tiles = [
+    ['Close', dbFmtPx(r.close), fmt.date(r.date)],
+    ['Trend (50 vs 200-day)', r.trend ? (r.trend === 'up' ? 'Up' : 'Down') : '—', r.pct_vs_sma200 == null ? 'needs 200 bars' : `${fmt.pct(r.pct_vs_sma200, 1, true)} vs 200-day, ${fmt.pct(r.pct_vs_sma50, 1, true)} vs 50-day`],
+    ['RSI (14)', n(r.rsi), zone(r.rsi)],
+    ['MACD (12, 26)', n(r.macd, 2), r.macd == null || r.macd_signal == null ? '' : `${r.macd > r.macd_signal ? 'above' : 'below'} its signal (${n(r.macd_signal, 2)})`],
+    ['Stochastic %K', n(r.stoch_k), r.stoch_d == null ? '' : `%D ${n(r.stoch_d)}${r.stoch_k >= 80 ? ', overbought' : r.stoch_k <= 20 ? ', oversold' : ''}`],
+    ['ADX (14)', n(r.adx), r.adx == null ? '' : `${r.adx >= 25 ? 'strong' : r.adx >= 20 ? 'moderate' : 'weak'} trend; ${r.plus_di > r.minus_di ? '+DI' : '−DI'} leads`],
+    ['ATR (14)', r.atr_pct == null ? '—' : fmt.pct(r.atr_pct, 2), `${dbFmtPx(r.atr)} a day`],
+    ['Bollinger %B', n(r.bb_pct_b, 2), r.bb_width == null ? '' : `band width ${fmt.pct(r.bb_width, 1)}${r.bb_pct_b > 1 ? ', above the upper band' : r.bb_pct_b < 0 ? ', below the lower band' : ''}`],
+    ['52-Week Range', r.pos_52w == null ? '—' : fmt.pct(r.pos_52w, 0), `${dbFmtPx(r.low_52w)} – ${dbFmtPx(r.high_52w)}`],
+    ['Return 1M / 3M', r.ret_1m == null ? '—' : fmt.pct(r.ret_1m, 1, true), r.ret_3m == null ? '' : `${fmt.pct(r.ret_3m, 1, true)} over 3 months`],
+    ['Return 6M / 1Y', r.ret_6m == null ? '—' : fmt.pct(r.ret_6m, 1, true), r.ret_1y == null ? '' : `${fmt.pct(r.ret_1y, 1, true)} over 1 year`],
+    ['Volatility (20-day)', r.vol20 == null ? '—' : fmt.pct(r.vol20, 1), `Williams %R ${n(r.williams_r, 0)}, CCI ${n(r.cci, 0)}`],
+  ];
+  $('#dbRead').innerHTML = tiles.map(([k, v, b]) => `<div class="kpi"><dt>${esc(k)}</dt><dd><span class="v">${v}</span><span class="b" title="${esc(b)}">${esc(b)}</span></dd></div>`).join('');
+  $('#dbReadDate').textContent = `${d.ticker} · ${fmt.date(r.date)}${d.total_return ? '' : ' · returns are price-only (no dividend data)'}`;
+}
+const dbCross = {
+  id: 'dbCross',
+  afterDatasetsDraw(chart) {
+    if (dbHoverIdx == null) return;
+    const x = chart.scales.x.getPixelForValue(dbHoverIdx), { top, bottom, left, right } = chart.chartArea; if (x < left || x > right) return;
+    const g = chart.ctx; g.save(); g.strokeStyle = palette().fg3; g.setLineDash([3, 3]); g.lineWidth = 1; g.beginPath(); g.moveTo(x, top); g.lineTo(x, bottom); g.stroke(); g.restore();
+  },
+};
+const dbCandles = {
+  id: 'dbCandles',
+  beforeDatasetsDraw(chart, args, o) {
+    if (!o || !o.on) return;
+    const d = o.data, xs = chart.scales.x, ys = chart.scales.y, g = chart.ctx, a = chart.chartArea;
+    const w = Math.max(1, Math.min(14, (xs.getPixelForValue(1) - xs.getPixelForValue(0)) * 0.65));
+    g.save(); g.beginPath(); g.rect(a.left, a.top, a.right - a.left, a.bottom - a.top); g.clip(); g.lineWidth = 1;
+    for (let i = 0; i < d.close.length; i++) {
+      const op = d.open[i], hi = d.high[i], lo = d.low[i], cl = d.close[i]; if (cl == null || op == null) continue;
+      const x = Math.round(xs.getPixelForValue(i)) + 0.5, up = cl >= op;
+      g.strokeStyle = g.fillStyle = up ? o.up : o.down;
+      g.beginPath(); g.moveTo(x, ys.getPixelForValue(hi == null ? Math.max(op, cl) : hi)); g.lineTo(x, ys.getPixelForValue(lo == null ? Math.min(op, cl) : lo)); g.stroke();
+      const y1 = ys.getPixelForValue(Math.max(op, cl)), y2 = ys.getPixelForValue(Math.min(op, cl));
+      g.fillRect(x - w / 2, y1, w, Math.max(1, y2 - y1));
+    }
+    g.restore();
+  },
+};
+function dbOptions(d, P, yFmt, last) {
+  const o = baseOptions(d.dates, P, yFmt);
+  o.plugins.tooltip = { enabled: false };
+  o.events = ['mousemove', 'mouseout', 'touchstart', 'touchmove'];
+  o.onHover = (e, els, chart) => { if (e.type === 'mouseout') { dbSetHover(null); return; } const i = Math.round(chart.scales.x.getValueForPixel(e.x)); dbSetHover(i); };
+  o.scales.y.afterFit = sc => { sc.width = 64; };
+  o.scales.x.offset = false;   // bar panes would otherwise pad the axis & stop lining up with the price chart
+  if (d.dates.length <= 130) o.scales.x.ticks.callback = v => { const iso = d.dates[Math.round(v)]; return iso ? dfDayShort.format(toDate(iso)) : ''; };
+  o.scales.y.ticks.maxTicksLimit = 4;
+  if (!last) { o.scales.x.ticks.display = false; o.scales.x.border = { display: false }; }
+  return o;
+}
+let dbRaf = 0;
+function dbSetHover(i) {
+  if (dbData && i != null) i = Math.max(0, Math.min(dbData.dates.length - 1, i));
+  if (i === dbHoverIdx) return;
+  dbHoverIdx = i; cancelAnimationFrame(dbRaf);
+  dbRaf = requestAnimationFrame(() => { for (const n of dbNames) if (charts[n]) charts[n].draw(); dbHoverText(); });
+}
+function dbHoverText() {
+  const d = dbData, el = $('#dbHover'); if (!d || !el) return;
+  const i = dbHoverIdx == null ? d.dates.length - 1 : dbHoverIdx, st = dbState(), o = d.overlays, p = d.panes, n = (v, k = 2) => (v == null ? '—' : fmt.num(v, k));
+  const parts = [`<b>${fmt.date(d.dates[i])}</b>`, `O ${dbFmtPx(d.open[i])} H ${dbFmtPx(d.high[i])} L ${dbFmtPx(d.low[i])} C <b>${dbFmtPx(d.close[i])}</b>`];
+  if (st.over.sma) parts.push(d.sma_periods.map(k => `SMA${k} ${dbFmtPx(o['sma_' + k][i])}`).join(' '));
+  if (st.over.ema) parts.push(d.ema_periods.map(k => `EMA${k} ${dbFmtPx(o['ema_' + k][i])}`).join(' '));
+  if (st.over.bb) parts.push(`BB ${dbFmtPx(o.bb_lo[i])}–${dbFmtPx(o.bb_up[i])}`);
+  if (st.over.kc) parts.push(`KC ${dbFmtPx(o.kc_lo[i])}–${dbFmtPx(o.kc_up[i])}`);
+  if (st.over.dc) parts.push(`DC ${dbFmtPx(o.dc_lo[i])}–${dbFmtPx(o.dc_up[i])}`);
+  const pv = { volume: () => `Vol ${fmt.int(d.volume[i])}`, rsi: () => `RSI ${n(p.rsi[i], 1)}`, macd: () => `MACD ${n(p.macd[i])} / ${n(p.macd_signal[i])}`, stoch: () => `%K ${n(p.stoch_k[i], 1)} %D ${n(p.stoch_d[i], 1)}`,
+    adx: () => `ADX ${n(p.adx[i], 1)} +DI ${n(p.plus_di[i], 1)} −DI ${n(p.minus_di[i], 1)}`, atr: () => `ATR ${p.atr_pct[i] == null ? '—' : fmt.pct(p.atr_pct[i], 2)}`, obv: () => `OBV ${p.obv[i] == null ? '—' : fmt.compact(p.obv[i])}`,
+    wr: () => `%R ${n(p.williams_r[i], 0)}`, cci: () => `CCI ${n(p.cci[i], 0)}`, roc: () => `ROC ${p.roc[i] == null ? '—' : fmt.pct(p.roc[i], 1, true)}`, vol: () => `Vol20 ${p.vol20[i] == null ? '—' : fmt.pct(p.vol20[i], 1)}` };
+  for (const [k] of DB_PANES) if (st.panes[k]) parts.push(pv[k]());
+  const evs = d.events.filter(e => e.index.includes(i)).map(e => `<span class="evside ${e.side}">${esc(e.label)}</span>`);
+  el.innerHTML = parts.join(' · ') + (evs.length ? ' · ' + evs.join(', ') : '');
+}
+function renderDash() {
+  const d = dbData; if (!d) return;
+  const st = dbState(), P = palette(), o = d.overlays, p = d.panes, N = d.dates.length;
+  dbReadings(d);
+  $('#dbAsOf').textContent = `${fmt.int(N)} bars · ${fmt.date(d.dates[0])} – ${fmt.date(d.dates[N - 1])}`;
+  for (const nm of dbNames) kill(nm); dbNames = [];
+  const panes = DB_PANES.filter(([k]) => st.panes[k]);
+  const candles = st.style === 'candles' && N <= DB_CANDLE_MAX;
+  const box = $('#dbCharts');
+  box.innerHTML = `<div class="db-pane price"><ul class="db-legend" id="dbLegend"></ul><div class="chart"><canvas id="dbc-price" tabindex="0" role="img" aria-label="${esc(d.ticker)} price with the chosen overlays; arrow keys move the readout"></canvas></div>` +
+    `${st.style === 'candles' && !candles ? `<p class="help" style="margin:4px 0 0">Candles show for ${fmt.int(DB_CANDLE_MAX)} bars or fewer; pick a shorter range.</p>` : ''}</div>` +
+    panes.map(([k, lab]) => `<div class="db-pane${k === 'volume' ? ' vol' : ''}"><h3>${esc(lab)}</h3><div class="chart"><canvas id="dbc-${k}" role="img" aria-label="${esc(lab)}"></canvas></div></div>`).join('');
+  const lastKey = panes.length ? panes[panes.length - 1][0] : 'price';
+  const make = (key, datasets, yFmt, extra = {}) => {
+    const name = 'db_' + key, opts = dbOptions(d, P, yFmt, key === lastKey);
+    if (extra.y) Object.assign(opts.scales.y, extra.y);
+    if (extra.pluginOpts) Object.assign(opts.plugins, extra.pluginOpts);
+    charts[name] = new Chart($('#dbc-' + key), { data: { datasets }, options: opts, plugins: [dbCross, ...(extra.plugins || [])] });
+    dbNames.push(name); return charts[name];
+  };
+  const L = (label, data, color, opts = {}) => line(label, data, color, { borderWidth: 1.3, ...opts });
+  const guide = (v, color) => L('', new Array(N).fill(v), color, { borderWidth: 1, borderDash: [3, 3], _guide: true });
+  // price & overlays
+  const COL = [P.strat, P.bench, P.loss, P.gain, P.warn, P.fg2], legend = [];
+  const ds = [];
+  if (candles) { ds.push(L('High', d.high, 'transparent', { _guide: true }), L('Low', d.low, 'transparent', { _guide: true })); legend.push([P.gain, 'Up day'], [P.loss, 'Down day']); }
+  else { ds.push(L('Close', d.close, P.fg, { borderWidth: 1.6 })); legend.push([P.fg, 'Close']); }
+  if (st.over.bb) { ds.push(L('BB upper', o.bb_up, P.fg3, { borderDash: [4, 3], borderWidth: 1, fill: '+1', backgroundColor: alpha(P.fg3, 0.08) }), L('BB lower', o.bb_lo, P.fg3, { borderDash: [4, 3], borderWidth: 1 }), L('BB middle', o.bb_mid, P.fg3, { borderWidth: 0.8 })); legend.push([P.fg3, 'Bollinger (20, 2)']); }
+  if (st.over.kc) { ds.push(L('Keltner upper', o.kc_up, P.warn, { borderDash: [1, 2] }), L('Keltner lower', o.kc_lo, P.warn, { borderDash: [1, 2] })); legend.push([P.warn, 'Keltner (20, 2 ATR)']); }
+  if (st.over.dc) { ds.push(L('Donchian upper', o.dc_up, P.gain, { borderDash: [2, 2], stepped: true }), L('Donchian lower', o.dc_lo, P.loss, { borderDash: [2, 2], stepped: true })); legend.push([P.gain, 'Donchian (20)']); }
+  if (st.over.sma) d.sma_periods.forEach((k, j) => { ds.push(L('SMA ' + k, o['sma_' + k], COL[j % COL.length], { borderWidth: 1.5 })); legend.push([COL[j % COL.length], `SMA ${k}`]); });
+  if (st.over.ema) d.ema_periods.forEach((k, j) => { const c = COL[(j + 2) % COL.length]; ds.push(L('EMA ' + k, o['ema_' + k], c, { borderWidth: 1.3, borderDash: [6, 3] })); legend.push([c, `EMA ${k} (dashed)`]); });
+  for (const e of d.events) if (st.marks[e.key] && e.index.length) {
+    const bull = e.side === 'bull', c = bull ? P.gain : P.loss;
+    ds.push({ type: 'scatter', label: e.label, data: e.index.map(i => ({ x: i, y: bull ? (d.low[i] != null ? d.low[i] : d.close[i]) : (d.high[i] != null ? d.high[i] : d.close[i]) })),
+      pointStyle: 'triangle', rotation: bull ? 0 : 180, radius: 6, hoverRadius: 7, backgroundColor: c, borderColor: P.panel, borderWidth: 1, _marker: true });
+    legend.push([c, `${bull ? '▲' : '▼'} ${e.label}`]);
+  }
+  $('#dbLegend').innerHTML = legend.map(([c, t]) => `<li><i style="background:${c}"></i>${esc(t)}</li>`).join('');
+  make('price', ds, dbFmtPx, { plugins: candles ? [dbCandles] : [], pluginOpts: candles ? { dbCandles: { on: true, data: d, up: P.gain, down: P.loss } } : {} });
+  // panes
+  for (const [k] of panes) {
+    if (k === 'volume') {
+      make('volume', [{ type: 'bar', label: 'Volume', data: d.volume.map((v, i) => ({ x: i, y: v })), backgroundColor: d.close.map((c, i) => alpha(i && c != null && d.close[i - 1] != null && c < d.close[i - 1] ? P.loss : P.gain, 0.55)), barPercentage: 1, categoryPercentage: 1 }],
+        v => fmt.compact(v), { y: { beginAtZero: true } });
+    } else if (k === 'rsi') make('rsi', [L('RSI', p.rsi, P.strat), guide(70, P.loss), guide(30, P.gain)], v => fmt.num(v, 0), { y: { min: 0, max: 100 } });
+    else if (k === 'macd') make('macd', [{ type: 'bar', label: 'Histogram', data: p.macd_hist.map((v, i) => ({ x: i, y: v })), backgroundColor: p.macd_hist.map(v => alpha(v >= 0 ? P.gain : P.loss, 0.5)), barPercentage: 1, categoryPercentage: 1 },
+      L('MACD', p.macd, P.strat), L('Signal', p.macd_signal, P.bench), guide(0, P.fg3)], v => fmt.num(v, 1));
+    else if (k === 'stoch') make('stoch', [L('%K', p.stoch_k, P.strat), L('%D', p.stoch_d, P.bench), guide(80, P.loss), guide(20, P.gain)], v => fmt.num(v, 0), { y: { min: 0, max: 100 } });
+    else if (k === 'adx') make('adx', [L('ADX', p.adx, P.fg, { borderWidth: 1.6 }), L('+DI', p.plus_di, P.gain), L('−DI', p.minus_di, P.loss), guide(25, P.fg3)], v => fmt.num(v, 0));
+    else if (k === 'atr') make('atr', [L('ATR %', p.atr_pct, P.warn)], v => fmt.pct(v, 1));
+    else if (k === 'obv') make('obv', [L('OBV', p.obv, P.strat)], v => fmt.compact(v));
+    else if (k === 'wr') make('wr', [L('%R', p.williams_r, P.strat), guide(-20, P.loss), guide(-80, P.gain)], v => fmt.num(v, 0), { y: { min: -100, max: 0 } });
+    else if (k === 'cci') make('cci', [L('CCI', p.cci, P.strat), guide(100, P.loss), guide(-100, P.gain), guide(0, P.fg3)], v => fmt.num(v, 0));
+    else if (k === 'roc') make('roc', [L('ROC', p.roc, P.strat), guide(0, P.fg3)], v => fmt.pct(v, 0));
+    else if (k === 'vol') make('vol', [L('Volatility', p.vol20, P.bench)], v => fmt.pct(v, 0));
+  }
+  const pc = $('#dbc-price');
+  pc.addEventListener('keydown', e => {
+    const step = { ArrowLeft: -1, ArrowRight: 1, PageUp: -21, PageDown: 21 }[e.key]; if (step == null && e.key !== 'Home' && e.key !== 'End') return;
+    e.preventDefault(); const cur = dbHoverIdx == null ? N - 1 : dbHoverIdx;
+    dbSetHover(e.key === 'Home' ? 0 : e.key === 'End' ? N - 1 : cur + step); $('#dbHover').setAttribute('aria-live', 'polite');
+  });
+  pc.addEventListener('blur', () => $('#dbHover').setAttribute('aria-live', 'off'));
+  dbHoverText(); dbEvents();
+}
+function dbEvents() {
+  const d = dbData, st = dbState(), H = d.horizons, b = d.baseline;
+  const cell = (s2, base) => (s2.n ? `<span class="${sign(s2.mean)}">${fmt.pct(s2.mean, 1, true)}</span>${base && s2.vs_all != null ? ` <span class="muted">(${fmt.pct(s2.vs_all, 1, true)})</span>` : ''}` : '—');
+  const head = ['<span class="sr">Mark</span>', 'Pattern', 'Usually Read As', 'Times', 'Last', ...H.map(h => `Next ${h} Days`), `Up After ${H[1]} Days`];
+  const rows = d.events.map(e => [`<input type="checkbox" data-mark="${e.key}" aria-label="Mark ${esc(e.label)} on the price chart"${st.marks[e.key] ? ' checked' : ''}${e.count ? '' : ' disabled'}>`,
+    `<span title="${esc(e.about)}">${esc(e.label)}</span>`, `<span class="evside ${e.side}">${e.side === 'bull' ? 'Bullish' : 'Bearish'}</span>`, fmt.int(e.count), e.last ? fmt.date(e.last) : '—',
+    ...H.map(h => cell(e.study[h], true)), e.study[H[1]].n ? `${fmt.pct(e.study[H[1]].hit, 0)} <span class="muted">of ${fmt.int(e.study[H[1]].n)}</span>` : '—']);
+  rows.push(['', '<b>All days</b>', '', '', '', ...H.map(h => (b[h].n ? fmt.pct(b[h].mean, 1, true) : '—')), b[H[1]].n ? fmt.pct(b[H[1]].hit, 0) : '—']);
+  $('#dbEvents').innerHTML = `<div class="tablebox" tabindex="0" aria-label="Patterns & what followed"><table><caption class="sr">Patterns & what followed</caption><thead><tr>${head.map((h, i) => `<th scope="col"${i > 2 ? ' class="n"' : ''}>${h}</th>`).join('')}</tr></thead><tbody>` +
+    rows.map(r => `<tr>${r.map((c, i) => (i === 1 ? `<th scope="row">${c}</th>` : `<td${i > 2 ? ' class="n"' : ''}>${c}</td>`)).join('')}</tr>`).join('') + '</tbody></table></div>' +
+    `<p class="help">Average return over the next 5, 20 & 60 trading days after each signal${d.total_return ? ', dividends included' : ''}, with the difference from the average over all days in brackets. Hover a pattern’s name for its rule. Signals close together share most of their window & a handful of them says little: this describes the past, it doesn’t test a strategy (no costs, no position sizing). To trade one, build it on the Backtest tab.</p>`;
+}
+
 async function runPerm(ev) {
   ev.preventDefault();
   if (!validate([['permN', between(50, 5000, '', true, 500)], ['permSeed', between(0, 1e9, '', true, 7)]])) return;
@@ -4863,7 +5243,7 @@ async function ghPull() {
 }
 
 /* ---------------------------------------------------------------- tabs -- */
-const TAB_TITLES = { backtest: 'Backtest', edit: 'Strategy Editor', tools: 'Research Tools', data: 'Data', history: 'Run History', paper: 'Paper Trading' };
+const TAB_TITLES = { backtest: 'Backtest', edit: 'Strategy Editor', charts: 'Stock Dashboard', tools: 'Research Tools', data: 'Data', history: 'Run History', paper: 'Paper Trading' };
 // The Editor tab borrows these elements from the Backtest tab instead of copying them,
 // so there is one editor (one undo history) & one set of results. A comment marks each home.
 const EDIT_DOCK = [['strategyBody', 'editSlotCode'], ['errBox', 'editSlotSide'], ['notes', 'editSlotSide'], ['kpis', 'editSlotSide'], ['eqPanel', 'editSlotSide'], ['logPanel', 'editSlotSide']];
@@ -4900,7 +5280,8 @@ function showTab(name) {
   dockEditor(name === 'edit');
   if (name === 'edit' && changed) requestAnimationFrame(() => editor.ta.focus({ preventScroll: true }));
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
-  if (name === 'tools') { toolContext(); renderRankGroups(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
+  if (name === 'charts') dbOpen();
+  if (name === 'tools') { toolContext(); renderRankGroups(); ewWhere(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
   if (name === 'data') { renderFutList(); renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
   if (name === 'history') { renderRuns(); renderAudit(); }
   if (name === 'paper') { renderPaperList(); const b = store.get('bridge', {}); $('#bridgeUrl').value = b.url || ''; $('#bridgeSecret').value = bridgeConfig().secret; }
@@ -4926,7 +5307,7 @@ function wire() {
   $('#marketForm').addEventListener('submit', e => { e.preventDefault(); runBacktest(); });
   $('#settingsForm').addEventListener('submit', e => { e.preventDefault(); saveSettings(); runBacktest(); });
   $('#settingsBox').addEventListener('toggle', () => url.write());
-  $('#stopBtn').onclick = async () => { sweepCancel = true; wfCancel = true; surfCancel = true; rankCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'wfRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun', 'rkRun', 'capRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
+  $('#stopBtn').onclick = async () => { sweepCancel = true; wfCancel = true; surfCancel = true; rankCancel = true; ewCancel = true; setStatus('busy', 'Restarting Python…'); await py.restart(); busyCount = 0; busy(false); for (const id of ['runBtn', 'swRun', 'wfRun', 'mcRun', 'spRun', 'subRun', 'costRun', 'permRun', 'anRun', 'rkRun', 'capRun']) loadingOff($('#' + id)); toast('Stopped. Python restarted & ready.'); };
   $('#template').onchange = loadSelectedTemplate;
   $('#resetBtn').onclick = loadSelectedTemplate;
   $('#errReset').onclick = () => { loadSelectedTemplate(); editor.ta.focus(); };
@@ -5071,6 +5452,19 @@ function wire() {
   $('#subForm').addEventListener('submit', runSub);
   $('#costForm').addEventListener('submit', runCosts);
   $('#riskForm').addEventListener('submit', runRisk); $('#capForm').addEventListener('submit', runCapacity);
+  $('#dbTicker').addEventListener('change', dbLoad);
+  $('#dbRange').addEventListener('click', e => { const b = e.target.closest('button[data-range]'); if (!b) return; dbSave({ range: b.dataset.range }); $$('#dbRange button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); dbLoad(); });
+  $('#dbStyle').addEventListener('click', e => { const b = e.target.closest('button[data-style]'); if (!b) return; dbSave({ style: b.dataset.style }); $$('#dbStyle button').forEach(x => x.setAttribute('aria-pressed', String(x === b))); renderDash(); });
+  $('#view-charts').addEventListener('change', e => {
+    const t = e.target;
+    if (t.dataset.over) { dbSave({ over: { ...dbState().over, [t.dataset.over]: t.checked } }); renderDash(); }
+    else if (t.name === 'db-pane') { dbSave({ panes: { ...dbState().panes, [t.value]: t.checked } }); renderDash(); }
+    else if (t.dataset.mark) { dbSave({ marks: { ...dbState().marks, [t.dataset.mark]: t.checked } }); renderDash(); }
+    else if (t.id === 'dbSma' || t.id === 'dbEma') dbLoad();
+  });
+  for (const id of ['dbSma', 'dbEma']) $('#' + id).addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); dbLoad(); } });
+  $('#breadthForm').addEventListener('submit', runBreadth); $('#ewStop').onclick = () => { ewCancel = true; };
+  $('#ewBy').addEventListener('change', ewRender); $('#ewSynth').addEventListener('change', ewWhere);
   $('#rankForm').addEventListener('submit', runRanking); $('#rnStop').onclick = () => { rankCancel = true; };
   $('#rnBy').addEventListener('change', rerank);
   $('#rnGroups').addEventListener('change', () => { store.set('rankOff', $$('#rnGroups input').filter(i => !i.checked).map(i => i.value)); rankWhere(); });
@@ -5172,9 +5566,9 @@ function wire() {
   $('#univCode').onclick = () => setPicked(codeInfo.universe || []);
   $('#univAll').onclick = () => setPicked(sortedTickers().filter(t => !instruments.get(t).synthetic));
   $('#univNone').onclick = () => setPicked([]);
-  window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning || surfRunning || rankRunning) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (pendingFiles.length || sweepRunning || surfRunning || rankRunning || ewRunning) { e.preventDefault(); e.returnValue = ''; } });
 
-  const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } if (surfLast) renderSurface(); if (rankLast) rerank(); };
+  const rerender = () => { setThemeColor(); if (lastRun) { drawResultCharts(lastRun.result); renderHeat(lastRun.result); } if (surfLast) renderSurface(); if (rankLast) rerank(); if (ewLast) ewRender(); if (dbData && currentTab === 'charts') renderDash(); };
   try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rerender); } catch (e) { /* old browser */ }
   new MutationObserver(rerender).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 }
@@ -5218,6 +5612,7 @@ async function boot() {
   if (q.get('ticker')) prefer.instrument = q.get('ticker').toUpperCase();
   if (q.has('bench')) prefer.benchmark = q.get('bench') === '__blend' ? '__blend' : (q.get('bench') || '').toUpperCase();
   fillInstrumentSelects(prefer); fillRateSelect(); summarizeSettings(); renderFactorSets();
+  if (currentTab === 'charts') dbOpen();   // opened before the instruments were known
   const from = q.get('from') || (settings && settings.start), to = q.get('to') || (settings && settings.end);
   if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) $('#start').value = from;
   if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) $('#end').value = to;
