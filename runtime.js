@@ -101,7 +101,10 @@
     try {
       let result;
       if (msg.type === 'init') result = await init(msg);
-      else if (msg.type === 'call') {
+      else if (msg.type === 'options') {   // an option chain as typed arrays: no JSON for millions of quotes
+        if (!handle) throw new Error('Python is not ready yet');
+        result = py.globals.get('engine').load_option_buffers(msg.underlying, msg.meta, new Map(Object.entries(msg.cols)));
+      } else if (msg.type === 'call') {
         if (!handle) throw new Error('Python is not ready yet');
         let code = null;
         try {

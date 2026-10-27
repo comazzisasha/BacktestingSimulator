@@ -266,8 +266,8 @@ def test_ml_templates_are_causal():
 
 def test_all_templates_run():
     for tid, code in load_templates().items():
-        if tid.startswith("pf_"):
-            continue                    # portfolio templates: test_portfolio_templates_run_and_are_causal
+        if tid.startswith("pf_") or tid.startswith("opt_"):
+            continue                    # portfolio & option templates have their own tests
         if missing_imports(code):
             print("skip  %s (needs %s)" % (tid, ", ".join(missing_imports(code))))
             continue
@@ -2463,7 +2463,7 @@ def _template_runs(ids=None, ds=DEMO):
 
 def _run_templates(ids, ds):
     engine.DATA[ds.ticker] = ds
-    tpls = {k: v for k, v in load_templates().items() if not k.startswith("pf_") and (ids is None or k in ids)}
+    tpls = {k: v for k, v in load_templates().items() if not k.startswith(("pf_", "opt_")) and (ids is None or k in ids)}
     runs = []
     for tid, code in tpls.items():
         out = json.loads(engine.handle("metrics", json.dumps({"ticker": ds.ticker, "code": code, "returns": True, "blocks": 10})))
@@ -2633,6 +2633,418 @@ def test_dashboard_events_use_no_future_data():
     assert not bad["ok"] and "periods" in bad["error"]["message"]
     ok = json.loads(engine.handle("dashboard", json.dumps({"ticker": "QQQ", "sma": [10, 30], "ema": [9]})))["result"]
     assert set(ok["overlays"]) >= {"sma_10", "sma_30", "ema_9"} and "sma_200" not in ok["overlays"]
+
+
+# ------------------------------------------------------- options on option chains -----
+# Option tests build synthetic chains (Black-Scholes prices with a spread) on synthetic
+# prices; real backtests use the vendor files dropped on the Data tab.
+
+def _chain_rows(ds, vol=0.2, strikes=range(70, 135, 5), months=3, spread=0.04, drop=(), extra_expiry=None):
+    """strikes=None: a grid around each day's price (fixed strikes from the first day's price)."""
+    import datetime as dt
+    rows = []
+    if strikes is None:
+        step = max(1, round(ds.close[0] * 0.025))
+        base = round(ds.close[0] / step) * step
+        strikes = range(int(base * 0.4), int(base * 1.8), step)
+    for t in range(ds.n):
+        d, S = ds.dates[t], ds.close[t]
+        day = dt.date.fromisoformat(d)
+        exps = [engine._third_friday(day.year + (day.month - 1 + m) // 12, (day.month - 1 + m) % 12 + 1).isoformat() for m in range(months)]
+        if extra_expiry:
+            exps.append(extra_expiry)
+        for x in exps:
+            T = (dt.date.fromisoformat(x) - day).days
+            if T < 0:
+                continue
+            for k in strikes:
+                for call in (1, 0):
+                    if (d, x, k, call) in drop:
+                        continue
+                    p = engine.bs(S, k, T / 365, 0.0, vol, "call" if call else "put")["price"]
+                    sp = max(0.05, spread * p)
+                    rows.append((d, x, float(k), call, max(0.0, round(p - sp / 2, 2)), round(p + sp / 2, 2), None, None, None, None, None, S))
+    return rows
+
+
+def _opt_run(code, ds, chain, **cfg):
+    engine.OPTIONS.clear()
+    engine.OPTIONS[ds.ticker] = chain
+    cfg.setdefault("cash", 100000.0)
+    cfg.setdefault("slippage_bps", 0.0)
+    try:
+        return engine.backtest(engine.Strategy.from_code(code), ds, engine.Config(**cfg))
+    finally:
+        engine.OPTIONS.clear()
+
+
+def test_option_fills_marks_and_settlement_match_a_ledger():
+    closes = [100 + 6 * math.sin(i / 9) + 0.05 * i for i in range(160)]
+    ds = synthetic("OPTX", closes)
+    chain = engine.OptionChain.from_rows("OPTX", _chain_rows(ds))
+    code = ('def on_bar(ctx):\n'
+            '    if ctx.i == ctx.start_index:\n'
+            '        c = ctx.options.find("call", dte=40, strike=100)\n'
+            '        ctx.state["c"] = c.symbol\n'
+            '        ctx.options.buy(c, 3)\n'
+            '    return None\n')
+    res = _opt_run(code, ds, chain)
+    o = res.options
+    sym = o["fills"][0]["symbol"]
+    root, exp, call, k = engine.parse_occ(sym)
+    assert call and k == 100 and o["fills"][0]["date"] == ds.dates[1], "fills on the next bar"
+    i1 = chain.find_row(ds.dates[1], exp, True, 100.0)
+    ask1 = round(float(chain.cols["a"][i1]), 4)
+    assert o["fills"][0]["price"] == ask1 and o["fills"][0]["commission"] == 3 * 0.65
+    # ledger: cash after the fill, then marked at the mid every day until it settles at intrinsic value
+    cash = 100000.0 - 3 * ask1 * 100 - 3 * 0.65
+    for t in range(ds.n):
+        d = ds.dates[t]
+        if t == 0:
+            want = 100000.0
+        elif d < exp:
+            i = chain.find_row(d, exp, True, 100.0)
+            mid = (round(float(chain.cols["b"][i]), 4) + round(float(chain.cols["a"][i]), 4)) / 2
+            want = cash + 3 * mid * 100
+        else:
+            if d == exp:
+                cash += 3 * max(ds.close[t] - 100, 0) * 100
+            want = cash
+        assert approx(res.equity[t], want, 1e-9), (t, d, res.equity[t], want)
+    st = o["settlements"][0]
+    assert st["date"] == exp and st["intrinsic"] == round(max(ds.close[ds.index[exp]] - 100, 0), 4)
+    assert o["trades"][0]["side"] == "long" and approx(o["trades"][0]["pnl"], st["cash"] - 3 * ask1 * 100 - 1.95, 1e-9)
+    assert approx(o["pnl"], o["trades"][0]["pnl"], 1e-9) and not o["open_positions"]
+
+
+def test_option_sells_at_the_bid_closes_at_the_ask_and_fill_share():
+    ds = synthetic("OPTS", [100 + 0.02 * i for i in range(120)])
+    chain = engine.OptionChain.from_rows("OPTS", _chain_rows(ds))
+    code = ('def on_bar(ctx):\n'
+            '    o = ctx.options\n'
+            '    if ctx.i == ctx.start_index:\n'
+            '        o.sell(o.find("put", dte=50, delta=0.3), 2)\n'
+            '    elif ctx.i == ctx.start_index + 10:\n'
+            '        o.close()\n'
+            '    return None\n')
+    for share in (1.0, 0.0, 0.5):
+        res = _opt_run(code, ds, chain, option_fill=share, option_commission=0.0)
+        f_open, f_close = res.options["fills"]
+        for f, d in ((f_open, ds.dates[1]), (f_close, ds.dates[11])):
+            r, x, c, k = engine.parse_occ(f["symbol"])
+            i = chain.find_row(d, x, c, k)
+            b, a = round(float(chain.cols["b"][i]), 4), round(float(chain.cols["a"][i]), 4)
+            mid = (b + a) / 2
+            want = b + (1 - share) * (mid - b) if f["contracts"] < 0 else a - (1 - share) * (a - mid)
+            assert approx(f["price"], round(want, 4), 1e-9), (share, f)
+        assert f_open["action"] == "sell to open" and f_close["action"] == "buy to close" and f_close["contracts"] == 2
+        tr = res.options["trades"][0]
+        assert tr["side"] == "short" and approx(tr["pnl"], (f_open["price"] - f_close["price"]) * 200, 1e-9)
+        assert not res.options["open_positions"] and any("aren't margined" in n for n in res.notes)
+
+
+def test_option_orders_without_quotes_stay_unfilled_and_late_expiries_settle():
+    ds = synthetic("OPTU", [100.0 + 0.1 * i for i in range(90)])
+    exp = engine._third_friday(2020, 2).isoformat()
+    rows = _chain_rows(ds, drop={(ds.dates[1], exp, 105, 1)})
+    chain = engine.OptionChain.from_rows("OPTU", rows)
+    code = ('def on_bar(ctx):\n'
+            '    if ctx.i == ctx.start_index:\n'
+            '        ctx.options.buy("OPTU%sC00105000", 1)\n'
+            '    return None\n') % (exp[2:4] + exp[5:7] + exp[8:10])
+    res = _opt_run(code, ds, chain)
+    assert res.options["unfilled"][0]["reason"].startswith("no quote") and not res.options["fills"]
+    # an expiry on a market holiday (Presidents' Day 2020-02-17) settles at the close before it
+    hol = "2020-02-17"
+    chain2 = engine.OptionChain.from_rows("OPTU", _chain_rows(ds, extra_expiry=hol))
+    code2 = ('def on_bar(ctx):\n'
+             '    if ctx.i == ctx.start_index:\n'
+             '        ctx.options.buy(ctx.options.find("call", dte=47, strike=100), 1)\n'
+             '    return None\n')
+    res2 = _opt_run(code2, ds, chain2)
+    st = res2.options["settlements"][0]
+    assert st["date"] == hol and st["late"] and st["settled_on"] == "2020-02-14"
+    assert approx(st["underlying_close"], ds.close[ds.index["2020-02-14"]])
+
+
+def test_ctx_options_sees_only_todays_quotes_and_never_the_future():
+    closes = [100 + 5 * math.sin(i / 7) for i in range(140)]
+    ds = synthetic("OPTL", closes)
+    rows = _chain_rows(ds)
+    chain = engine.OptionChain.from_rows("OPTL", rows)
+    today = {}
+    for r in rows:
+        if r[3] == 1:
+            today[r[0]] = today.get(r[0], 0) + 1
+    code = ('COUNTS = %r\n'
+            'def on_bar(ctx):\n'
+            '    q = ctx.options.chain(kind="call")\n'
+            '    assert len(q) == COUNTS[ctx.date], "only today\'s calls"\n'
+            '    assert all(x.dte >= 0 and abs(x.spot - ctx.price) < 1e-3 and x.kind == "call" for x in q), "the file\'s spot (float32)"\n'
+            '    assert ctx.options.expiries() == sorted({x.expiry for x in q})\n'
+            '    if ctx.i %% 15 == 0 and not ctx.options.positions:\n'
+            '        ctx.options.buy(ctx.options.find("call", dte=25, delta=0.5), 1)\n'
+            '    if ctx.i %% 15 == 9:\n'
+            '        ctx.options.close()\n'
+            '    return None\n') % today
+    full = _opt_run(code, ds, chain)
+    k = 100
+    cut = engine.OptionChain.from_rows("OPTL", [r for r in rows if r[0] <= ds.dates[k]])
+    short = engine.DataSet("OPTL", ds.dates[:k + 1], ds.close[:k + 1], ds.open[:k + 1], ds.high[:k + 1], ds.low[:k + 1], ds.volume[:k + 1])
+    part = _opt_run(code, short, cut)
+    assert full.equity[:k + 1] == part.equity, "removing future quotes and prices changes nothing before them"
+    assert len(full.options["fills"]) > 6 and full.options["fills"][:len(part.options["fills"])] == part.options["fills"]
+
+
+def test_option_templates_run_on_a_chain():
+    ds = DEMO
+    chain = engine.OptionChain.from_rows(ds.ticker, _chain_rows(ds, strikes=None, months=4))
+    tpl = {k: v for k, v in load_templates().items() if k.startswith("opt_")}
+    assert set(tpl) == {"opt_covered_call", "opt_cash_secured_put", "opt_protective_put"}
+    hold = _opt_run(load_templates()["buy_hold"], ds, chain)
+    for tid, code in tpl.items():
+        res = _opt_run(code, ds, chain)
+        o = res.options
+        assert o and o["fills"] and res.equity[-1] > 0, tid
+        if tid == "opt_covered_call":
+            assert all(f["contracts"] < 0 for f in o["fills"]) and o["premium_received"] > 0
+            assert o["expired_worthless"] + o["in_the_money"] >= 10
+        elif tid == "opt_cash_secured_put":
+            assert any(f["action"] == "buy to close" for f in o["fills"]), "takes profit early sometimes"
+            assert max(res.position) == 0, "never holds shares"
+        else:
+            assert o["premium_paid"] > 0 and any(f["action"] == "sell to close" for f in o["fills"]), "rolls its puts"
+            mp, _ = engine.summarize(res)
+            mh, _ = engine.summarize(hold)
+            assert mp["max_drawdown"] > mh["max_drawdown"], "the puts cushion the worst fall"
+            assert len(o["unfilled"]) < 20 and all(n <= int(max(res.position) // 100) for n in [f["contracts"] for f in o["fills"]]), "no pile-up"
+    engine.OPTIONS.clear()
+    try:
+        run(tpl["opt_covered_call"])
+        raise AssertionError("ran without a chain")
+    except engine.StrategyError as e:
+        assert "No option chain is loaded" in e.info["message"]
+
+
+def test_options_in_a_portfolio_strategy():
+    a = synthetic("PFA", [100 + 0.05 * i for i in range(100)])
+    b = synthetic("PFB", [50 + 0.02 * i for i in range(100)])
+    engine.OPTIONS.clear()
+    engine.OPTIONS["PFA"] = engine.OptionChain.from_rows("PFA", _chain_rows(a))
+    code = ('UNIVERSE = ["PFA", "PFB"]\n'
+            'def on_bar(ctx):\n'
+            '    o = ctx["PFA"].options\n'
+            '    if ctx.i == ctx.start_index:\n'
+            '        o.buy(o.find("put", dte=40, strike=95), 2)\n'
+            '    return {"PFA": 0.5, "PFB": 0.5}\n')
+    try:
+        res = engine.backtest_portfolio(engine.Strategy.from_code(code), [a, b], engine.Config(cash=100000))
+        assert res.options["fills"][0]["underlying"] == "PFA" and res.options["settlements"]
+        try:
+            engine.backtest_portfolio(engine.Strategy.from_code(code.replace('ctx["PFA"].options', 'ctx["PFB"].options')), [a, b], engine.Config(cash=1e5))
+            raise AssertionError("traded options with no chain")
+        except engine.StrategyError as e:
+            assert "No option chain is loaded for PFB" in e.info["message"]
+        try:
+            engine.backtest_portfolio(engine.Strategy.from_code(code.replace('ctx["PFA"].options', 'ctx.options')), [a, b], engine.Config(cash=1e5))
+            raise AssertionError("ctx.options in a portfolio")
+        except engine.StrategyError as e:
+            assert "ctx['SPY'].options" in e.info["message"]
+    finally:
+        engine.OPTIONS.clear()
+
+
+def test_implied_vol_and_greeks():
+    from scipy import optimize
+    for S, K, T, r, sig, kind in [(100, 105, 0.1, 0.02, 0.25, "call"), (100, 90, 0.5, 0.0, 0.4, "put"), (50, 50, 1 / 52, 0.05, 0.6, "call")]:
+        p = engine.bs(S, K, T, r, sig, kind)["price"]
+        iv = engine.implied_vol(p, S, K, T, r, kind)
+        ref = optimize.brentq(lambda v: engine.bs(S, K, T, r, v, kind)["price"] - p, 1e-4, 5)
+        assert abs(iv - sig) < 1e-6 and abs(iv - ref) < 1e-6
+    assert engine.implied_vol(0.0, 100, 100, 0.1, 0, "call") != engine.implied_vol(0.0, 100, 100, 0.1, 0, "call"), "no vol for a zero price"
+    assert engine.implied_vol(50.0, 100, 50, 0.1, 0, "call") != engine.implied_vol(50.0, 100, 50, 0.1, 0, "call"), "below intrinsic: none"
+    q = engine.OptionQuote(symbol="X200221C00100000", underlying="X", kind="call", strike=100.0, expiry="2020-02-21", dte=30, bid=2.0,
+                           ask=2.2, mid=2.1, last=None, volume=0, open_interest=0, spot=100.0, _iv=None, _delta=None, _rate=0.0, _row=0)
+    want = engine.bs(100, 100, 30 / 365, 0.0, engine.implied_vol(2.1, 100, 100, 30 / 365, 0.0, "call"), "call")
+    assert approx(q.delta, want["delta"]) and approx(q.theta, want["theta"] / 365) and approx(q.vega, want["vega"] / 100)
+    q2 = engine.OptionQuote(symbol="X200221P00100000", underlying="X", kind="put", strike=100.0, expiry="2020-02-21", dte=30, bid=2.0,
+                            ask=2.2, mid=2.1, last=None, volume=0, open_interest=0, spot=100.0, _iv=0.3, _delta=-0.47, _rate=0.0, _row=0)
+    assert q2.delta == -0.47 and q2.iv == 0.3, "the file's iv & delta win"
+    assert engine.parse_occ(engine.occ_symbol("SPX", "2024-03-15", False, 4512.5)) == ("SPX", "2024-03-15", False, 4512.5)
+
+
+OPT_FILES = {
+    "cboe": ("underlying_symbol,quote_date,root,expiration,strike,option_type,open,high,low,close,trade_volume,bid_size_1545,bid_1545,"
+             "ask_size_1545,ask_1545,underlying_bid_1545,underlying_ask_1545,implied_underlying_price_1545,active_underlying_price_1545,"
+             "implied_volatility_1545,delta_1545,gamma_1545,theta_1545,vega_1545,rho_1545,bid_size_eod,bid_eod,ask_size_eod,ask_eod,"
+             "underlying_bid_eod,underlying_ask_eod,vwap,open_interest,delivery_code\n"
+             "SPY,2023-01-03,SPY,2023-01-20,380,C,0,0,0,4.1,1200,10,4.0,10,4.2,380.1,380.2,380.15,380.15,0.2210,0.5123,0.02,-0.15,0.31,0.1,"
+             "12,4.05,12,4.25,380,380.2,4.1,25000,\n"
+             "SPY,2023-01-03,SPY,2023-01-20,380,P,0,0,0,4.4,900,10,4.3,10,4.5,380.1,380.2,380.15,380.15,0.2350,-0.4877,0.02,-0.14,0.31,-0.1,"
+             "12,4.35,12,4.55,380,380.2,4.4,30000,\n"
+             "SPY,2023-01-03,SPY,2023-06-16,380,C,0,0,0,20,5,1,19,1,21,380.1,380.2,380.15,380.15,0.22,0.55,0,0,0,0,1,19.1,1,21.1,380,380.2,20,10,\n"
+             "QQQ,2023-01-03,QQQ,2023-01-20,270,C,0,0,0,4,1,1,3.9,1,4.1,266,266,266,266,0.3,0.4,0,0,0,0,1,3.95,1,4.15,266,266,4,1,\n"),
+    "optionsdx": ("[QUOTE_UNIXTIME], [QUOTE_READTIME], [QUOTE_DATE], [QUOTE_TIME_HOURS], [UNDERLYING_LAST], [EXPIRE_DATE], [EXPIRE_UNIX], "
+                  "[DTE], [C_DELTA], [C_GAMMA], [C_VEGA], [C_THETA], [C_RHO], [C_IV], [C_VOLUME], [C_LAST], [C_SIZE], [C_BID], [C_ASK], "
+                  "[STRIKE], [P_BID], [P_ASK], [P_SIZE], [P_LAST], [P_DELTA], [P_GAMMA], [P_VEGA], [P_THETA], [P_RHO], [P_IV], [P_VOLUME], "
+                  "[STRIKE_DISTANCE], [STRIKE_DISTANCE_PCT]\n"
+                  "1672779600, 2023-01-03 16:00, 2023-01-03, 16.000000, 380.82, 2023-01-20, 1674248400, 17.000000, 0.51270, 0.02060, 0.30950, "
+                  "-0.15020, 0.08240, 0.22120, 1205.000000, 4.10, 10 x 12, 4.05, 4.25, 380.0, 4.35, 4.55, 12 x 10, 4.40, -0.48770, 0.02060, "
+                  "0.30950, -0.14000, -0.09000, 0.23500, 903.000000, 0.8, 0.002\n"
+                  "1672779600, 2023-01-03 16:00, 2023-01-03, 16.000000, 380.82, 2023-01-20, 1674248400, 17.000000, , , , , , , , , , 0.00, , "
+                  "500.0, 118.0, 121.0, , , , , , , , , , 119.2, 0.313\n"),
+    "orats": ("ticker,tradeDate,expirDate,dte,strike,stockPrice,callVolume,callOpenInterest,callBidSize,callAskSize,putVolume,putOpenInterest,"
+              "putBidSize,putAskSize,callBidPrice,callValue,callAskPrice,putBidPrice,putValue,putAskPrice,callBidIv,callMidIv,callAskIv,smvVol,"
+              "putBidIv,putMidIv,putAskIv,residualRate,delta,gamma,theta,vega,rho,phi,driftlessTheta,extVol,extCallValue,extPutValue,"
+              "spotPrice,quoteDate,updatedAt,snapShotEstTime,snapShotDate,expiryTod\n"
+              "SPY,01/03/2023,01/20/2023,18,380,380.82,1205,25000,10,12,903,30000,12,10,4.05,4.15,4.25,4.35,4.45,4.55,0.21,0.2212,0.23,0.22,"
+              "0.23,0.235,0.24,0.01,0.5127,0.0206,-0.1502,0.3095,0.08,-0.08,-0.15,0.22,4.15,4.45,380.82,2023-01-03,2023-01-03,1600,2023-01-03,pm\n"),
+    "ivydb": ("secid,date,symbol,symbol_flag,exdate,last_date,cp_flag,strike_price,best_bid,best_offer,volume,open_interest,impl_volatility,"
+              "delta,gamma,vega,theta,optionid,cfadj,am_settlement,contract_size,ss_flag,forward_price,expiry_indicator,root,suffix\n"
+              "109820,20230103,SPY 230120C380000,1,20230120,20230103,C,380000,4.05,4.25,1205,25000,0.2212,0.5127,0.0206,30.95,-54.8,1,1,0,100,0,,,SPY,\n"
+              "109820,20230103,SPY 230120P380000,1,20230120,20230103,P,380000,4.35,4.55,903,30000,0.235,-0.4877,0.0206,30.95,-51.1,2,1,0,100,0,,,SPY,\n"),
+    "generic": ("Date,Expiration,Strike,Type,Bid,Ask\n01/03/2023,01/20/2023,380,call,4.05,4.25\n01/03/2023,01/20/2023,380,put,4.35,4.55\n"
+                "01/03/2023,02/17/2023,380,Put,8.0,8.3\n01/03/2023,01/27/2023,380,Put,5.0,5.2\n"),
+}
+
+
+def test_option_files_in_vendor_formats():
+    rows, info = engine.option_rows(OPT_FILES["cboe"], underlying="SPY")
+    assert info["format"] == "CBOE DataShop" and info["dropped"] == 1, info      # the QQQ row
+    c = [r for r in rows if r[3] == 1 and r[1] == "2023-01-20"][0]
+    assert c[:6] == ("2023-01-03", "2023-01-20", 380.0, 1, 4.05, 4.25), "end-of-day bid/ask, not the 15:45 ones"
+    assert c[9] == 0.221 and c[10] == 0.5123 and c[11] == 380.15 and c[7] == 1200 and c[8] == 25000
+    rows, info = engine.option_rows(OPT_FILES["cboe"], underlying="SPY", max_dte=60)
+    assert all(r[1] == "2023-01-20" for r in rows), "max_dte drops the June expiry"
+    rows, info = engine.option_rows(OPT_FILES["optionsdx"])
+    assert info["format"] == "OptionsDX" and len(rows) == 3, (info, rows)       # a call & a put, then a put only (no call bid/ask)
+    put = [r for r in rows if r[3] == 0 and r[2] == 380.0][0]
+    assert put[4:6] == (4.35, 4.55) and put[10] == -0.4877 and put[11] == 380.82 and put[9] == 0.235
+    deep = [r for r in rows if r[2] == 500.0]
+    assert len(deep) == 1 and deep[0][3] == 0, "a call with no bid & no ask is left out"
+    band = engine.option_rows(OPT_FILES["optionsdx"], band=0.2)[0]
+    assert all(abs(r[2] / r[11] - 1) <= 0.2 for r in band) and len(band) == 2
+    rows, info = engine.option_rows(OPT_FILES["orats"])
+    assert info["format"] == "ORATS" and len(rows) == 2
+    call, put = sorted(rows, key=lambda r: -r[3])
+    assert call[10] == 0.5127 and approx(put[10], 0.5127 - 1) and call[9] == 0.2212 and put[9] == 0.235 and call[0] == "2023-01-03"
+    rows, info = engine.option_rows(OPT_FILES["ivydb"], spot={"2023-01-03": 380.82}, band=0.1)
+    assert info["format"] == "OptionMetrics" and info["strike_scale"] == 1000 and [r[2] for r in rows] == [380.0, 380.0]
+    assert rows[0][0] == "2023-01-03" and rows[0][1] == "2023-01-20" and rows[0][11] == 380.82, "the spot comes from the loaded prices"
+    rows, info = engine.option_rows(OPT_FILES["generic"], expiries="monthly")
+    assert info["format"] == "long" and sorted(r[1] for r in rows) == ["2023-01-20", "2023-01-20", "2023-02-17"], "the weekly is dropped"
+    assert engine.is_monthly_expiry("2022-04-14") and engine.is_monthly_expiry("2014-01-18") and not engine.is_monthly_expiry("2023-01-27")
+    for bad in ("Date,Close\n2023-01-03,1\n", "date,expiration,strike,bid\n2023-01-03,2023-01-20,380,1\n"):
+        try:
+            engine.option_rows(bad)
+            raise AssertionError("accepted %r" % bad)
+        except ValueError:
+            pass
+    ch = engine.OptionChain.from_rows("SPY", engine.option_rows(OPT_FILES["cboe"], underlying="SPY")[0] * 2)
+    assert ch.n == 3 and ch.find_row("2023-01-03", "2023-01-20", False, 380.0) is not None, "duplicates collapse"
+
+
+def test_option_columns_match_the_page():
+    page = open(os.path.join(ROOT, "index.html"), encoding="utf-8").read()
+    for key, names in engine.OPTION_COLUMNS.items():
+        m = re.search(r"\b%s: \[([^\]]*)\]" % key, page[page.index("const OPTION_COLUMNS = {"):page.index("const OPTION_WIDE = {")])
+        assert m and [x.strip().strip("'") for x in m.group(1).split(",")] == list(names), key
+
+
+def test_option_file_parsing_matches_the_page():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        print("skip  option parser parity (needs node)")
+        return
+    page = open(os.path.join(ROOT, "index.html"), encoding="utf-8").read()
+    js = page[page.index("const OPTION_COLUMNS = {"):page.index("// end of the option file reader")]
+    js += ("\nconst files = JSON.parse(require('fs').readFileSync(0, 'utf8')); const out = {};\n"
+           "for (const [k, f] of Object.entries(files)) { const r = optionReader(f.opts); r.push(f.text); r.done(); out[k] = { rows: r.rows(), info: r.info }; }\n"
+           "process.stdout.write(JSON.stringify(out));\n")
+    cases = {
+        "cboe": {"text": OPT_FILES["cboe"], "opts": {"underlying": "SPY"}}, "cboe60": {"text": OPT_FILES["cboe"], "opts": {"underlying": "SPY", "max_dte": 60}},
+        "optionsdx": {"text": OPT_FILES["optionsdx"], "opts": {}}, "dxband": {"text": OPT_FILES["optionsdx"], "opts": {"band": 0.2}},
+        "orats": {"text": OPT_FILES["orats"], "opts": {}}, "ivydb": {"text": OPT_FILES["ivydb"], "opts": {"spot": {"2023-01-03": 380.82}, "band": 0.1}},
+        "generic": {"text": OPT_FILES["generic"], "opts": {"expiries": "monthly"}},
+    }
+    res = subprocess.run([node, "-e", js], input=json.dumps(cases), capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    out = json.loads(res.stdout)
+    for k, case in cases.items():
+        o = case["opts"]
+        want, info = engine.option_rows(case["text"], o.get("max_dte"), o.get("band"), o.get("expiries", "all"), None, None, o.get("spot"), o.get("underlying"))
+        got = [tuple(r) for r in out[k]["rows"]]
+        norm = lambda rows: sorted([tuple(None if v is None else round(float(v), 3) if isinstance(v, (int, float)) else v for v in r) for r in rows])   # the page keeps float32
+        assert norm(got) == norm(want), (k, got, want)
+        assert out[k]["info"]["format"] == info["format"] and out[k]["info"]["dropped"] == info["dropped"], (k, out[k]["info"], info)
+
+
+def test_option_chain_merge_matches_the_page():
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        print("skip  option chain merge parity (needs node)")
+        return
+    page = open(os.path.join(ROOT, "index.html"), encoding="utf-8").read()
+    js = page[page.index("const OPTION_COLUMNS = {"):page.index("// end of the option file reader")]
+    newer = OPT_FILES["generic"].replace("4.05,4.25", "4.10,4.30")          # the same contract a second time, repriced
+    js += ("\nconst [a, b] = JSON.parse(require('fs').readFileSync(0, 'utf8'));\n"
+           "const ra = optionReader({}); ra.push(a); ra.done(); const rb = optionReader({}); rb.push(b); rb.done();\n"
+           "const ch = optionChain([ra.part(), rb.part()]);\n"
+           "process.stdout.write(JSON.stringify({ dates: ch.dates, expiries: ch.expiries, cols: Object.fromEntries(Object.entries(ch.cols).map(([k, v]) => [k, Array.from(v, x => (Number.isNaN(x) ? null : x))])) }));\n")
+    res = subprocess.run([node, "-e", js], input=json.dumps([OPT_FILES["generic"] + OPT_FILES["generic"].split("\n", 1)[1], newer]),
+                         capture_output=True, text=True, timeout=60)
+    assert res.returncode == 0, res.stderr
+    got = json.loads(res.stdout)
+    rows = engine.option_rows(OPT_FILES["generic"])[0] * 2 + engine.option_rows(newer)[0]
+    want = engine.OptionChain.from_rows("X", rows)
+    assert got["dates"] == want.dates and got["expiries"] == want.expiries
+    for k, arr in want.cols.items():
+        w = [None if (isinstance(v, float) and v != v) else round(v, 4) for v in arr]
+        g = [None if v is None else round(v, 4) for v in got["cols"][k]]
+        assert g == w, (k, g, w)
+    assert 4.1 in [round(v, 2) for v in want.cols["b"]], "the later file's quote won"
+    ok = engine.OptionChain("X", got["dates"], got["expiries"], {k: v for k, v in got["cols"].items()})
+    assert ok.n == want.n, "the page's chain loads in Python (sorted as it expects)"
+
+
+def test_options_api_and_provenance():
+    ds = synthetic("OPTA", [100 + 0.03 * i for i in range(100)])
+    engine.DATA["OPTA"] = ds
+    rows = _chain_rows(ds)
+    ch = engine.OptionChain.from_rows("OPTA", rows)
+    cols = {k: list(v) for k, v in ch.cols.items()}
+    try:
+        out = json.loads(engine.handle("load_options", json.dumps({"underlying": "opta", "dates": ch.dates, "expiries": ch.expiries,
+                                                                   "cols": {k: [None if (isinstance(x, float) and x != x) else x for x in v] for k, v in cols.items()}})))
+        assert out["ok"] and out["result"]["rows"] == ch.n and out["result"]["fingerprint"] == ch.fingerprint
+        code = ('def on_bar(ctx):\n'
+                '    if not ctx.options.positions and not ctx.options.pending:\n'
+                '        ctx.options.sell(ctx.options.find("call", dte=30, delta=0.25), 1)\n'
+                '    return 1.0\n')
+        r = json.loads(engine.handle("run", json.dumps({"ticker": "OPTA", "code": code, "config": {"cash": 100000}})))
+        assert r["ok"], r
+        o = r["result"]["options"]
+        assert o["fills_total"] >= 2 and len(o["daily"]["value"]) == len(r["result"]["dates"]) and o["multiplier"] == 100
+        assert r["result"]["provenance"]["option_chains"] == {"OPTA": ch.fingerprint}
+        # the binary path the page uses gives the same chain
+        class Buf:
+            def __init__(self, arr):
+                self.arr = arr
+            def to_bytes(self):
+                return self.arr.tobytes()
+        s2 = json.loads(engine.load_option_buffers("OPTA", json.dumps({"dates": ch.dates, "expiries": ch.expiries}), {k: Buf(v) for k, v in ch.cols.items()}))
+        assert s2["result"]["fingerprint"] == ch.fingerprint
+        engine.handle("forget_options", json.dumps({"underlying": "OPTA"}))
+        nochain = json.loads(engine.handle("run", json.dumps({"ticker": "OPTA", "code": code})))
+        assert not nochain["ok"] and "No option chain is loaded for OPTA" in nochain["error"]["message"]
+        pf = json.loads(engine.handle("lint", json.dumps({"code": "def on_bar(ctx):\n    ctx.options.chain()\n    return None\n"})))
+        assert not [p for p in pf["result"] if p.get("code") == "UnknownAttribute"], pf
+    finally:
+        engine.OPTIONS.clear()
 
 
 if __name__ == "__main__":

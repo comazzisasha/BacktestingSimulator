@@ -71,6 +71,13 @@ heatmaps or 3D surfaces. **Strategy Ranking** backtests every built-in strategy 
 ranks them by a chosen statistic, and deflates the winner's Sharpe ratio for the number tried. **Every Instrument** runs the
 strategy in the editor on every loaded instrument against each one's buy & hold.
 
+## Options
+
+Strategies can trade listed options from end-of-day option chains you import (CBOE DataShop, OptionsDX,
+ORATS, OptionMetrics or any date/expiration/strike/call-put/bid/ask file; QuantLab ships no option data).
+`ctx.options.find("put", dte=30, delta=0.25)` picks a contract, `buy`/`sell` fill at the next day's ask or
+bid plus commission, positions are marked at the mid and cash-settle at intrinsic value on expiry.
+
 ## Stock dashboard
 
 The **Charts** tab shows one instrument with moving averages, Bollinger, Keltner and Donchian channels

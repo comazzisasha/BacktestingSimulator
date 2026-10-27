@@ -609,3 +609,77 @@ def on_bar(ctx):
     out = {t: w for t in ranked[-n:]}            # strongest: long
     out.update({t: -w for t in ranked[:n]})      # weakest: short
     return out
+
+#%% id: opt_covered_call
+#%% name: Covered Call (Option Data)
+#%% group: Options (Needs Option Data)
+#%% about: Hold the stock and sell one call per 100 shares about a month out, near 0.30 delta; sell the next one when it expires. Needs an option chain for the instrument (Data tab).
+# Trades real option quotes from a chain you loaded on the Data tab.
+# ctx.options.find() picks a listed contract; sell() fills at the next day's bid,
+# and a call left to expire settles at its intrinsic value on the expiry's close.
+
+PARAMS = {"dte": 30, "delta": 0.30}
+
+def on_bar(ctx):
+    o = ctx.options
+    lots = int(ctx.position // 100)              # one contract covers 100 shares
+    if not o.positions and not o.pending and lots > 0:
+        call = o.find("call", dte=PARAMS["dte"], delta=PARAMS["delta"])
+        if call is not None and call.bid > 0:
+            o.sell(call, lots)
+    return 1.0                                  # stay fully invested in the shares
+
+#%% id: opt_cash_secured_put
+#%% name: Cash-Secured Put (Option Data)
+#%% group: Options (Needs Option Data)
+#%% about: Sell puts about a month out near 0.25 delta, as many as the cash covers at the strike; buy them back at half their price, else let them expire. Needs an option chain (Data tab).
+# Short puts collect premium and lose when the price falls through the strike.
+# The cash stays in the account as cover; QuantLab doesn't hold it aside, so
+# size with the strike: contracts x strike x 100 <= cash.
+
+PARAMS = {"dte": 30, "delta": 0.25, "take_profit": 0.5}
+
+def on_bar(ctx):
+    o = ctx.options
+    for sym, n in o.positions.items():
+        q = o.quote(sym)
+        sold = ctx.state.get(sym)
+        if q is not None and sold and n < 0 and q.ask > 0 and q.ask <= sold * (1 - PARAMS["take_profit"]):
+            o.close(sym)                         # most of the premium is in: take it
+    if not o.positions and not o.pending:
+        put = o.find("put", dte=PARAMS["dte"], delta=PARAMS["delta"])
+        if put is not None and put.bid > 0:
+            n = int(ctx.cash // (put.strike * 100))
+            if n > 0:
+                ctx.state[put.symbol] = put.bid
+                o.sell(put, n)
+    return 0.0                                  # no shares: the cash backs the puts
+
+#%% id: opt_protective_put
+#%% name: Protective Put (Option Data)
+#%% group: Options (Needs Option Data)
+#%% about: Hold the stock and keep a put 5% below the price about two months out, rolling it when it has 20 days left. Insurance against crashes, paid for every month. Needs an option chain (Data tab).
+# Long puts lose their premium in calm markets and pay off in sharp falls.
+
+PARAMS = {"dte": 60, "otm": 0.05, "roll_dte": 20}
+
+def on_bar(ctx):
+    o = ctx.options
+    if o.pending:                               # wait for yesterday's orders to fill
+        return 1.0
+    lots = int(ctx.position // 100)             # one put covers 100 shares
+    covered = 0
+    for sym, n in o.positions.items():
+        q = o.quote(sym)
+        if q is None or n <= 0:
+            continue
+        if q.dte <= PARAMS["roll_dte"]:
+            if q.bid > 0:
+                o.close(sym)                     # roll: sell what's left of the old put
+        else:                                    # (one with no bid is worthless: let it expire)
+            covered += n
+    if lots > covered:
+        put = o.find("put", dte=PARAMS["dte"], moneyness=1 - PARAMS["otm"])
+        if put is not None:
+            o.buy(put, lots - covered)
+    return 1.0

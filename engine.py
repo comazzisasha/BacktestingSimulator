@@ -24,6 +24,7 @@ Using it from plain Python:
     print(res.metrics["sharpe"], res.metrics["max_drawdown"])
 """
 
+import csv
 import math
 import json
 import random
@@ -1835,6 +1836,7 @@ class AssetContext:
         self._a = a
         self._ds = panel.sets[a]
         self._run = run
+        self.options = OptionsView(run, a)
         self.ticker = self._ds.ticker
         ds = self._ds
         self.open = SeriesView(ds.open, 0)
@@ -2132,6 +2134,10 @@ class PortfolioContext(_StrategyClock):
     ticker order, or None to keep everything; or call ctx.order(ticker, qty) /
     ctx.order_target_shares(ticker, n). Everything fills on the next bar.
     """
+
+    @property
+    def options(self):
+        raise AttributeError("in a portfolio strategy, use ctx['SPY'].options for the options on one instrument")
 
     def __init__(self, panel, run, params, start):
         self._panel = panel
@@ -2451,6 +2457,10 @@ class Config:
         # data
         "delisting_return": 0.0,  # return on the last close when an instrument's data ends early (-0.3 = -30%)
         "base_currency": "USD",   # the account's currency; instruments priced in others are converted (unhedged)
+        # options traded from a loaded option chain (ctx.options)
+        "option_multiplier": 100.0,  # shares per contract
+        "option_commission": 0.65,   # dollars per contract, each fill
+        "option_fill": 1.0,          # share of the half-spread paid: 1 = buy at the ask, sell at the bid; 0 = the mid
     }
 
     def __init__(self, **kw):
@@ -2551,6 +2561,7 @@ class Account:
         self._t = 0
         self._vol_left = None                # shares each instrument may still trade this bar
         self.arrival_t = None                # bar whose close is the arrival price of current fills
+        self.opt_value = 0.0                 # marked value of option positions (OptionsDesk)
 
     def begin_bar(self, t):
         """Start a bar: the participation allowance is worked out when the first order needs it."""
@@ -2582,7 +2593,7 @@ class Account:
 
     # ---- valuation ----------------------------------------------------------
     def equity_marked(self, t):
-        eq = self.cash
+        eq = self.cash + self.opt_value
         for sh, cl in zip(self.shares, self._closes):
             if sh:
                 eq += sh * cl[t]
@@ -2591,7 +2602,7 @@ class Account:
     def _equity_val(self):
         """Equity at the current valuation prices (kept up to date fill by fill)."""
         if self._eq is None:
-            eq = self.cash
+            eq = self.cash + self.opt_value
             for a, sh in enumerate(self.shares):
                 if sh:
                     eq += sh * self._val[a]
@@ -3203,6 +3214,7 @@ class _Run:
         self.book = []            # resting limit / stop orders
         self.next_id = 1
         self.book_stats = {"filled": 0, "expired": 0, "cancelled": 0, "placed": 0}
+        self.desk = None          # OptionsDesk when an option chain is loaded for one of the instruments
 
     def add_order(self, a, kind, value, kw):
         bad = set(kw) - set(ORDER_FIELDS)
@@ -3566,6 +3578,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
     k = panel.k
     acct = Account(cfg, panel, rates)
     run = _Run(acct)
+    desk = run.desk = OptionsDesk(cfg, panel, acct) if any(tk in OPTIONS for tk in panel.tickers) else None
     limits = _Limits(cfg, panel)
     ctx = PortfolioContext(panel, run, strategy.params, s) if portfolio else Context(panel, run, strategy.params, s)
     out_buf = io.StringIO()
@@ -3646,10 +3659,14 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
                         later = acct.share_orders(group, px, t)
                         carry = _carry(carry, pending["t"], None, phase, {(a, phase): v for a, v in later.items()})
                 pending = carry
+            if desk is not None and not wiped:
+                desk.on_bar(t)                       # option fills at today's quotes, expiries, marks
             eq = acct.equity_marked(t)
             if eq <= 0 and not wiped:
                 wiped = True
                 notes.append("Equity reached zero on %s; trading stopped." % panel.dates[t])
+                if desk is not None:
+                    desk.liquidate()
                 acct.liquidate(t)
                 acct.cash = 0.0
                 eq = 0.0
@@ -3762,6 +3779,17 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
                          "chosen today leaves out companies that were delisted or dropped out of the index over these "
                          "%.0f years, which usually flatters the result. Add their histories (they are closed out when "
                          "their data ends) or test on an index fund." % (panel.k, span))
+    opts = None
+    if desk is not None and (desk.fills or desk.unfilled):
+        opts = desk.summary(dates)
+        if any(f["contracts"] < 0 and f["action"].endswith("to open") for f in desk.fills):
+            notes.append("Short options aren't margined here: their marked value counts in equity, but the collateral a "
+                         "broker would hold is not set aside, so check the cash a short call or put would need.")
+        if desk.stale:
+            notes.append("%d option marks reused an earlier price because the chain had no quote that day." % desk.stale)
+        if desk.unfilled:
+            notes.append("%d option order%s couldn't fill (no quote, bid or ask on the next day); see the Options panel."
+                         % (len(desk.unfilled), "" if len(desk.unfilled) == 1 else "s"))
     if acct.margin_calls:
         notes.append("%d margin call%s (first on %s): positions were cut at the close to restore the margin."
                      % (len(acct.margin_calls), "" if len(acct.margin_calls) == 1 else "s", acct.margin_calls[0]["date"]))
@@ -3787,7 +3815,7 @@ def _run_backtest(strategy, panel, cfg, start, end, bench, portfolio, capture_ou
         book_stats=dict(run.book_stats, open=len(run.book)),
         logs=logs, full_logs=full_logs, notes=notes, config=cfg, mode=strategy.mode, params=dict(strategy.params),
         signals=sig, signal_key=signal_key, limits=limits.summary(len(equity)) if limits.on else None, ann=panel_ann(panel),
-        delisted=delisted, next=nxt,
+        delisted=delisted, next=nxt, options=opts,
     )
 
 
@@ -5150,7 +5178,7 @@ LINT_ERRORS = {"UndefinedName", "UndefinedLocal", "UndefinedExport", "ReturnOuts
                "TwoStarredExpressions", "TooManyExpressionsInStarredAssignment", "DefaultExceptNotLast",
                "ForwardAnnotationSyntaxError", "PercentFormatInvalidFormat", "StringDotFormatInvalidFormat"}
 # Attributes set on contexts in __init__ (found from the source when it is available).
-_CTX_ATTRS = {"state", "params", "start_index", "ticker", "tickers", "open", "high", "low", "close", "volume"}
+_CTX_ATTRS = {"state", "params", "start_index", "ticker", "tickers", "open", "high", "low", "close", "volume", "options"}
 _MEMBERS = {}
 
 
@@ -6273,6 +6301,711 @@ def delta_hedged(ds, start=None, end=None, kind="call", otm=0.0, days=21, iv="re
 
 
 # =============================================================================
+# 3d. Option chains: end-of-day quotes from a data vendor, traded by strategies
+# =============================================================================
+#
+# A chain holds one row per contract per day: date, expiry, strike, call/put, bid, ask and,
+# when the file has them, last price, volume, open interest, implied volatility, delta and
+# the underlying's price. Rows are kept in compact arrays sorted by (date, expiry, type,
+# strike). Strategies see only the rows dated today (ctx.options) and trade at the next
+# day's quotes, so a chain can never leak the future into a decision.
+
+OPTIONS = {}            # underlying ticker -> OptionChain
+OPTION_MAX_ROWS = 4_000_000
+
+# Column names in the order they're preferred (matched after lower-casing and removing
+# brackets & spaces). The same lists are in index.html (OPTION_COLUMNS), kept in step by a test.
+OPTION_COLUMNS = {
+    "date": ("quote_date", "trade_date", "tradedate", "date", "quotedate", "asof", "as_of", "data_date"),
+    "expiry": ("expiration", "expire_date", "expiration_date", "expirdate", "exdate", "expiry", "expiry_date", "exp_date", "maturity"),
+    "strike": ("strike", "strike_price"),
+    "type": ("option_type", "cp_flag", "call_put", "put_call", "right", "type", "callput", "cp"),
+    "bid": ("bid_eod", "bid", "best_bid", "bid_price", "bid_1545"),
+    "ask": ("ask_eod", "ask", "best_offer", "ask_price", "offer", "ask_1545"),
+    "last": ("last", "last_price", "close"),
+    "volume": ("trade_volume", "volume"),
+    "oi": ("open_interest", "openinterest"),
+    "iv": ("implied_volatility_1545", "implied_volatility", "impl_volatility", "iv", "implied_vol"),
+    "delta": ("delta_1545", "delta"),
+    "under": ("underlying_last", "active_underlying_price_1545", "underlying_price", "stock_price", "stockprice", "spot", "underlying_close"),
+    "symbol": ("underlying_symbol", "ticker", "underlying_ticker", "symbol", "root"),
+}
+# Wide files put a call and a put on each row: (call columns, put columns).
+OPTION_WIDE = {
+    "bid": (("c_bid", "callbidprice", "call_bid"), ("p_bid", "putbidprice", "put_bid")),
+    "ask": (("c_ask", "callaskprice", "call_ask"), ("p_ask", "putaskprice", "put_ask")),
+    "last": (("c_last", "call_last"), ("p_last", "put_last")),
+    "volume": (("c_volume", "callvolume", "call_volume"), ("p_volume", "putvolume", "put_volume")),
+    "oi": (("c_oi", "callopeninterest", "call_open_interest"), ("p_oi", "putopeninterest", "put_open_interest")),
+    "iv": (("c_iv", "callmidiv", "call_iv"), ("p_iv", "putmidiv", "put_iv")),
+    "delta": (("c_delta", "call_delta"), ("p_delta", "put_delta")),
+}
+
+
+def _opt_header(h):
+    return h.strip().strip('"').strip().strip("[]").strip().lower().replace(" ", "_")
+
+
+def _opt_date(raw):
+    """Dates in option files: YYYY-MM-DD (optionally with a time), MM/DD/YYYY or YYYYMMDD."""
+    raw = str(raw).strip().strip('"').strip()
+    if len(raw) >= 8 and raw[:8].isdigit() and (len(raw) == 8 or not raw[8].isdigit()):
+        try:
+            return _dt.date(int(raw[:4]), int(raw[4:6]), int(raw[6:8])).isoformat()
+        except ValueError:
+            return None
+    return _iso_date(raw)
+
+
+def _opt_type(raw):
+    v = str(raw).strip().strip('"').upper()
+    return 1 if v in ("C", "CALL", "CALLS") else 0 if v in ("P", "PUT", "PUTS") else None
+
+
+def option_file_layout(header):
+    """Which columns of an option file hold what: {'wide': bool, 'cols': {field: index},
+    'wide_cols': {field: (call index, put index)}, 'format': name, 'strike_scale': 1 or 1000}.
+    Raises ValueError when the file isn't an option chain."""
+    h = [_opt_header(x) for x in header]
+    col = lambda names: next((h.index(n) for n in names if n in h), None)
+    cols = {k: col(v) for k, v in OPTION_COLUMNS.items()}
+    wide = {k: (col(c), col(pp)) for k, (c, pp) in OPTION_WIDE.items()}
+    is_wide = wide["bid"][0] is not None and wide["bid"][1] is not None and cols["type"] is None
+    if cols["date"] is None or cols["expiry"] is None or cols["strike"] is None:
+        raise ValueError("not an option chain: needs a quote date, an expiration and a strike column")
+    if not is_wide and (cols["type"] is None or cols["bid"] is None or cols["ask"] is None):
+        raise ValueError("an option chain needs call/put, bid and ask columns (or C_BID/P_BID-style columns for calls & puts)")
+    if is_wide and (wide["ask"][0] is None or wide["ask"][1] is None):
+        raise ValueError("a wide option chain needs ask columns for calls and puts")
+    fmt = ("OptionsDX" if "c_bid" in h else "ORATS" if "callbidprice" in h else "wide") if is_wide else \
+        ("CBOE DataShop" if "underlying_symbol" in h else "OptionMetrics" if "exdate" in h and "best_bid" in h else "long")
+    if is_wide and cols["delta"] is not None and wide["delta"][0] is None:
+        wide["delta"] = (cols["delta"], None)            # ORATS: one delta column, the call's
+    return {"wide": is_wide, "cols": cols, "wide_cols": wide, "format": fmt,
+            "strike_scale": 1000.0 if h[cols["strike"]] == "strike_price" and fmt == "OptionMetrics" else 1.0}
+
+
+def _third_friday(y, m):
+    d = _dt.date(y, m, 15)
+    return d + _dt.timedelta(days=(4 - d.weekday()) % 7)
+
+
+def is_monthly_expiry(iso):
+    """Standard monthly expiry: the third Friday, the Thursday before it (when Friday is a
+    holiday) or the Saturday after it (how expirations were listed before 2015)."""
+    d = _dt.date.fromisoformat(iso)
+    return abs((d - _third_friday(d.year, d.month)).days) <= 1 and d.weekday() in (3, 4, 5)
+
+
+def option_rows(text, max_dte=None, band=None, expiries="all", start=None, end=None, spot=None, underlying=None):
+    """Parse an option chain file into normalized rows
+    (date, expiry, strike, call, bid, ask, last, volume, oi, iv, delta, under, symbol),
+    keeping contracts that pass the filters: max_dte calendar days to expiry, strikes
+    within band (0.2 = ±20%) of the spot (the file's underlying price, else spot[date]),
+    expiries 'all' | 'friday' | 'monthly', and dates from start to end.
+    Returns (rows, info)."""
+    first = text.split("\n", 1)[0]
+    sep = "\t" if first.count("\t") > first.count(",") else ","
+    lines = text.splitlines()
+    header = next(csv.reader([lines[0]], delimiter=sep))
+    lay = option_file_layout(header)
+    c, w, sc = lay["cols"], lay["wide_cols"], lay["strike_scale"]
+    out, dropped, bad, symbols, no_spot = [], 0, 0, set(), 0
+    num = lambda row, i: _num(row[i]) if i is not None and i < len(row) else None
+    for row in csv.reader(lines[1:], delimiter=sep):
+        if not row or len(row) <= max(c["date"], c["expiry"], c["strike"]):
+            continue
+        d, x, k = _opt_date(row[c["date"]]), _opt_date(row[c["expiry"]]), _num(row[c["strike"]])
+        if d is None or x is None or k is None or x < d:
+            bad += 1
+            continue
+        k = k / sc
+        sym = row[c["symbol"]].strip().strip('"').upper() if c["symbol"] is not None and c["symbol"] < len(row) else (underlying or "")
+        if underlying and sym and sym != underlying.upper() and c["symbol"] is not None and lay["format"] != "OptionMetrics":
+            dropped += 1
+            continue
+        symbols.add(sym)
+        if (start and d < start) or (end and d > end):
+            dropped += 1
+            continue
+        dte = (_dt.date.fromisoformat(x) - _dt.date.fromisoformat(d)).days
+        if max_dte is not None and dte > max_dte:
+            dropped += 1
+            continue
+        if expiries == "monthly" and not is_monthly_expiry(x) or expiries == "friday" and _dt.date.fromisoformat(x).weekday() not in (3, 4, 5):
+            dropped += 1
+            continue
+        u = num(row, c["under"])
+        if u is None and spot:
+            u = spot.get(d)
+        if band is not None:
+            if u is None or u <= 0:
+                no_spot += 1
+            elif abs(k / u - 1) > band:
+                dropped += 1
+                continue
+        if lay["wide"]:
+            legs = []
+            for side, call in ((0, 1), (1, 0)):
+                cd = w["delta"][side]
+                de = num(row, cd) if cd is not None else None
+                if lay["format"] == "ORATS" and side == 1 and de is not None:
+                    de = de - 1.0                      # ORATS gives the call's delta; the put's is delta - 1
+                if lay["format"] == "ORATS" and side == 1 and w["delta"][1] is None and w["delta"][0] is not None:
+                    cdv = num(row, w["delta"][0])
+                    de = cdv - 1.0 if cdv is not None else None
+                legs.append((call, num(row, w["bid"][side]), num(row, w["ask"][side]), num(row, w["last"][side]),
+                             num(row, w["volume"][side]), num(row, w["oi"][side]), num(row, w["iv"][side]), de))
+        else:
+            t = _opt_type(row[c["type"]]) if c["type"] < len(row) else None
+            if t is None:
+                bad += 1
+                continue
+            legs = [(t, num(row, c["bid"]), num(row, c["ask"]), num(row, c["last"]), num(row, c["volume"]),
+                     num(row, c["oi"]), num(row, c["iv"]), num(row, c["delta"]))]
+        for call, b, a, l, v, oi, iv, de in legs:
+            if a is None:                              # no ask, no quote (a zero bid with an ask is a real, far-out quote)
+                continue
+            out.append((d, x, k, call, b, a, l, v, oi, iv if iv is None or iv < 20 else iv / 100.0, de, u))
+    info = {"format": lay["format"], "rows": len(out), "dropped": dropped, "unreadable": bad, "symbols": sorted(s for s in symbols if s),
+            "no_spot": no_spot, "strike_scale": sc}
+    return out, info
+
+
+class OptionQuote:
+    """One option on one day, as a strategy sees it. Prices per share (x the multiplier per
+    contract). iv & Greeks are the file's when it has them, else implied from the mid with
+    Black-Scholes (European, no dividends, the account's cash rate); theta is per calendar
+    day and vega per volatility point (0.01)."""
+    __slots__ = ("symbol", "underlying", "kind", "strike", "expiry", "dte", "bid", "ask", "mid", "last", "volume",
+                 "open_interest", "spot", "_iv", "_delta", "_g", "_rate", "_row")
+
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+        self._g = None
+
+    def _greeks(self):
+        if self._g is None:
+            T = max(self.dte, 0) / 365.0
+            iv = self._iv
+            if (iv is None or isnan(iv) or iv <= 0) and self.mid > 0 and T > 0 and self.spot and self.spot > 0:
+                iv = implied_vol(self.mid, self.spot, self.strike, T, self._rate, self.kind)
+            if iv is None or isnan(iv) or not self.spot:
+                self._g = {"iv": NAN, "delta": self._delta if self._delta is not None else NAN, "gamma": NAN, "theta": NAN, "vega": NAN}
+            else:
+                q = bs(self.spot, self.strike, T, self._rate, iv, self.kind)
+                self._g = {"iv": iv, "delta": self._delta if self._delta is not None and not isnan(self._delta) else q["delta"],
+                           "gamma": q["gamma"], "theta": q["theta"] / 365.0, "vega": q["vega"] / 100.0}
+        return self._g
+
+    iv = property(lambda self: self._greeks()["iv"])
+    delta = property(lambda self: self._greeks()["delta"])
+    gamma = property(lambda self: self._greeks()["gamma"])
+    theta = property(lambda self: self._greeks()["theta"])
+    vega = property(lambda self: self._greeks()["vega"])
+    is_call = property(lambda self: self.kind == "call")
+    is_put = property(lambda self: self.kind == "put")
+
+    def __repr__(self):
+        return "<%s %s %s %g, %d days: bid %.2f ask %.2f>" % (self.symbol, self.kind, self.expiry, self.strike, self.dte, self.bid, self.ask)
+
+
+def implied_vol(price, S, K, T, r, kind):
+    """Black-Scholes implied volatility of a European option price (NaN if none fits)."""
+    if T <= 0 or price <= 0 or S <= 0 or K <= 0:
+        return NAN
+    disc = math.exp(-r * T)
+    lo_price = max(S - K * disc, 0.0) if kind == "call" else max(K * disc - S, 0.0)
+    hi_price = S if kind == "call" else K * disc
+    if price <= lo_price + 1e-12 or price >= hi_price:
+        return NAN
+    lo, hi = 1e-4, 6.0
+    sig = max(0.05, min(3.0, math.sqrt(2 * math.pi / T) * price / S))    # Brenner-Subrahmanyam start
+    for _ in range(100):
+        q = bs(S, K, T, r, sig, kind)
+        diff = q["price"] - price
+        if abs(diff) < 1e-10:
+            return sig
+        if diff > 0:
+            hi = sig
+        else:
+            lo = sig
+        step = sig - diff / q["vega"] if q["vega"] > 1e-12 else None
+        sig = step if step is not None and lo < step < hi else (lo + hi) / 2
+        if hi - lo < 1e-12:
+            break
+    return sig
+
+
+def occ_symbol(root, expiry, call, strike):
+    """OCC-style option symbol without padding: SPY240315C00500000."""
+    return "%s%s%s%08d" % (root, expiry[2:4] + expiry[5:7] + expiry[8:10], "C" if call else "P", int(round(strike * 1000)))
+
+
+def parse_occ(sym):
+    """'SPY240315C00500000' -> (root, '2024-03-15', is_call, 500.0)."""
+    sym = sym.replace(" ", "")
+    tail = sym[-15:]
+    return sym[:-15], "20%s-%s-%s" % (tail[:2], tail[2:4], tail[4:6]), tail[6] == "C", int(tail[7:]) / 1000.0
+
+
+class OptionChain:
+    """Every option row of one underlying, in compact arrays sorted by (date, expiry, type, strike)."""
+    CODES = {"d": "i", "x": "i", "k": "d", "c": "b", "b": "f", "a": "f", "l": "f", "v": "f", "oi": "f", "iv": "f", "de": "f", "u": "f"}
+
+    def __init__(self, underlying, dates, expiries, cols, fingerprint=None, info=None):
+        from array import array
+        self.underlying = underlying.upper()
+        self.root = self.underlying.lstrip("^")
+        self.dates, self.expiries = list(dates), list(expiries)
+        self.date_index = {d: i for i, d in enumerate(self.dates)}
+        self.expiry_index = {x: i for i, x in enumerate(self.expiries)}
+        self.cols = {}
+        n = None
+        for key, code in self.CODES.items():
+            src = cols.get(key)
+            if src is None:
+                arr = array(code, [0] * n) if code in "ib" else array(code, [NAN]) * n if n else array(code)
+            elif isinstance(src, (bytes, bytearray)):
+                arr = array(code)
+                arr.frombytes(src)
+            else:
+                arr = array(code, [(NAN if v is None else v) for v in src]) if code in "fd" else array(code, [int(v) for v in src])
+            if n is None:
+                n = len(arr)
+            if len(arr) != n:
+                raise ValueError("option column %s has %d values, expected %d" % (key, len(arr), n))
+            self.cols[key] = arr
+        self.n = n or 0
+        d, x, c, k = self.cols["d"], self.cols["x"], self.cols["c"], self.cols["k"]
+        for i in range(1, self.n):
+            if (d[i], x[i], c[i], k[i]) < (d[i - 1], x[i - 1], c[i - 1], k[i - 1]):
+                raise ValueError("option rows must be sorted by date, expiry, type and strike")
+        self.starts = [0] * (len(self.dates) + 1)
+        j = 0
+        for di in range(len(self.dates)):
+            self.starts[di] = j
+            while j < self.n and d[j] == di:
+                j += 1
+        self.starts[len(self.dates)] = self.n
+        self.has_iv = any(not isnan(v) for v in self.cols["iv"][:2000])
+        self.has_delta = any(not isnan(v) for v in self.cols["de"][:2000])
+        self.info = info or {}
+        self.fingerprint = fingerprint or self._fingerprint()
+
+    def _fingerprint(self):
+        import hashlib
+        h = hashlib.sha256(self.underlying.encode())
+        for key in ("d", "x", "k", "c", "b", "a"):
+            h.update(self.cols[key].tobytes())
+        h.update("|".join(self.dates + self.expiries).encode())
+        return h.hexdigest()[:16]
+
+    @classmethod
+    def from_rows(cls, underlying, rows, info=None):
+        """From option_rows() output; later duplicates of a (date, expiry, type, strike) win."""
+        best = {}
+        for r in rows:
+            best[(r[0], r[1], r[3], r[2])] = r
+        rows = sorted(best.values(), key=lambda r: (r[0], r[1], r[3], r[2]))
+        dates = sorted({r[0] for r in rows})
+        exps = sorted({r[1] for r in rows})
+        di, xi = {d: i for i, d in enumerate(dates)}, {x: i for i, x in enumerate(exps)}
+        cols = {"d": [di[r[0]] for r in rows], "x": [xi[r[1]] for r in rows], "k": [r[2] for r in rows], "c": [r[3] for r in rows],
+                "b": [r[4] for r in rows], "a": [r[5] for r in rows], "l": [r[6] for r in rows], "v": [r[7] for r in rows],
+                "oi": [r[8] for r in rows], "iv": [r[9] for r in rows], "de": [r[10] for r in rows], "u": [r[11] for r in rows]}
+        return cls(underlying, dates, exps, cols, info=info)
+
+    def block(self, day):
+        di = self.date_index.get(day)
+        return (0, 0) if di is None else (self.starts[di], self.starts[di + 1])
+
+    def find_row(self, day, expiry, call, strike):
+        """Row index of one contract on one day, or None."""
+        s, e = self.block(day)
+        xi = self.expiry_index.get(expiry)
+        if xi is None or s == e:
+            return None
+        key = (xi, 1 if call else 0, strike)
+        x, c, k = self.cols["x"], self.cols["c"], self.cols["k"]
+        lo, hi = s, e
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if (x[mid], c[mid], k[mid]) < key:
+                lo = mid + 1
+            else:
+                hi = mid
+        if lo < e and x[lo] == xi and c[lo] == key[1] and abs(k[lo] - strike) < 1e-6:
+            return lo
+        return None
+
+    def summary(self):
+        return {"underlying": self.underlying, "rows": self.n, "start": self.dates[0] if self.dates else None,
+                "end": self.dates[-1] if self.dates else None, "days": len(self.dates), "expiries": len(self.expiries),
+                "has_iv": self.has_iv, "has_delta": self.has_delta, "fingerprint": self.fingerprint}
+
+
+def _f(v, nd=4):
+    v = float(v)
+    return NAN if v != v else round(v, nd)
+
+
+class OptionsDesk:
+    """The account's options: orders placed on a bar fill at the next bar's end-of-day quotes
+    (buy at the ask, sell at the bid; option_fill < 1 moves the price toward the mid), plus a
+    commission per contract. Positions are marked at the mid every bar and settle in cash at
+    their intrinsic value on the expiry date's close (no early exercise or assignment)."""
+
+    def __init__(self, cfg, panel, acct):
+        self.cfg, self.panel, self.acct = cfg, panel, acct
+        self.chains = {a: OPTIONS[tk] for a, tk in enumerate(panel.tickers) if tk in OPTIONS}
+        self.mult = cfg.option_multiplier
+        self.pos = {}            # symbol -> {a, call, strike, expiry, qty, mark, cash (since this position opened), opened}
+        self.pending = []        # [(symbol, a, contracts, placed date)]
+        self.fills, self.settlements, self.unfilled, self.trades = [], [], [], []
+        self.value = 0.0
+        self.stale = 0
+        self.stats = {"premium_paid": 0.0, "premium_received": 0.0, "commissions": 0.0, "contracts": 0, "settled_cash": 0.0}
+        self.daily = {k: [] for k in ("value", "delta", "gamma", "theta", "vega", "long", "short")}
+        self._cache = {}
+
+    def chain_for(self, a):
+        ch = self.chains.get(a)
+        if ch is None:
+            raise ValueError("No option chain is loaded for %s. Drop an option chain file on the Data tab (Docs: Options)." % self.panel.tickers[a])
+        return ch
+
+    def rate(self, t):
+        return self.acct.rate_on(self.panel.dates[t])
+
+    def quote(self, a, i, t):
+        """OptionQuote for row i (on bar t), cached for the bar."""
+        key = (i, t)
+        q = self._cache.get(key)
+        if q is None:
+            ch = self.chains[a]
+            col = ch.cols
+            day = self.panel.dates[t][:10]
+            b, ak = _f(col["b"][i]), _f(col["a"][i])
+            b = 0.0 if isnan(b) else b
+            ak = NAN if isnan(ak) else ak
+            u = _f(col["u"][i])
+            spot = u if not isnan(u) and u > 0 else self.panel.mark(a, t)
+            exp = ch.expiries[col["x"][i]]
+            call = col["c"][i] == 1
+            iv, de = _f(col["iv"][i], 6), _f(col["de"][i], 6)
+            q = OptionQuote(symbol=occ_symbol(ch.root, exp, call, col["k"][i]), underlying=ch.underlying, kind="call" if call else "put",
+                            strike=col["k"][i], expiry=exp, dte=(_dt.date.fromisoformat(exp) - _dt.date.fromisoformat(day)).days,
+                            bid=b, ask=ak, mid=(b + ak) / 2 if not isnan(ak) else NAN, last=_f(col["l"][i]),
+                            volume=_f(col["v"][i], 0), open_interest=_f(col["oi"][i], 0), spot=spot,
+                            _iv=None if isnan(iv) else iv, _delta=None if isnan(de) else de, _rate=self.rate(t), _row=i)
+            if len(self._cache) > 20000:
+                self._cache.clear()
+            self._cache[key] = q
+        return q
+
+    # ---- the loop -------------------------------------------------------------
+    def on_bar(self, t):
+        day = self.panel.dates[t][:10]
+        for sym, p in list(self.pos.items()):          # expired on a day without a bar: settle at the last close before
+            if p["expiry"] < day:
+                self._settle(sym, p, max(t - 1, 0), late=True)
+        orders, self.pending = self.pending, []
+        for o in orders:
+            self._fill(o, t, day)
+        for sym, p in list(self.pos.items()):
+            if p["expiry"] == day:
+                self._settle(sym, p, t)
+        self._mark(t, day)
+
+    def _fill(self, o, t, day):
+        sym, a, qty, placed = o
+        ch = self.chains[a]
+        root, exp, call, strike = parse_occ(sym)
+        i = ch.find_row(day, exp, call, strike)
+        why = None
+        if i is None:
+            why = "no quote on %s" % day
+        else:
+            q = self.quote(a, i, t)
+            share = self.cfg.option_fill
+            if qty > 0:
+                if not (q.ask > 0):
+                    why = "no ask"
+                else:
+                    px = q.ask - (1 - share) * (q.ask - q.mid)
+            else:
+                if not (q.bid > 0):
+                    why = "no bid"
+                else:
+                    px = q.bid + (1 - share) * (q.mid - q.bid)
+        if why:
+            self.unfilled.append({"placed": placed, "date": day, "symbol": sym, "contracts": qty, "reason": why})
+            return
+        px = round(px, 4)
+        fee = self.cfg.option_commission * abs(qty)
+        cash = -qty * px * self.mult - fee
+        self.acct.cash += cash
+        self.acct._eq = None
+        self.stats["commissions"] += fee
+        self.stats["contracts"] += abs(qty)
+        self.stats["premium_paid" if qty > 0 else "premium_received"] += abs(qty) * px * self.mult
+        p = self.pos.get(sym)
+        before = p["qty"] if p else 0
+        self.fills.append({"date": day, "placed": placed, "symbol": sym, "underlying": ch.underlying, "kind": "call" if call else "put",
+                           "strike": strike, "expiry": exp, "contracts": qty, "price": px, "bid": q.bid, "ask": q.ask,
+                           "commission": fee, "cash": round(cash, 4),
+                           "action": ("buy" if qty > 0 else "sell") + (" to close" if before and (before > 0) != (qty > 0) else " to open")})
+        remaining = qty
+        if p and (before > 0) != (qty > 0):                 # the opposite side closes up to |before| contracts first
+            n_close = min(abs(before), abs(qty))
+            part = n_close / abs(qty)
+            p["cash"] += cash * part
+            p["qty"] += math.copysign(n_close, qty)
+            remaining = qty - math.copysign(n_close, qty)
+            cash *= 1 - part
+            p["mark"] = q.mid if not isnan(q.mid) else px
+            if abs(p["qty"]) < 1e-9:
+                self._close_trade(sym, p, day, "closed")
+                p = None
+        if abs(remaining) > 1e-9:
+            if p is None:
+                p = self.pos[sym] = {"a": a, "call": call, "strike": strike, "expiry": exp, "qty": 0, "mark": px, "cash": 0.0,
+                                     "opened": day, "max_qty": 0, "first_qty": remaining}
+            p["qty"] += remaining
+            p["cash"] += cash
+            p["max_qty"] = max(p["max_qty"], abs(p["qty"]))
+            p["mark"] = q.mid if not isnan(q.mid) else px
+
+    def _settle(self, sym, p, t, late=False):
+        S = self.panel.mark(p["a"], t)
+        intrinsic = max(S - p["strike"], 0.0) if p["call"] else max(p["strike"] - S, 0.0)
+        cash = p["qty"] * intrinsic * self.mult + 0.0      # + 0.0: no "-0.00" for a short that expired worthless
+        self.acct.cash += cash
+        self.acct._eq = None
+        self.stats["settled_cash"] += cash
+        p["cash"] += cash
+        self.settlements.append({"date": p["expiry"], "settled_on": self.panel.dates[t][:10], "symbol": sym, "contracts": p["qty"],
+                                 "underlying_close": S, "intrinsic": round(intrinsic, 4), "cash": round(cash, 4),
+                                 "result": "in the money" if intrinsic > 0 else "expired worthless", "late": late})
+        self._close_trade(sym, p, p["expiry"], "settled" if intrinsic > 0 else "expired")
+
+    def _close_trade(self, sym, p, day, how):
+        self.trades.append({"symbol": sym, "kind": "call" if p["call"] else "put", "strike": p["strike"], "expiry": p["expiry"],
+                            "opened": p["opened"], "closed": day, "side": "long" if p["first_qty"] > 0 else "short",
+                            "contracts": p["max_qty"], "pnl": round(p["cash"], 4), "how": how})
+        self.pos.pop(sym, None)
+
+    def _mark(self, t, day):
+        val = de = ga = th = ve = 0.0
+        lo = sh = 0
+        for sym, p in self.pos.items():
+            ch = self.chains[p["a"]]
+            i = ch.find_row(day, p["expiry"], p["call"], p["strike"])
+            if i is None:
+                self.stale += 1
+            else:
+                q = self.quote(p["a"], i, t)
+                if not isnan(q.mid):
+                    p["mark"] = q.mid
+                g = q._greeks()
+                m = p["qty"] * self.mult
+                if not isnan(g["delta"]):
+                    de += m * g["delta"]
+                if not isnan(g["gamma"]):
+                    ga += m * g["gamma"]
+                    th += m * g["theta"]
+                    ve += m * g["vega"]
+            val += p["qty"] * p["mark"] * self.mult
+            lo += p["qty"] if p["qty"] > 0 else 0
+            sh += -p["qty"] if p["qty"] < 0 else 0
+        self.value = val
+        self.acct.opt_value = val
+        self.acct._eq = None
+        for k, v in (("value", val), ("delta", de), ("gamma", ga), ("theta", th), ("vega", ve), ("long", lo), ("short", sh)):
+            self.daily[k].append(v)
+
+    def liquidate(self):
+        """Equity hit zero: book the options at their marks and stop."""
+        self.acct.cash += self.value
+        self.pos, self.pending, self.value = {}, [], 0.0
+        self.acct.opt_value = 0.0
+
+    def summary(self, dates):
+        open_value = self.value
+        pnl = sum(f["cash"] for f in self.fills) + self.stats["settled_cash"] + open_value
+        wins = [x for x in self.trades if x["pnl"] > 0]
+        return {"pnl": pnl, "open_value": open_value, "open_positions": [{"symbol": s, "contracts": p["qty"], "mark": p["mark"], "expiry": p["expiry"]} for s, p in self.pos.items()],
+                "fills": self.fills, "settlements": self.settlements, "unfilled": self.unfilled, "trades": self.trades,
+                "n_trades": len(self.trades), "win_rate": len(wins) / len(self.trades) if self.trades else NAN,
+                "expired_worthless": sum(1 for x in self.settlements if x["result"] == "expired worthless"),
+                "in_the_money": sum(1 for x in self.settlements if x["result"] == "in the money"),
+                "stale_marks": self.stale, "multiplier": self.mult, "daily": self.daily, "dates": dates,
+                "chains": {self.panel.tickers[a]: ch.fingerprint for a, ch in self.chains.items()}, **self.stats}
+
+
+class OptionsView:
+    """ctx.options: the option chain of one underlying, as of today.
+
+        ctx.options.expiries(min_dte=0, max_dte=None)        expiration dates listed today
+        ctx.options.chain(expiry=None, kind=None, min_dte=None, max_dte=None)   today's quotes
+        ctx.options.find('put', dte=30, delta=-0.25)        nearest contract (or strike=, moneyness=)
+        ctx.options.quote(symbol)                            today's quote of one contract
+        ctx.options.buy(option, contracts=1) / .sell(...)   fill at the next bar's quotes
+        ctx.options.close(option=None)                       close one contract, or all
+        ctx.options.positions                                {symbol: contracts}
+        ctx.options.value, ctx.options.greeks                marked value; $ Greeks of the positions
+    Every quote has symbol, kind, strike, expiry, dte, bid, ask, mid, last, volume,
+    open_interest, spot, iv, delta, gamma, theta (per day), vega (per vol point)."""
+
+    def __init__(self, run, a):
+        self._run, self._a = run, a
+
+    def _desk(self):
+        d = self._run.desk
+        if d is None:
+            raise ValueError("No option chain is loaded for %s. Drop an option chain file on the Data tab (Docs: Options)."
+                             % self._run.acct.panel.tickers[self._a])
+        d.chain_for(self._a)
+        return d
+
+    @property
+    def _day(self):
+        return self._run.acct.panel.dates[self._run.t][:10]
+
+    def chain(self, expiry=None, kind=None, min_dte=None, max_dte=None):
+        d = self._desk()
+        ch = d.chains[self._a]
+        s, e = ch.block(self._day)
+        if kind not in (None, "call", "put"):
+            raise ValueError("kind must be 'call', 'put' or None")
+        xi = ch.expiry_index.get(str(expiry)[:10]) if expiry is not None else None
+        if expiry is not None and xi is None:
+            return []
+        out = []
+        today = _dt.date.fromisoformat(self._day)
+        col = ch.cols
+        for i in range(s, e):
+            if xi is not None and col["x"][i] != xi:
+                continue
+            if kind is not None and (col["c"][i] == 1) != (kind == "call"):
+                continue
+            if min_dte is not None or max_dte is not None:
+                dte = (_dt.date.fromisoformat(ch.expiries[col["x"][i]]) - today).days
+                if (min_dte is not None and dte < min_dte) or (max_dte is not None and dte > max_dte):
+                    continue
+            out.append(d.quote(self._a, i, self._run.t))
+        return out
+
+    def expiries(self, min_dte=0, max_dte=None):
+        d = self._desk()
+        ch = d.chains[self._a]
+        s, e = ch.block(self._day)
+        today = _dt.date.fromisoformat(self._day)
+        xs = sorted({ch.expiries[ch.cols["x"][i]] for i in range(s, e)})
+        return [x for x in xs if (_dt.date.fromisoformat(x) - today).days >= min_dte and
+                (max_dte is None or (_dt.date.fromisoformat(x) - today).days <= max_dte)]
+
+    def find(self, kind, dte=30, delta=None, strike=None, moneyness=None, min_dte=1):
+        """The listed contract nearest the target: the expiry closest to `dte` calendar days
+        (at least min_dte), then the strike nearest `delta` (puts negative; a positive delta
+        for a put means its negative), `strike`, or spot x `moneyness` (at the money if none)."""
+        if kind not in ("call", "put"):
+            raise ValueError("kind must be 'call' or 'put'")
+        exps = self.expiries(min_dte)
+        if not exps:
+            return None
+        today = _dt.date.fromisoformat(self._day)
+        exp = min(exps, key=lambda x: (abs((_dt.date.fromisoformat(x) - today).days - dte), -_dt.date.fromisoformat(x).toordinal()))
+        qs = [q for q in self.chain(expiry=exp, kind=kind) if q.ask > 0]
+        if not qs:
+            return None
+        if delta is not None:
+            target = -abs(delta) if kind == "put" else abs(delta)
+            qs = [q for q in qs if not isnan(q.delta)]
+            return min(qs, key=lambda q: (abs(q.delta - target), q.strike)) if qs else None
+        if strike is None:
+            strike = qs[0].spot * (moneyness if moneyness is not None else 1.0)
+        return min(qs, key=lambda q: (abs(q.strike - strike), q.strike))
+
+    def quote(self, option):
+        d = self._desk()
+        sym = option.symbol if isinstance(option, OptionQuote) else str(option)
+        root, exp, call, strike = parse_occ(sym)
+        i = d.chains[self._a].find_row(self._day, exp, call, strike)
+        return None if i is None else d.quote(self._a, i, self._run.t)
+
+    def _order(self, option, contracts):
+        d = self._desk()
+        sym = option.symbol if isinstance(option, OptionQuote) else str(option)
+        if not sym or len(sym) < 16:
+            raise ValueError("pass an option from ctx.options.chain()/find() or its symbol, got %r" % (option,))
+        if contracts != int(contracts) or contracts == 0:
+            raise ValueError("options trade in whole contracts, got %r" % (contracts,))
+        d.pending.append((sym, self._a, int(contracts), self._day))
+
+    def buy(self, option, contracts=1):
+        if contracts <= 0:
+            raise ValueError("buy a positive number of contracts")
+        self._order(option, contracts)
+
+    def sell(self, option, contracts=1):
+        if contracts <= 0:
+            raise ValueError("sell a positive number of contracts (it opens a short if you hold none)")
+        self._order(option, -contracts)
+
+    def close(self, option=None):
+        d = self._desk()
+        syms = [option.symbol if isinstance(option, OptionQuote) else str(option)] if option is not None else \
+            [s for s, p in d.pos.items() if p["a"] == self._a]
+        for sym in syms:
+            p = d.pos.get(sym)
+            if p and p["qty"]:
+                d.pending.append((sym, self._a, -int(p["qty"]), self._day))
+
+    @property
+    def positions(self):
+        d = self._desk()
+        return {s: p["qty"] for s, p in d.pos.items() if p["a"] == self._a}
+
+    @property
+    def pending(self):
+        d = self._desk()
+        return [{"symbol": s, "contracts": q} for s, a, q, _ in d.pending if a == self._a]
+
+    @property
+    def value(self):
+        d = self._desk()
+        return sum(p["qty"] * p["mark"] * d.mult for p in d.pos.values() if p["a"] == self._a)
+
+    @property
+    def greeks(self):
+        """$ Greeks of today's positions: delta in shares of the underlying, gamma in shares
+        per $1 move, theta in $ per day, vega in $ per volatility point."""
+        d = self._desk()
+        out = {"delta": 0.0, "gamma": 0.0, "theta": 0.0, "vega": 0.0}
+        for s, p in d.pos.items():
+            if p["a"] != self._a:
+                continue
+            q = self.quote(s)
+            if q is None:
+                continue
+            for k in out:
+                v = getattr(q, k)
+                if not isnan(v):
+                    out[k] += p["qty"] * d.mult * v
+        return out
+
+    @property
+    def spot(self):
+        return self._run.acct.panel.mark(self._a, self._run.t)
+
+    def __repr__(self):
+        return "<options on %s: %s>" % (self._run.acct.panel.tickers[self._a], "loaded" if self._run.desk and self._a in self._run.desk.chains else "no chain loaded")
+
+
+# =============================================================================
 # 7e. One strategy on many instruments; the stock dashboard
 # =============================================================================
 
@@ -6884,6 +7617,11 @@ def api_run(p):
         "data": {tk: _data_info(ds) for tk, ds in zip(res.tickers, res.panel.sets)},
         "provenance": provenance(res, p["code"], strat.modules),
     }
+    if res.options:
+        o = res.options
+        out["options"] = {k: v for k, v in o.items() if k not in ("fills", "settlements", "unfilled", "trades")}
+        out["options"].update(fills=o["fills"][-ROW_LIMIT:], fills_total=len(o["fills"]), settlements=o["settlements"][-ROW_LIMIT:],
+                              unfilled=o["unfilled"][-ROW_LIMIT:], trades=o["trades"][-ROW_LIMIT:], trades_total=len(o["trades"]))
     if res.portfolio:
         idx = _downsample(len(res.dates))
         out["attribution"] = attribution(res)
@@ -6909,7 +7647,8 @@ def provenance(res, code, modules=()):
             "params": dict(res.params), "config": res.config.as_dict(),
             "data": {tk: ds.fingerprint() for tk, ds in zip(res.tickers, res.panel.sets)},
             "calendars": {tk: guess_calendar(ds) for tk, ds in zip(res.tickers, res.panel.sets)}, "periods_per_year": res_ann(res),
-            "start": res.dates[0], "end": res.dates[-1], "bars": len(res.dates), "benchmark": res.benchmark}
+            "start": res.dates[0], "end": res.dates[-1], "bars": len(res.dates), "benchmark": res.benchmark,
+            "option_chains": dict(res.options["chains"]) if getattr(res, "options", None) else {}}
 
 
 def api_metrics(p):
@@ -7006,6 +7745,37 @@ def api_costs(p):
 def api_rank(p):
     """Rank finished strategy runs (see rank_strategies)."""
     return rank_strategies(p["runs"], p.get("stat", "sharpe"), float(p.get("rf") or 0.0))
+
+
+def api_option_rows(p):
+    """Parse an option chain file (see option_rows); for checks & small files."""
+    rows, info = option_rows(p["text"], p.get("max_dte"), p.get("band"), p.get("expiries", "all"), p.get("start"), p.get("end"),
+                             p.get("spot"), p.get("underlying"))
+    return {"rows": rows[: int(p.get("limit", 1000))], "info": info}
+
+
+def load_option_chain(underlying, dates, expiries, cols, fingerprint=None, info=None):
+    """Keep an option chain for `underlying` (columns as lists or raw bytes; see OptionChain)."""
+    ch = OptionChain(underlying, dates, expiries, cols, fingerprint, info)
+    OPTIONS[ch.underlying] = ch
+    return ch.summary()
+
+
+def load_option_buffers(underlying, meta_json, buffers):
+    """The page's binary path: buffers is a {column: typed array} proxy from JavaScript."""
+    meta = json.loads(meta_json)
+    has = getattr(buffers, "has", None) or buffers.__contains__        # a JS Map from the page, or a dict
+    cols = {k: buffers.get(k).to_bytes() for k in OptionChain.CODES if has(k)}
+    return json.dumps({"ok": True, "result": load_option_chain(underlying, meta["dates"], meta["expiries"], cols, meta.get("fingerprint"), meta.get("info"))})
+
+
+def api_load_options(p):
+    return load_option_chain(p["underlying"], p["dates"], p["expiries"], p["cols"], p.get("fingerprint"), p.get("info"))
+
+
+def api_forget_options(p):
+    OPTIONS.pop(str(p["underlying"]).upper(), None)
+    return True
 
 
 def api_breadth(p):
@@ -7151,7 +7921,8 @@ API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
     "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit,
-    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "rank": api_rank, "breadth": api_breadth, "dashboard": api_dashboard, "risk": api_risk, "capacity": api_capacity,
+    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "rank": api_rank, "breadth": api_breadth, "dashboard": api_dashboard,
+    "option_rows": api_option_rows, "load_options": api_load_options, "forget_options": api_forget_options, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,

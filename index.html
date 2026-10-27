@@ -657,6 +657,13 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
                 <div class="field"><label for="cfgFill">Limit &amp; Stop Fills</label><select id="cfgFill" name="fill-model"><option value="standard">Standard</option><option value="pessimistic">Pessimistic</option></select></div>
               </div>
               <p class="help">Market fills pay half the spread plus impact of <i>coefficient × daily volatility × √(shares ÷ 20-day average volume)</i>. An order bigger than the volume limit fills over several days (0 = no limit). Limit orders pay commission only. <i>Pessimistic</i> needs a limit to trade through its price & assumes a bar hits a stop before a target.</p>
+              <h3 class="subhead">Options</h3>
+              <div class="grid3">
+                <div class="field"><label for="cfgOptMult">Contract Multiplier</label><input type="text" inputmode="decimal" id="cfgOptMult" name="option-multiplier" value="100" autocomplete="off" aria-describedby="cfgOptMult-err"><p class="ferr" id="cfgOptMult-err" hidden></p></div>
+                <div class="field"><label for="cfgOptComm">Commission per Contract ($)</label><input type="text" inputmode="decimal" id="cfgOptComm" name="option-commission" value="0.65" autocomplete="off" aria-describedby="cfgOptComm-err"><p class="ferr" id="cfgOptComm-err" hidden></p></div>
+                <div class="field"><label for="cfgOptFill">Options Fill At</label><select id="cfgOptFill" name="option-fill"><option value="1" selected>The bid or ask</option><option value="0.5">Halfway to the mid</option><option value="0">The mid</option></select></div>
+              </div>
+              <p class="help">For strategies that trade <code translate="no">ctx.options</code> from a loaded option chain: orders fill at the next day’s end-of-day quotes. Short options aren’t margined.</p>
               <h3 class="subhead">Carry &amp; Margin</h3>
               <div class="grid3">
                 <div class="field"><label for="cfgCashRate">Cash Interest (%/yr)</label><input type="text" inputmode="decimal" id="cfgCashRate" name="cash-rate" value="" placeholder="= risk-free" autocomplete="off" aria-describedby="cfgCashRate-err"><p class="ferr" id="cfgCashRate-err" hidden></p></div>
@@ -713,7 +720,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
             <div class="picker" id="exportPick" hidden>
               <div class="row"><button class="btn small primary" type="button" data-export="tearsheet">Tear Sheet (Print / PDF)</button>
                 <button class="btn small" type="button" data-export="equity">Equity &amp; Exposure CSV</button><button class="btn small" type="button" data-export="trades">Trades CSV</button>
-                <button class="btn small" type="button" data-export="fills">Fills CSV</button><button class="btn small" type="button" data-export="stats">Statistics CSV</button>
+                <button class="btn small" type="button" data-export="fills">Fills CSV</button><button class="btn small" type="button" data-export="optfills" hidden>Option Fills CSV</button><button class="btn small" type="button" data-export="stats">Statistics CSV</button>
                 <button class="btn small" type="button" data-export="json">Full Run (JSON)</button></div>
               <p class="help">Every file names the run, its code hash, data fingerprints & engine version, so the numbers can be traced back. Statistics CSV includes the hidden statistics too.</p>
             </div>
@@ -808,6 +815,16 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
           <section class="panel" aria-labelledby="h-trades">
             <div class="panel-h"><h3 id="h-trades">Trades</h3><span class="muted" id="tradeInfo"></span></div>
             <div class="panel-b"><div class="tablebox" tabindex="0" aria-label="Trades table"><table id="tradesTable"><tbody><tr><td class="muted">Waiting for the first run…</td></tr></tbody></table></div></div>
+          </section>
+
+          <section class="panel" id="obPanel" aria-labelledby="h-ob" hidden>
+            <div class="panel-h"><h3 id="h-ob">Options</h3><span class="muted" id="obInfo"></span></div>
+            <dl class="kpis" id="obKpis"></dl>
+            <div class="panel-b">
+              <div class="chart mid"><canvas id="chOb" role="img" aria-label="Marked value of the option positions & their dollar delta"></canvas></div>
+              <div class="tablebox" tabindex="0" aria-label="Option fills & settlements"><table id="obTable"></table></div>
+              <p class="help" id="obHelp"></p>
+            </div>
           </section>
 
           <section class="panel" id="limitPanel" aria-labelledby="h-limits" hidden>
@@ -1054,7 +1071,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
     </section>
 
     <section class="panel" id="options" data-opt="options" aria-labelledby="h-opt">
-      <div class="panel-h"><div class="toolhead"><h2 id="h-opt">Options Overlay</h2><p>Write calls on the shares your strategy holds, buy puts under them, or both (a collar), and see what it does to returns & drawdowns. Also shows a delta-hedged option on the same instrument: whether selling volatility paid. Option prices are <b>modelled</b> with Black-Scholes, not market quotes.</p></div></div>
+      <div class="panel-h"><div class="toolhead"><h2 id="h-opt">Options Overlay</h2><p>Write calls on the shares your strategy holds, buy puts under them, or both (a collar), and see what it does to returns & drawdowns. Also shows a delta-hedged option on the same instrument: whether selling volatility paid. Option prices are <b>modelled</b> with Black-Scholes, not market quotes; to trade real quotes, import an option chain on the Data tab & use <code translate="no">ctx.options</code>.</p></div></div>
       <div class="panel-b toolgrid">
         <form class="toolform" id="optForm" novalidate>
           <div class="field"><label for="optKind">Overlay</label><select id="optKind" name="overlay"><option value="covered_call" selected>Covered call (sell calls)</option><option value="protective_put">Protective put (buy puts)</option><option value="collar">Collar (sell calls, buy puts)</option></select></div>
@@ -1225,6 +1242,11 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       <div class="panel-h"><h2 id="h-inst">Loaded Instruments</h2><span class="muted" id="instCount"></span></div>
       <div class="panel-b scroll"><table id="instTable"></table></div>
       <p class="help divwait" id="divWaiting" aria-live="polite" hidden></p>
+    </section>
+
+    <section class="panel" aria-labelledby="h-optc">
+      <div class="panel-h"><div class="toolhead"><h2 id="h-optc">Option Chains</h2><p>End-of-day option quotes that strategies trade through <code translate="no">ctx.options</code>. Drop the files on <b>Add Data</b> above; QuantLab doesn’t come with option data (it’s licensed: see Docs › Options for sources). The underlying’s prices must be loaded too.</p></div><span class="muted" id="optCount"></span></div>
+      <div class="panel-b scroll"><table id="optTable"></table></div>
     </section>
 
     <section class="panel" aria-labelledby="h-fut">
@@ -1446,11 +1468,12 @@ const idb = {
   async open() {
     if (this.db) return this.db;
     this.db = await new Promise((resolve, reject) => {
-      const req = indexedDB.open('quantlab', 3);
+      const req = indexedDB.open('quantlab', 4);
       req.onupgradeneeded = e => {
         const db = req.result;
         if (!db.objectStoreNames.contains('instruments')) db.createObjectStore('instruments', { keyPath: 'ticker' });
         if (!db.objectStoreNames.contains('runs')) db.createObjectStore('runs', { keyPath: 'id' });   // run history (v2)
+        if (!db.objectStoreNames.contains('options')) db.createObjectStore('options', { keyPath: 'underlying' });   // v4: option chains
         if (!db.objectStoreNames.contains('dividends')) {   // v3: dividends per ticker, apart from the prices
           const divs = db.createObjectStore('dividends', { keyPath: 'ticker' });
           if (e.oldVersion >= 1) {   // move dividends that v2 kept inside the instrument records
@@ -1555,6 +1578,180 @@ function csvDate(s) {
   const dt = new Date(Date.UTC(y, mo - 1, d));
   return dt.getUTCFullYear() === y && dt.getUTCMonth() === mo - 1 && dt.getUTCDate() === d ? dt.toISOString().slice(0, 10) : null;
 }
+// Option chain files, exactly as engine.option_rows reads them (tests/test_engine.py runs this
+// reader under Node to check both give the same rows). It reads a file in pieces, keeps only
+// the contracts that pass the filters, and stores them in typed arrays: a year of a liquid
+// underlying's chain is millions of rows.
+const OPTION_COLUMNS = {
+  date: ['quote_date', 'trade_date', 'tradedate', 'date', 'quotedate', 'asof', 'as_of', 'data_date'],
+  expiry: ['expiration', 'expire_date', 'expiration_date', 'expirdate', 'exdate', 'expiry', 'expiry_date', 'exp_date', 'maturity'],
+  strike: ['strike', 'strike_price'],
+  type: ['option_type', 'cp_flag', 'call_put', 'put_call', 'right', 'type', 'callput', 'cp'],
+  bid: ['bid_eod', 'bid', 'best_bid', 'bid_price', 'bid_1545'],
+  ask: ['ask_eod', 'ask', 'best_offer', 'ask_price', 'offer', 'ask_1545'],
+  last: ['last', 'last_price', 'close'],
+  volume: ['trade_volume', 'volume'],
+  oi: ['open_interest', 'openinterest'],
+  iv: ['implied_volatility_1545', 'implied_volatility', 'impl_volatility', 'iv', 'implied_vol'],
+  delta: ['delta_1545', 'delta'],
+  under: ['underlying_last', 'active_underlying_price_1545', 'underlying_price', 'stock_price', 'stockprice', 'spot', 'underlying_close'],
+  symbol: ['underlying_symbol', 'ticker', 'underlying_ticker', 'symbol', 'root'],
+};
+const OPTION_WIDE = {
+  bid: [['c_bid', 'callbidprice', 'call_bid'], ['p_bid', 'putbidprice', 'put_bid']],
+  ask: [['c_ask', 'callaskprice', 'call_ask'], ['p_ask', 'putaskprice', 'put_ask']],
+  last: [['c_last', 'call_last'], ['p_last', 'put_last']],
+  volume: [['c_volume', 'callvolume', 'call_volume'], ['p_volume', 'putvolume', 'put_volume']],
+  oi: [['c_oi', 'callopeninterest', 'call_open_interest'], ['p_oi', 'putopeninterest', 'put_open_interest']],
+  iv: [['c_iv', 'callmidiv', 'call_iv'], ['p_iv', 'putmidiv', 'put_iv']],
+  delta: [['c_delta', 'call_delta'], ['p_delta', 'put_delta']],
+};
+const optHeader = h => h.trim().replace(/^"|"$/g, '').trim().replace(/^\[|\]$/g, '').trim().toLowerCase().replace(/ /g, '_');
+function optSplit(line, sep) {
+  if (sep === '\t') return line.split('\t');
+  if (line.indexOf('"') < 0) return line.split(',');
+  const out = []; let cur = '', q = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (q) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += ch; }
+    else if (ch === '"') q = true; else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch;
+  }
+  out.push(cur); return out;
+}
+function optNum(s) {
+  if (s == null) return null;
+  s = String(s).trim().replace(/[$,%]/g, '');
+  if (['', '.', '-', 'N/A', 'n/a', 'null', 'None', 'NaN', 'nan'].includes(s)) return null;
+  const v = Number(s); return Number.isFinite(v) ? v : null;
+}
+function optIso(y, m, d) { const dt = new Date(Date.UTC(y, m - 1, d)); return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d ? dt.toISOString().slice(0, 10) : null; }
+function optDate(raw) {
+  const s = String(raw).trim().replace(/^"|"$/g, '').trim();
+  if (/^\d{8}(\D|$)/.test(s)) return optIso(+s.slice(0, 4), +s.slice(4, 6), +s.slice(6, 8));
+  let m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); if (m) return optIso(+m[3], +m[1], +m[2]);
+  m = s.slice(0, 10).match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})/); if (m) return optIso(+m[3], +m[2], +m[1]);
+  m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? optIso(+m[1], +m[2], +m[3]) : null;
+}
+function optType(raw) { const v = String(raw).trim().replace(/^"|"$/g, '').toUpperCase(); return ['C', 'CALL', 'CALLS'].includes(v) ? 1 : ['P', 'PUT', 'PUTS'].includes(v) ? 0 : null; }
+function optionLayout(header) {
+  const h = header.map(optHeader), col = names => { for (const n of names) { const i = h.indexOf(n); if (i >= 0) return i; } return null; };
+  const cols = Object.fromEntries(Object.entries(OPTION_COLUMNS).map(([k, v]) => [k, col(v)]));
+  const wide = Object.fromEntries(Object.entries(OPTION_WIDE).map(([k, [c, p]]) => [k, [col(c), col(p)]]));
+  const isWide = wide.bid[0] != null && wide.bid[1] != null && cols.type == null;
+  if (cols.date == null || cols.expiry == null || cols.strike == null) throw new Error('not an option chain: needs a quote date, an expiration and a strike column');
+  if (!isWide && (cols.type == null || cols.bid == null || cols.ask == null)) throw new Error('an option chain needs call/put, bid and ask columns (or C_BID/P_BID-style columns for calls & puts)');
+  if (isWide && (wide.ask[0] == null || wide.ask[1] == null)) throw new Error('a wide option chain needs ask columns for calls and puts');
+  const format = isWide ? (h.includes('c_bid') ? 'OptionsDX' : h.includes('callbidprice') ? 'ORATS' : 'wide')
+    : (h.includes('underlying_symbol') ? 'CBOE DataShop' : h.includes('exdate') && h.includes('best_bid') ? 'OptionMetrics' : 'long');
+  if (isWide && cols.delta != null && wide.delta[0] == null) wide.delta = [cols.delta, null];
+  return { wide: isWide, cols, wideCols: wide, format, strikeScale: h[cols.strike] === 'strike_price' && format === 'OptionMetrics' ? 1000 : 1 };
+}
+const optDay = iso => new Date(iso + 'T00:00:00Z');
+const optDays = (a, b) => Math.round((optDay(b) - optDay(a)) / 864e5);
+function isMonthlyExpiry(iso) {
+  const d = optDay(iso), f = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 15));
+  f.setUTCDate(15 + (5 - f.getUTCDay() + 7) % 7);
+  return Math.abs(Math.round((d - f) / 864e5)) <= 1 && [4, 5, 6].includes(d.getUTCDay());
+}
+class OptCol {
+  constructor(T) { this.T = T; this.a = new T(4096); this.n = 0; }
+  push(v) { if (this.n === this.a.length) { const b = new this.T(this.a.length * 2); b.set(this.a); this.a = b; } this.a[this.n++] = v; }
+  view() { return this.a.subarray(0, this.n); }
+}
+const OPT_KEYS = { d: Int32Array, x: Int32Array, k: Float64Array, c: Int8Array, b: Float32Array, a: Float32Array, l: Float32Array, v: Float32Array, oi: Float32Array, iv: Float32Array, de: Float32Array, u: Float32Array };
+// optionReader({underlying, max_dte, band, expiries: 'all'|'friday'|'monthly', start, end, spot: {date: price}, max_rows})
+// .push(text piece) … .done(); then .info, .rows() (as engine.option_rows gives them) and .chain() (sorted columns).
+function optionReader(o = {}) {
+  const st = { rest: '', lay: null, sep: ',', dropped: 0, bad: 0, noSpot: 0, symbols: new Set(), dates: new Map(), exps: new Map(), full: false };
+  const cols = Object.fromEntries(Object.entries(OPT_KEYS).map(([k, T]) => [k, new OptCol(T)]));
+  const id = (m, v) => { let i = m.get(v); if (i === undefined) { i = m.size; m.set(v, i); } return i; };
+  const nil = v => (v == null ? NaN : v);
+  const maxRows = o.max_rows || Infinity, under = o.underlying ? String(o.underlying).toUpperCase() : '';
+  const line = text => {
+    if (!text.trim()) return;
+    if (!st.lay) { st.sep = (text.split('\t').length > text.split(',').length) ? '\t' : ','; st.lay = optionLayout(optSplit(text, st.sep)); return; }
+    const L = st.lay, c = L.cols, w = L.wideCols, row = optSplit(text, st.sep);
+    if (row.length <= Math.max(c.date, c.expiry, c.strike)) return;
+    const d = optDate(row[c.date]), x = optDate(row[c.expiry]); let k = optNum(row[c.strike]);
+    if (d == null || x == null || k == null || x < d) { st.bad++; return; }
+    k = k / L.strikeScale;
+    const sym = c.symbol != null && c.symbol < row.length ? row[c.symbol].trim().replace(/^"|"$/g, '').toUpperCase() : under;
+    if (under && sym && sym !== under && c.symbol != null && L.format !== 'OptionMetrics') { st.dropped++; return; }
+    st.symbols.add(sym);
+    if ((o.start && d < o.start) || (o.end && d > o.end)) { st.dropped++; return; }
+    const dte = optDays(d, x);
+    if (o.max_dte != null && dte > o.max_dte) { st.dropped++; return; }
+    if ((o.expiries === 'monthly' && !isMonthlyExpiry(x)) || (o.expiries === 'friday' && ![4, 5, 6].includes(optDay(x).getUTCDay()))) { st.dropped++; return; }
+    const num = i => (i != null && i < row.length ? optNum(row[i]) : null);
+    let u = num(c.under);
+    if (u == null && o.spot) u = o.spot[d] == null ? null : o.spot[d];
+    if (o.band != null) { if (u == null || u <= 0) st.noSpot++; else if (Math.abs(k / u - 1) > o.band) { st.dropped++; return; } }
+    let legs;
+    if (L.wide) {
+      legs = [];
+      for (const [side, call] of [[0, 1], [1, 0]]) {
+        const cd = w.delta[side]; let de = cd != null ? num(cd) : null;
+        if (L.format === 'ORATS' && side === 1 && de != null) de = de - 1;
+        if (L.format === 'ORATS' && side === 1 && w.delta[1] == null && w.delta[0] != null) { const cv = num(w.delta[0]); de = cv != null ? cv - 1 : null; }
+        legs.push([call, num(w.bid[side]), num(w.ask[side]), num(w.last[side]), num(w.volume[side]), num(w.oi[side]), num(w.iv[side]), de]);
+      }
+    } else {
+      const t = c.type < row.length ? optType(row[c.type]) : null;
+      if (t == null) { st.bad++; return; }
+      legs = [[t, num(c.bid), num(c.ask), num(c.last), num(c.volume), num(c.oi), num(c.iv), num(c.delta)]];
+    }
+    for (const [call, b, a, l, v, oi, iv, de] of legs) {
+      if (a == null) continue;
+      if (cols.d.n >= maxRows) { st.full = true; return; }
+      cols.d.push(id(st.dates, d)); cols.x.push(id(st.exps, x)); cols.k.push(k); cols.c.push(call);
+      cols.b.push(nil(b)); cols.a.push(a); cols.l.push(nil(l)); cols.v.push(nil(v)); cols.oi.push(nil(oi));
+      cols.iv.push(iv == null ? NaN : iv < 20 ? iv : iv / 100); cols.de.push(nil(de)); cols.u.push(nil(u));
+    }
+  };
+  const api = {
+    push(text) { const parts = (st.rest + text).split(/\r?\n/); st.rest = parts.pop(); for (const l of parts) { line(l); if (st.full) return false; } return true; },
+    done() { if (st.rest) line(st.rest); st.rest = ''; return api; },
+    get info() { return { format: st.lay ? st.lay.format : null, rows: cols.d.n, dropped: st.dropped, unreadable: st.bad, symbols: [...st.symbols].filter(Boolean).sort(), no_spot: st.noSpot, strike_scale: st.lay ? st.lay.strikeScale : 1, truncated: st.full }; },
+    get layout() { return st.lay; },
+    rows() {
+      const ds = [...st.dates.keys()], xs = [...st.exps.keys()], v = k => cols[k].view(), out = [];
+      const f = (a, i) => (Number.isNaN(a[i]) ? null : Math.round(a[i] * 1e6) / 1e6);
+      for (let i = 0; i < cols.d.n; i++) out.push([ds[v('d')[i]], xs[v('x')[i]], v('k')[i], v('c')[i], f(v('b'), i), f(v('a'), i), f(v('l'), i), f(v('v'), i), f(v('oi'), i), f(v('iv'), i), f(v('de'), i), f(v('u'), i)]);
+      return out;
+    },
+    part() { return { dates: [...st.dates.keys()], exps: [...st.exps.keys()], cols: Object.fromEntries(Object.entries(cols).map(([k, c]) => [k, c.view()])) }; },
+    chain() { return optionChain([api.part()]); },
+  };
+  return api;
+}
+// Several {dates, exps, cols} parts (each with its own date & expiry lists) -> one chain sorted by
+// (date, expiry, put/call, strike) like engine.OptionChain, with duplicates removed: later parts win.
+function optionChain(parts) {
+  const allD = [...new Set(parts.flatMap(p => p.dates))].sort(), allX = [...new Set(parts.flatMap(p => p.exps))].sort();
+  const di = new Map(allD.map((d, i) => [d, i])), xi = new Map(allX.map((x, i) => [x, i])), nx = allX.length;
+  const n = parts.reduce((a, p) => a + p.cols.d.length, 0);
+  const P = new Float64Array(n), K = new Float64Array(n), src = new Int32Array(n), part = new Int16Array(n);
+  let j = 0;
+  parts.forEach((p, pi) => {
+    const dm = p.dates.map(d => di.get(d)), xm = p.exps.map(x => xi.get(x)), c = p.cols;
+    for (let i = 0; i < c.d.length; i++, j++) { P[j] = (dm[c.d[i]] * nx + xm[c.x[i]]) * 2 + c.c[i]; K[j] = c.k[i]; src[j] = i; part[j] = pi; }
+  });
+  const order = new Uint32Array(n); for (let i = 0; i < n; i++) order[i] = i;
+  order.sort((a, b) => P[a] - P[b] || K[a] - K[b] || a - b);
+  const keep = [];
+  for (let q = 0; q < n; q++) { const i = order[q], nxt = q + 1 < n ? order[q + 1] : -1; if (nxt >= 0 && P[nxt] === P[i] && K[nxt] === K[i]) continue; keep.push(i); }
+  const out = {};
+  for (const [k, T] of Object.entries(OPT_KEYS)) {
+    const a = new T(keep.length);
+    for (let q = 0; q < keep.length; q++) {
+      const i = keep[q];
+      a[q] = k === 'd' ? Math.floor(P[i] / 2 / nx) : k === 'x' ? Math.floor(P[i] / 2) % nx : parts[part[i]].cols[k][src[i]];
+    }
+    out[k] = a;
+  }
+  return { dates: allD, expiries: allX, cols: out, n: keep.length };
+}
+// end of the option file reader
 // Generic tables, exactly as engine.normalize_table: any delimiter, decimal commas & other
 // column names -> a standard comma CSV (Date, Time, Open, High, Low, Close, Adj Close, Volume).
 const TABLE_ALIASES = {
@@ -1701,6 +1898,16 @@ async function loadUploads() { for (const rec of await idb.all()) addInstrument(
 // They attach whenever that ticker's prices are loaded, so a file can arrive before its prices.
 const dividendSets = new Map();
 async function loadDividends() { for (const rec of await idb.all('dividends')) dividendSets.set(rec.ticker, rec); }
+// Option chains per underlying (IndexedDB 'options'): {underlying, dates, expiries, cols: {typed arrays}, n, files, info}.
+const optionSets = new Map();
+const OPTION_MAX_ROWS = 4000000;   // what a browser tab can hold comfortably (engine.OPTION_MAX_ROWS)
+async function loadOptionSets() { for (const rec of await idb.all('options')) optionSets.set(rec.underlying, rec); }
+const usesOptions = p => /\boptions\b/.test([p.code || '', ...Object.values(p.modules || {})].join('\n'));
+// A chain changed or went away: drop it from every Python that loaded it.
+async function forgetOptions(t) {
+  resultCache.clear();
+  for (const c of [py, ...pool.helpers]) if (c.loadedOptions && c.loadedOptions.has(t)) { c.loadedOptions.delete(t); try { await c.call('forget_options', { underlying: t }); } catch (e) { /* a stopped helper */ } }
+}
 const dividendEvents = t => (dividendSets.has(t) ? dividendSets.get(t).events : ((instruments.get(t) || {}).events || {}).dividends || null);
 function sortedTickers() { return [...instruments.values()].sort((a, b) => (a.synthetic - b.synthetic) || a.ticker.localeCompare(b.ticker)).map(r => r.ticker); }
 
@@ -1750,6 +1957,19 @@ const py = {
   // Data changed: reload it before the next use, here & in the helpers, and drop cached results.
   forget(ticker) { this.loaded.delete(ticker); pool.forget(ticker); resultCache.clear(); },
   forgetRate(name) { this.loadedRates.delete(name); pool.forgetRate(name); resultCache.clear(); },
+  loadedOptions: new Set(),
+  raw(msg) { return this.mode === 'worker' ? this._post(msg) : this._inline(msg); },
+  // Option chains go to Python as typed arrays, and only for code that uses ctx.options.
+  async ensureOptions(tickers, code) {
+    if (!optionSets.size || !/\boptions\b/.test(code || '')) return;
+    for (const t of new Set(tickers.filter(Boolean))) {
+      const rec = optionSets.get(t); if (!rec || this.loadedOptions.has(t)) continue;
+      await this.ready;
+      const out = JSON.parse(await this.raw({ type: 'options', underlying: t, meta: JSON.stringify({ dates: rec.dates, expiries: rec.expiries, info: rec.info }), cols: rec.cols }));
+      if (!out.ok) throw new PyError(out.error);
+      this.loadedOptions.add(t);
+    }
+  },
   async ensure(tickers) {
     for (const t of new Set(tickers.filter(Boolean))) {
       if (this.loaded.has(t)) continue;
@@ -1769,7 +1989,7 @@ const py = {
   canStop() { return this.mode === 'worker'; },
   async restart() {
     for (const w of this.waiting.values()) { clearTimeout(w.t); w.reject(new Error('Stopped')); }
-    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear(); this.loadedFactors = new Set(); pool.stop(); pyHolds = null;
+    this.waiting.clear(); this._kill(); this.loaded.clear(); this.loadedRates.clear(); this.loadedOptions.clear(); this.loadedFactors = new Set(); pool.stop(); pyHolds = null;
     this.ready = (async () => { this._spawn(); await this._post(this.initMsg(), 180000); })();
     return this.ready;
   },
@@ -1782,7 +2002,7 @@ const py = {
 class Helper {
   constructor() {
     this.worker = new Worker('worker.js'); this.seq = 0; this.waiting = new Map();
-    this.loaded = new Set(); this.loadedRates = new Set();
+    this.loaded = new Set(); this.loadedRates = new Set(); this.loadedOptions = new Set();
     this.worker.onmessage = e => { if (e.data.progress) return; const w = this.waiting.get(e.data.id); if (w) { this.waiting.delete(e.data.id); e.data.ok ? w.resolve(e.data.result) : w.reject(new Error(e.data.error)); } };
     this.worker.onerror = e => { if (e.preventDefault) e.preventDefault(); this.fail(new Error(e.message || 'helper worker error')); };
     this.ready = this._post(py.initMsg()); this.ready.catch(() => {});   // a failed start is handled where it's awaited
@@ -1797,7 +2017,8 @@ class Helper {
   fail(err) { for (const w of this.waiting.values()) w.reject(err); this.waiting.clear(); }
   kill() { this.fail(new Error('Stopped')); this.worker.terminate(); }
 }
-Helper.prototype.ensure = py.ensure; Helper.prototype.ensureRate = py.ensureRate;
+Helper.prototype.ensure = py.ensure; Helper.prototype.ensureRate = py.ensureRate; Helper.prototype.ensureOptions = py.ensureOptions;
+Helper.prototype.raw = function (msg) { return this._post(msg); };
 
 const pool = {
   helpers: [], idle: null,
@@ -2545,6 +2766,7 @@ const CFG_RULES = [
   ['cfgCashRate', raw => (String(raw).trim() === '' ? null : between(-5, 30, 'percent')(raw))], ['cfgSpread', between(0, 20, 'percent')],
   ['cfgBorrow', between(0, 200, 'percent')], ['cfgMaint', between(0, 90, 'percent')],
   ['cfgSpread2', between(0, 1000, 'basis points')], ['cfgImpact', between(0, 10)], ['cfgPart', between(0, 100, 'percent')],
+  ['cfgOptMult', between(1, 100000, '', false, 100)], ['cfgOptComm', between(0, 100, 'dollars', false, 0.65)],
   ['cfgHtb', raw => (parseHtb(raw) ? null : 'Use TICKER:fee pairs in %/yr, e.g. GME:25, AMC:12.')],
   ['cfgVolT', between(0.5, 100, 'percent')], ['cfgKelly', between(0.01, 2)], ['cfgLook', between(10, 1000, 'days', true, 63)],
   ['cfgMaxW', raw => (String(raw).trim() === '' ? null : between(0.1, 1000, 'percent')(raw))], ['cfgMaxG', raw => (String(raw).trim() === '' ? null : between(1, 1000, 'percent')(raw))],
@@ -2576,7 +2798,14 @@ function readConfig() {
     rate_ticker: $('#cfgRateSeries').value, margin_spread: n('cfgSpread', 1) / 100, borrow_fee: n('cfgBorrow', 0.25) / 100,
     maintenance_margin: n('cfgMaint', 25) / 100, borrow_fees: parseHtb($('#cfgHtb').value) || {},
     spread_bps: n('cfgSpread2', 0), impact_coef: n('cfgImpact', 1), max_participation: n('cfgPart', 10) / 100, fill_model: $('#cfgFill').value, ...readLimits(),
-    ...($('#cfgBase').value && $('#cfgBase').value !== 'USD' ? { base_currency: $('#cfgBase').value } : {}) };   // sent only when not USD, so older runs match
+    ...($('#cfgBase').value && $('#cfgBase').value !== 'USD' ? { base_currency: $('#cfgBase').value } : {}), ...readOptionCfg() };   // sent only when not USD, so older runs match
+}
+// Option settings are sent only when they differ from the engine's defaults, so runs without options keep their keys.
+function readOptionCfg() {
+  const n = (id, d) => { const v = parseNumber($('#' + id).value); return isFinite(v) ? v : d; };
+  const c = { option_multiplier: n('cfgOptMult', 100), option_commission: n('cfgOptComm', 0.65), option_fill: parseFloat($('#cfgOptFill').value) };
+  const D = { option_multiplier: 100, option_commission: 0.65, option_fill: 1 };
+  return Object.fromEntries(Object.entries(c).filter(([k, v]) => Math.abs(v - D[k]) > 1e-12));
 }
 function readLimits() {
   const n = (id, d) => { const v = parseNumber($('#' + id).value); return isFinite(v) ? v : d; };
@@ -2588,7 +2817,7 @@ function readLimits() {
   return Object.fromEntries(Object.entries(c).filter(([k, v]) => Math.abs((typeof v === 'number' ? v : 0) - (typeof LIMIT_DEFAULTS[k] === 'number' ? LIMIT_DEFAULTS[k] : 0)) > 1e-12 || (typeof v === 'string' && v !== LIMIT_DEFAULTS[k])));
 }
 function saveSettings() {
-  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill', 'cfgSizing', 'cfgVolT', 'cfgKelly', 'cfgLook', 'cfgMaxW', 'cfgMaxG', 'cfgMaxN', 'cfgDD', 'cfgDDScale', 'cfgBase'].forEach(id => { s[id] = $('#' + id).value.trim(); });
+  const s = {}; ['cfgCash', 'cfgCommBps', 'cfgCommFixed', 'cfgSlip', 'cfgExec', 'cfgLev', 'cfgBand', 'cfgRf', 'cfgSeed', 'cfgCashRate', 'cfgRateSeries', 'cfgSpread', 'cfgBorrow', 'cfgMaint', 'cfgHtb', 'cfgSpread2', 'cfgImpact', 'cfgPart', 'cfgFill', 'cfgOptMult', 'cfgOptComm', 'cfgOptFill', 'cfgSizing', 'cfgVolT', 'cfgKelly', 'cfgLook', 'cfgMaxW', 'cfgMaxG', 'cfgMaxN', 'cfgDD', 'cfgDDScale', 'cfgBase'].forEach(id => { s[id] = $('#' + id).value.trim(); });
   s.cfgShort = $('#cfgShort').checked; s.cfgFrac = $('#cfgFrac').checked; s.cfgTR = $('#cfgTR').checked;
   s.instrument = $('#instrument').value; s.benchmark = $('#benchmark').value; s.benchBlend = $('#benchBlend').value; s.blendReb = $('#blendReb').value; s.start = $('#start').value; s.end = $('#end').value;
   store.set('settings', s); summarizeSettings(); url.write();
@@ -2639,7 +2868,10 @@ function payloadBase() {
 async function freshPayload() { if (codeInfo.for !== strategyCode()) await refreshParams(); return payloadBase(); }
 const payloadTickers = p => (p.tickers ? [...p.tickers] : [p.ticker]).filter(Boolean);
 // Load what a payload needs into Python: its instruments, benchmark & rate series.
-async function ensurePayload(p, client = py) { await client.ensure([...payloadTickers(p), ...(instruments.has(p.benchmark) ? [p.benchmark] : specTickers(p.benchmark)), ...(p.benchmarks || []).flatMap(specTickers), ...fxTickers(p)]); await client.ensureRate(p.config.rate_ticker); }
+async function ensurePayload(p, client = py) {
+  await client.ensure([...payloadTickers(p), ...(instruments.has(p.benchmark) ? [p.benchmark] : specTickers(p.benchmark)), ...(p.benchmarks || []).flatMap(specTickers), ...fxTickers(p)]); await client.ensureRate(p.config.rate_ticker);
+  if (usesOptions(p)) await client.ensureOptions(payloadTickers(p), [p.code || '', ...Object.values(p.modules || {})].join('\n'));
+}
 
 /* ---------------------------------------------------------- universe ---- */
 // A strategy that defines UNIVERSE = [...] is a portfolio strategy. The Market panel then
@@ -2801,7 +3033,7 @@ function renderResults(r) {
     return `<div class="kpi"><dt>${lab}</dt><dd><span class="v ${cls}">${fmtMetric(f, v, k)}</span><span class="b">${sub}</span></dd></div>`;
   }).join('');
 
-  drawResultCharts(r); renderHeat(r); renderMetrics(r); renderTrades(r); renderAttribution(r); toolContext();
+  drawResultCharts(r); renderHeat(r); renderMetrics(r); renderTrades(r); renderOptionBook(r); renderAttribution(r); toolContext();
   $('#ddInfo').textContent = m.dd_trough ? `Worst ${fmt.pct(m.max_drawdown, 1)}, ${fmt.date(m.dd_peak)} to ${fmt.date(m.dd_trough)}, ${m.dd_recovery ? 'recovered ' + fmt.date(m.dd_recovery) : 'not yet recovered'}` : 'No drawdown';
   $('#rollInfo').textContent = `${r.rolling.window}-day window, annualized`;
   $('#volInfo').textContent = `${r.rolling.vol_window}-day window, annualized`;
@@ -2956,6 +3188,35 @@ function renderAttribution(r) {
   h += `<tr><th scope="row">Interest on cash</th><td class="n ${sign(a.interest)}">${fmt.money(a.interest)}</td><td class="n">${fmt.pct(a.interest / cash0, 2, true)}</td><td colspan="7"></td></tr>`;
   h += `<tr class="best"><th scope="row">Total</th><td class="n ${sign(a.total)}">${fmt.money(a.total)}</td><td class="n">${fmt.pct(a.total / cash0, 2, true)}</td><td colspan="7"></td></tr>`;
   $('#attrTable').innerHTML = h + '</tbody>';
+}
+// Option positions a strategy traded through ctx.options.
+function renderOptionBook(r) {
+  const o = r.options, panel = $('#obPanel'); kill('ob');
+  $('[data-export="optfills"]').hidden = !o;
+  if (!o) { panel.hidden = true; return; }
+  panel.hidden = false;
+  const n = o.n_trades, tiles = [
+    ['Option P&L', `<span class="${sign(o.pnl)}">${fmt.money(o.pnl)}</span>`, o.open_value ? `${fmt.money(o.open_value)} still open` : 'all closed or expired'],
+    ['Premium Sold', fmt.money(o.premium_received), `bought ${fmt.money(o.premium_paid)}`],
+    ['Contracts Traded', fmt.int(o.contracts), `commissions ${fmt.money(o.commissions)}`],
+    ['Round Trips', fmt.int(n), n ? `${fmt.pct(o.win_rate, 0)} made money` : 'none closed yet'],
+    ['Expiries', fmt.int(o.expired_worthless + o.in_the_money), `${fmt.int(o.expired_worthless)} worthless, ${fmt.int(o.in_the_money)} in the money`],
+    ['Unfilled Orders', fmt.int(o.unfilled.length), o.stale_marks ? `${fmt.int(o.stale_marks)} stale marks` : 'every mark from a quote'],
+  ];
+  $('#obKpis').innerHTML = tiles.map(([k, v, b]) => `<div class="kpi"><dt>${esc(k)}</dt><dd><span class="v">${v}</span><span class="b" title="${esc(b)}">${esc(b)}</span></dd></div>`).join('');
+  $('#obInfo').textContent = `${Object.keys(o.chains).join(', ')} chain · ${fmt.num(o.multiplier, 0)} shares a contract`;
+  const P = palette(), d = r.dates, opts = baseOptions(d, P, v => fmt.money(v));
+  opts.scales.y.ticks.callback = v => fmt.moneyAxis(v); opts.plugins.legend = legendTop(P);
+  opts.scales.y2 = { position: 'right', grid: { display: false }, border: { display: false }, ticks: { color: P.fg3, maxTicksLimit: 5, callback: v => fmt.compact(v) }, title: { display: true, text: 'Delta (shares)', color: P.fg3 } };
+  opts.plugins.tooltip.callbacks.label = c => ` ${c.dataset.label}: ${c.dataset.yAxisID === 'y2' ? fmt.num(c.parsed.y, 0) + ' shares' : fmt.money(c.parsed.y)}`;
+  charts.ob = new Chart($('#chOb'), { data: { datasets: [line('Option value', o.daily.value, P.strat, { borderWidth: 1.8 }), line('Delta (shares)', o.daily.delta, P.bench, { borderWidth: 1.1, borderDash: [4, 3], yAxisID: 'y2' })] }, options: opts });
+  const ev = [...o.fills.map(f => ({ date: f.date, what: f.action, sym: f.symbol, n: f.contracts, px: f.price, cash: f.cash, note: `bid ${fmt.num(f.bid, 2)} / ask ${fmt.num(f.ask, 2)}` })),
+    ...o.settlements.map(x => ({ date: x.settled_on, what: x.result === 'in the money' ? 'settled in the money' : 'expired worthless', sym: x.symbol, n: x.contracts, px: x.intrinsic, cash: x.cash, note: `underlying ${fmt.price(x.underlying_close)}${x.late ? ', expiry had no bar' : ''}` })),
+    ...o.unfilled.map(x => ({ date: x.date, what: 'not filled', sym: x.symbol, n: x.contracts, px: null, cash: null, note: x.reason }))]
+    .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 300);
+  $('#obTable').innerHTML = '<caption class="sr">Option fills & settlements, newest first</caption><thead><tr><th scope="col">Date</th><th scope="col">What</th><th scope="col">Contract</th><th scope="col" class="n">Contracts</th><th scope="col" class="n">Price</th><th scope="col" class="n">Cash</th><th scope="col">Detail</th></tr></thead><tbody>' +
+    ev.map(e => `<tr><td class="tnum">${fmt.date(e.date)}</td><td>${esc(e.what)}</td><td translate="no">${esc(e.sym)}</td><td class="n">${fmt.int(e.n)}</td><td class="n">${e.px == null ? '—' : fmt.num(e.px, 2)}</td><td class="n ${sign(e.cash)}">${e.cash == null ? '—' : fmt.money(e.cash)}</td><td class="muted">${esc(e.note)}</td></tr>`).join('') + '</tbody>';
+  $('#obHelp').innerHTML = `Orders fill at the next day’s end-of-day quote (${r.config.option_fill === 1 ? 'the ask to buy, the bid to sell' : r.config.option_fill === 0 ? 'the mid' : 'partway to the mid'}) plus ${fmt.money(r.config.option_commission)} a contract; positions are marked at the mid & settle at their intrinsic value on the expiry’s close. ${fmt.int(o.fills_total)} fills in all${o.fills_total > o.fills.length ? ' (the latest are shown; Option Fills CSV has them all)' : ''}.`;
 }
 function renderTrades(r) {
   const t = r.trades; const max = 500;
@@ -4297,10 +4558,26 @@ function tickerFromEventsFilename(name) {
   const stem = name.replace(/\.[^.]+$/, '').replace(/[\s_\-]*(dividends?|divs?|splits?|history|events|fundamentals?|financials|earnings)[\s_\-]*/gi, ' ').trim().split(/\s+/)[0] || '';
   return tickerFromFilename(stem + '.csv');
 }
+// "SPY_options_2023.csv", "spy-eod-chain.csv" -> "SPY"; else the file's own underlying column.
+function optUnderlyingGuess(name, head, lay) {
+  const lines = head.split(/\r?\n/).filter(l => l.trim()), c = lay.cols;
+  if (c.symbol != null && lines[1] && lay.format !== 'OptionMetrics') { const v = optSplit(lines[1], lines[0].split('\t').length > lines[0].split(',').length ? '\t' : ',')[c.symbol]; if (v && /^[\^A-Za-z0-9.=-]{1,15}$/.test(v.trim())) return v.trim().replace(/^"|"$/g, '').toUpperCase(); }
+  if (lay.format === 'OptionMetrics' && c.symbol != null && lines[1]) { const v = (optSplit(lines[1], ',')[c.symbol] || '').trim().split(/\s+/)[0]; if (v) return v.toUpperCase(); }
+  const stem = name.replace(/\.[^.]+$/, '').replace(/[\s_\-]*(options?|chains?|eod|quotes?|data|\d{4,8}|q\d)[\s_\-]*/gi, ' ').trim().split(/\s+/)[0] || '';
+  return tickerFromFilename(stem + '.csv') || '';
+}
+async function optionFileHead(f) {
+  if (/\.(parquet|pq)$/i.test(f.name)) return null;
+  const head = await f.slice(0, 65536).text(), first = head.split(/\r?\n/).find(l => l.trim());
+  if (!first) return null;
+  try { return { head, lay: optionLayout(optSplit(first, first.split('\t').length > first.split(',').length ? '\t' : ',')) }; } catch (e) { return null; }
+}
 async function handleFiles(files) {
-  let added = 0; const attached = [];
+  let added = 0; const attached = []; const optionFiles = [];
   for (const f of files) {
     if (!/\.(csv|tsv|txt|parquet|pq)$/i.test(f.name) && f.type !== 'text/csv') { toast(`${f.name} isn’t a CSV, TSV, TXT or Parquet file.`); continue; }
+    const oh = await optionFileHead(f).catch(() => null);
+    if (oh) { optionFiles.push({ file: f, ...oh }); continue; }
     try {
       let text = /\.(parquet|pq)$/i.test(f.name) ? await parquetText(f) : await f.text();
       let kind = null; try { kind = csvKind(csvHeader(text)); } catch (e) { /* another layout: try the generic reader */ }
@@ -4329,6 +4606,11 @@ async function handleFiles(files) {
     } catch (e) { toast(`${f.name}: ${e.message}`); }
   }
   if (added) toast(`Added ${fmt.int(added)} instrument${added === 1 ? '' : 's'}.${attached.length ? ` Attached the dividends kept for ${attached.join(', ')}.` : ''}`);
+  if (optionFiles.length) {   // one form per underlying for everything dropped together
+    const groups = new Map();
+    for (const o of optionFiles) { const u = optUnderlyingGuess(o.file.name, o.head, o.lay); const g = groups.get(u) || []; g.push(o); groups.set(u, g); }
+    for (const [u, g] of groups) pendingFiles.push({ kind: 'options', id: newId(), file: g.map(o => o.file.name).join(', '), files: g.map(o => o.file), format: g[0].lay.format, guess: u });
+  }
   renderPending();
 }
 // Point-in-time fundamentals -> the instruments' records. A file with a Ticker column covers several.
@@ -4386,6 +4668,59 @@ async function saveDividends(ticker, events, filename) {
   renderInstTable();
   toast(`${ticker}: added ${fmt.int(info.dividend_count)} dividends (${fmt.money(info.dividend_total)} a share)${src}.${outside > 0 ? ` ${fmt.int(outside)} fall outside its price history.` : ''}${keep}`);
 }
+const fmtBytes = n => (n >= 1e9 ? fmt.num(n / 1e9, 1) + ' GB' : n >= 1e6 ? fmt.num(n / 1e6, 1) + ' MB' : fmt.num(n / 1e3, 0) + ' kB');
+// Read option chain files in pieces through the filters, merge them with what's stored for the
+// underlying, and keep the result in this browser.
+async function importOptions(p, o) {
+  const form = $(`#pending form[data-id="${p.id}"]`), bar = $('#op-' + p.id), stat = $('#os-' + p.id), btn = form.querySelector('button[type=submit]');
+  const inst = instruments.get(o.underlying), spot = inst ? Object.fromEntries(inst.data.dates.map((d, i) => [d.slice(0, 10), inst.data.close[i]])) : null;
+  const total = p.files.reduce((a, f) => a + f.size, 0), parts = [], infos = [];
+  let read = 0, kept = 0, full = false;
+  p.importing = true; p.cancel = false; btn.textContent = 'Cancel Import'; bar.hidden = false; progress(bar, 0);
+  try {
+    for (const f of p.files) {
+      if (p.cancel || full) break;
+      const rd = optionReader({ ...o, spot, max_rows: OPTION_MAX_ROWS - kept });
+      const stream = f.stream().pipeThrough(new TextDecoderStream()).getReader();
+      let tick = performance.now();
+      for (;;) {
+        const { value, done } = await stream.read(); if (done) break;
+        if (performance.now() - tick > 50) { await new Promise(r => setTimeout(r, 0)); tick = performance.now(); }   // let the page paint & take clicks
+        read += value.length;
+        if (!rd.push(value)) { full = true; stream.cancel(); break; }
+        progress(bar, Math.min(0.97, read / total)); stat.textContent = `${fmt.int(kept + rd.info.rows)} quotes kept · ${f.name}`;
+        if (p.cancel) { stream.cancel(); break; }
+      }
+      if (p.cancel) break;
+      rd.done(); infos.push({ name: f.name, ...rd.info }); kept += rd.info.rows; parts.push(rd.part());
+    }
+    if (p.cancel) { stat.textContent = 'Import cancelled; nothing was stored.'; return; }
+    if (!kept) { stat.textContent = `No quotes passed the filters (${fmt.int(infos.reduce((a, x) => a + x.dropped, 0))} left out${infos.some(x => x.symbols.length && !x.symbols.includes(o.underlying)) ? `; the files list ${esc(infos.flatMap(x => x.symbols).slice(0, 4).join(', '))}` : ''}).`; return; }
+    stat.textContent = 'Sorting & merging…'; await new Promise(r => setTimeout(r, 30));
+    const old = optionSets.get(o.underlying);
+    const ch = optionChain([...(old ? [{ dates: old.dates, exps: old.expiries, cols: old.cols }] : []), ...parts]);
+    const rec = { underlying: o.underlying, dates: ch.dates, expiries: ch.expiries, cols: ch.cols, n: ch.n, added: new Date().toISOString(),
+      files: [...(old ? old.files : []), ...infos.map(x => ({ name: x.name, format: x.format, rows: x.rows }))], info: { filters: o, format: infos[0].format } };
+    const ok = await idb.put(rec, 'options');
+    optionSets.set(o.underlying, rec); await forgetOptions(o.underlying);
+    pendingFiles.splice(pendingFiles.indexOf(p), 1); renderPending(); renderOptTable();
+    const left = infos.reduce((a, x) => a + x.dropped, 0), noSpot = infos.reduce((a, x) => a + x.no_spot, 0);
+    toast(`${o.underlying}: ${fmt.int(kept)} option quotes from ${fmt.int(infos.length)} file${infos.length === 1 ? '' : 's'} (${fmt.int(left)} left out by your filters); ${fmt.int(ch.n)} stored, ${fmt.date(ch.dates[0])} – ${fmt.date(ch.dates[ch.dates.length - 1])}.` +
+      `${full ? ` Stopped at ${fmt.int(OPTION_MAX_ROWS)} quotes: narrow the filters to keep more days.` : ''}${noSpot && o.band != null ? ` ${fmt.int(noSpot)} rows had no underlying price, so the strike filter couldn't apply to them: add ${o.underlying}’s prices first.` : ''}${ok ? '' : ' This browser couldn’t store them; they’ll be gone after a reload.'}`);
+  } catch (e) { stat.textContent = e.message; }
+  finally { p.importing = false; if (btn.isConnected) { btn.textContent = 'Import Options'; bar.hidden = true; } }
+}
+function renderOptTable() {
+  const box = $('#optTable'); if (!box) return;
+  const list = [...optionSets.values()].sort((a, b) => a.underlying.localeCompare(b.underlying));
+  $('#optCount').textContent = list.length ? `${fmt.int(list.length)} underlying${list.length === 1 ? '' : 's'}` : '';
+  if (!list.length) { box.innerHTML = '<tbody><tr><td class="muted">No option chains yet. Drop end-of-day option chain files above (CBOE DataShop, OptionsDX, ORATS, OptionMetrics, or any file with date, expiration, strike, call/put, bid & ask columns).</td></tr></tbody>'; return; }
+  const has = (r, k) => { const a = r.cols[k]; for (let i = 0; i < Math.min(a.length, 2000); i++) if (!Number.isNaN(a[i])) return true; return false; };
+  box.innerHTML = '<caption class="sr">Option chains</caption><thead><tr><th scope="col">Underlying</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="n">Days</th><th scope="col" class="n">Quotes</th><th scope="col" class="n">Expiries</th><th scope="col">From the File</th><th scope="col">Files</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>' +
+    list.map(r => `<tr><th scope="row" translate="no">${esc(r.underlying)}</th><td class="tnum">${fmt.date(r.dates[0])}</td><td class="tnum">${fmt.date(r.dates[r.dates.length - 1])}</td><td class="n">${fmt.int(r.dates.length)}</td><td class="n">${fmt.int(r.n)}</td><td class="n">${fmt.int(r.expiries.length)}</td>` +
+      `<td>${[has(r, 'iv') ? 'IV' : '', has(r, 'de') ? 'delta' : '', has(r, 'u') ? 'spot' : ''].filter(Boolean).join(', ') || '<span class="muted">quotes only</span>'}</td><td title="${esc(r.files.map(f => f.name).join(', '))}">${fmt.int(r.files.length)} · ${esc(r.info.format)}${instruments.has(r.underlying) ? '' : ' <span class="badge warn" title="Add its prices to trade these options">no prices</span>'}</td>` +
+      `<td><button class="btn small danger" type="button" data-remove-opt="${esc(r.underlying)}" aria-label="Remove the ${esc(r.underlying)} option chain">Remove</button></td></tr>`).join('') + '</tbody>';
+}
 async function removeDividends(t) {
   dividendSets.delete(t); await idb.del(t, 'dividends');
   const rec = instruments.get(t);
@@ -4424,6 +4759,20 @@ function renderPending() {
         `<div class="field"><label for="tk-${p.id}">Ticker</label><input type="text" id="tk-${p.id}" name="ticker" maxlength="15" autocomplete="off" spellcheck="false" autocapitalize="characters" translate="no" value="${esc(tickerFromFilename(p.file.replace(/\.[^.]+$/, '.csv')) || '')}" aria-describedby="tk-${p.id}-err"><p class="ferr" id="tk-${p.id}-err" hidden></p></div></div>` +
         `<label class="check" style="grid-column:1 / -1"><input type="checkbox" id="dc-${p.id}"${p.sep !== ',' ? ' checked' : ''}> Decimal comma (1.234,56)</label>` +
         `<button class="btn primary small" type="submit">Add Instrument</button><button class="btn small" type="button" data-act="skip">Skip File</button></form>`;
+    }
+    if (p.kind === 'options') {
+      const size = p.files.reduce((a, f) => a + f.size, 0), have = optionSets.get(p.guess);
+      return `<form data-id="${p.id}" novalidate aria-label="Import option chain files"><div class="field" style="grid-column:1 / -1"><span class="label">Option Chain${p.files.length > 1 ? 's' : ''}</span><span class="fname" translate="no">${esc(p.files.length > 3 ? `${p.files.slice(0, 3).map(f => f.name).join(', ')} +${p.files.length - 3} more` : p.file)}</span><span class="help">${esc(p.format)} format · ${fmt.int(p.files.length)} file${p.files.length === 1 ? '' : 's'} · ${fmtBytes(size)}</span></div>` +
+        `<div class="grid3" style="grid-column:1 / -1">` +
+        `<div class="field"><label for="ou-${p.id}">Underlying</label><input type="text" id="ou-${p.id}" name="underlying" maxlength="15" autocomplete="off" spellcheck="false" autocapitalize="characters" translate="no" value="${esc(p.guess)}" aria-describedby="ou-${p.id}-err"><p class="ferr" id="ou-${p.id}-err" hidden></p></div>` +
+        `<div class="field"><label for="ox-${p.id}">Expiries</label><select id="ox-${p.id}" name="expiries"><option value="monthly" selected>Monthly (third Friday)</option><option value="friday">Weekly & monthly (Fridays)</option><option value="all">All, including dailies</option></select></div>` +
+        `<div class="field"><label for="od-${p.id}">Max Days to Expiry</label><input type="text" inputmode="numeric" id="od-${p.id}" name="max-dte" value="90" autocomplete="off" aria-describedby="od-${p.id}-err"><p class="ferr" id="od-${p.id}-err" hidden></p></div>` +
+        `<div class="field"><label for="ob-${p.id}">Strikes Within ±% of Spot</label><input type="text" inputmode="decimal" id="ob-${p.id}" name="band" value="25" placeholder="all" autocomplete="off" aria-describedby="ob-${p.id}-err"><p class="ferr" id="ob-${p.id}-err" hidden></p></div>` +
+        `<div class="field"><label for="of-${p.id}">From (Optional)</label><input type="date" id="of-${p.id}" name="from"></div>` +
+        `<div class="field"><label for="ot-${p.id}">To (Optional)</label><input type="date" id="ot-${p.id}" name="to"></div></div>` +
+        `<p class="help" style="grid-column:1 / -1">Keeps only the contracts that pass these filters: a year of a liquid ETF’s full chain is millions of quotes, & this tab holds up to ${fmt.int(OPTION_MAX_ROWS)}. ${have ? `Adds to the ${fmt.int(have.n)} quotes already stored for <span translate="no">${esc(p.guess)}</span>; the same contract & day from these files replaces the stored one.` : ''} Zip archives need unpacking first.</p>` +
+        `<div class="bar" id="op-${p.id}" hidden role="progressbar" aria-label="Import progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" style="grid-column:1 / -1"><span></span></div><p class="muted tnum" id="os-${p.id}" aria-live="polite" style="grid-column:1 / -1;margin:0"></p>` +
+        `<button class="btn primary small" type="submit">Import Options</button><button class="btn small" type="button" data-act="skip">Skip</button></form>`;
     }
     if (p.kind === 'dividends') {
       const ev = p.events;
@@ -4787,6 +5136,10 @@ async function exportRun(kind) {
   } else if (kind === 'fills') {
     const cols = ['date', 'ticker', 'side', 'qty', 'price', 'commission', 'position', 'kind', 'arrival', 'reason'];
     downloadFile(stem + '_fills.csv', head + toCSV(cols, (await allRows(r, 'fills')).map(f => cols.map(c => f[c]))), 'text/csv');
+  } else if (kind === 'optfills' && r.options) {
+    const o = r.options, cols = ['date', 'placed', 'action', 'symbol', 'underlying', 'kind', 'strike', 'expiry', 'contracts', 'price', 'bid', 'ask', 'commission', 'cash'];
+    const rows = [...o.fills.map(f => cols.map(c => f[c])), ...o.settlements.map(x => [x.settled_on, '', x.result, x.symbol, '', '', '', x.date, x.contracts, x.intrinsic, '', '', 0, x.cash])];
+    downloadFile(stem + '_option_fills.csv', head + toCSV(cols, rows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))), 'text/csv');
   } else if (kind === 'stats') {
     downloadFile(stem + '_statistics.csv', head + toCSV(['key', 'statistic', 'group', 'strategy', 'benchmark', 'definition'],
       METRICS.filter(m => r.metrics[m.key] !== undefined || r.bench_metrics[m.key] !== undefined).map(m => [m.key, m.label, m.group, r.metrics[m.key], r.bench_metrics[m.key], m.desc])), 'text/csv');
@@ -5282,7 +5635,7 @@ function showTab(name) {
   $$('.tabs a[data-tab]').forEach(a => { if (a.dataset.tab === name) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
   if (name === 'charts') dbOpen();
   if (name === 'tools') { toolContext(); renderRankGroups(); ewWhere(); if (!paramsCache) refreshParams(); if (py.ready) py.ready.then(() => pool.warm(), () => {}); }
-  if (name === 'data') { renderFutList(); renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
+  if (name === 'data') { renderFutList(); renderOptTable(); renderInstTable(); renderRateTable(); renderDownloadList(); checkAllData(); }
   if (name === 'history') { renderRuns(); renderAudit(); }
   if (name === 'paper') { renderPaperList(); const b = store.get('bridge', {}); $('#bridgeUrl').value = b.url || ''; $('#bridgeSecret').value = bridgeConfig().secret; }
   document.title = (name === 'backtest' || name === 'edit') && lastRun ? `${lastRun.result.strategyName} on ${lastRun.result.ticker} · QuantLab` : `${TAB_TITLES[name]} · QuantLab`;
@@ -5507,6 +5860,16 @@ function wire() {
       } catch (err) { setFieldError('tk-' + p.id, err.message); }
       return;
     }
+    if (p.kind === 'options') {
+      const t = $('#ou-' + p.id).value.trim().toUpperCase();
+      if (!validate([['ou-' + p.id, () => (/^[\^A-Z0-9.=\-]{1,15}$/.test(t) ? null : 'Enter the underlying’s ticker, such as SPY.')],
+        ['od-' + p.id, between(1, 3650, 'days', true, 90)], ['ob-' + p.id, raw => (String(raw).trim() === '' ? null : between(1, 500, 'percent', false, 25)(raw))]])) return;
+      if (p.importing) { p.cancel = true; return; }
+      const band = $('#ob-' + p.id).value.trim();
+      await importOptions(p, { underlying: t, expiries: $('#ox-' + p.id).value, max_dte: parseNumber($('#od-' + p.id).value), band: band === '' ? null : parseNumber(band) / 100,
+        start: $('#of-' + p.id).value || null, end: $('#ot-' + p.id).value || null });
+      return;
+    }
     if (p.kind === 'dividends') {
       const t = $('#tk-' + p.id).value.trim().toUpperCase();
       if (!/^[A-Z0-9.^=\-]{1,15}$/.test(t)) { setFieldError('tk-' + p.id, 'Enter the ticker these dividends belong to, such as KRSB (letters, digits, “.” or “-”).'); $('#tk-' + p.id).focus(); return; }
@@ -5556,6 +5919,13 @@ function wire() {
     });
   };
   $('#instTable').addEventListener('click', onRemoveDividends); $('#divWaiting').addEventListener('click', onRemoveDividends);
+  $('#optTable').addEventListener('click', e => {
+    const b = e.target.closest('button[data-remove-opt]'); if (!b) return; const t = b.dataset.removeOpt;
+    armConfirm(b, 'Confirm Remove', async () => {
+      const rec = optionSets.get(t); optionSets.delete(t); await idb.del(t, 'options'); await forgetOptions(t); renderOptTable();
+      toast(`Removed the ${t} option chain.`, { label: 'Undo', run: async () => { optionSets.set(t, rec); await idb.put(rec, 'options'); await forgetOptions(t); renderOptTable(); } });
+    });
+  });
   $('#rateTable').addEventListener('click', e => {
     const b = e.target.closest('button[data-remove-rate]'); if (!b) return; const t = b.dataset.removeRate;
     armConfirm(b, 'Confirm Remove', async () => { rates.delete(t); py.forgetRate(t); await idb.del(t); renderRateTable(); fillRateSelect(); saveSettings(); toast(`Removed ${t}.`); });
@@ -5606,13 +5976,14 @@ async function boot() {
 
   const pyReady = py.start(engineSrc);
   pyReady.then(() => { lint.schedule(0); complete.data(); }, () => {});
-  await Promise.all([loadUploads(), loadDividends(), loadBundled(), ensureChartLib().catch(() => toast('Charts couldn’t load. Numbers & tables still work; reload to try again.'))]);
+  await Promise.all([loadUploads(), loadDividends(), loadOptionSets(), loadBundled(), ensureChartLib().catch(() => toast('Charts couldn’t load. Numbers & tables still work; reload to try again.'))]);
   if (window.Chart) { Chart.defaults.font.family = cssVar('--f-sans'); Chart.defaults.font.size = 12; }
   const prefer = { ...(settings || {}) };
   if (q.get('ticker')) prefer.instrument = q.get('ticker').toUpperCase();
   if (q.has('bench')) prefer.benchmark = q.get('bench') === '__blend' ? '__blend' : (q.get('bench') || '').toUpperCase();
   fillInstrumentSelects(prefer); fillRateSelect(); summarizeSettings(); renderFactorSets();
   if (currentTab === 'charts') dbOpen();   // opened before the instruments were known
+  if (currentTab === 'data') { renderOptTable(); renderInstTable(); }
   const from = q.get('from') || (settings && settings.start), to = q.get('to') || (settings && settings.end);
   if (from && /^\d{4}-\d{2}-\d{2}$/.test(from)) $('#start').value = from;
   if (to && /^\d{4}-\d{2}-\d{2}$/.test(to)) $('#end').value = to;
