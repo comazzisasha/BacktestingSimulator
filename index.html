@@ -231,7 +231,7 @@ fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .surf-legend { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--fg-3); }
 .surf-legend .ramp { flex: 0 1 220px; height: 10px; border-radius: 3px; border: 1px solid var(--border); }
 .surf-read { min-height: 2.6em; margin: 0; font-variant-numeric: tabular-nums; }
-.seg { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.radios { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .divcell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .divwait { margin: 0; padding: 10px 16px 14px; }
 .badge.ok { color: var(--gain); }
@@ -920,7 +920,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
             <div class="field"><label for="sfMin">Shortest Window</label><select id="sfMin" name="shortest-window"><option value="0">Any</option><option value="182">6 months</option><option value="365" selected>1 year</option><option value="1095">3 years</option></select></div>
           </div>
           <p class="help" id="sfStep-help">Windows start & end on the first trading day of each month, quarter or year in your date range. One backtest per start date; monthly over 10 years is 120 backtests. Short windows make annualized statistics swing wildly, so they’re hidden by default.</p>
-          <div class="field"><span class="label" id="sfView-l">View</span><div class="seg" role="radiogroup" aria-labelledby="sfView-l"><label class="check"><input type="radio" name="sf-view" value="heat" checked> Heatmap</label><label class="check"><input type="radio" name="sf-view" value="3d"> 3D surface</label></div></div>
+          <div class="field"><span class="label" id="sfView-l">View</span><div class="radios" role="radiogroup" aria-labelledby="sfView-l"><label class="check"><input type="radio" name="sf-view" value="heat" checked> Heatmap</label><label class="check"><input type="radio" name="sf-view" value="3d"> 3D surface</label></div></div>
           <div class="row"><button class="btn primary" id="sfRun" type="submit">Build Surfaces</button><button class="btn" id="sfStop" type="button" hidden>Cancel</button><span class="muted tnum" id="sfCount" aria-live="polite"></span></div>
           <div class="bar" id="sfBar" hidden role="progressbar" aria-label="Surface progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
         </form>
