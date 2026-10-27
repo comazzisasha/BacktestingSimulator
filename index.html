@@ -218,8 +218,7 @@ details.settings[open] > summary { border-radius: var(--r-lg) var(--r-lg) 0 0; }
 .badge { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border-radius: 999px; font-size: 12px; font-weight: 500; border: 1px solid var(--border); background: var(--sunk); color: var(--fg-2); white-space: nowrap; }
 .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
 .badge.bad { color: var(--loss); border-color: color-mix(in srgb, var(--loss) 40%, var(--border)); }
-.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 4px 12px; }
-.checks .check { white-space: nowrap; }
+.optlist { display: grid; grid-template-columns: repeat(auto-fill, minmax(165px, 1fr)); gap: 4px 12px; }
 fieldset.field { border: 0; margin: 0; padding: 0; min-width: 0; }
 .rank-bars { position: relative; width: 100%; }
 .surf-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
@@ -933,7 +932,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
       <div class="panel-b toolgrid">
         <form class="toolform" id="rankForm" novalidate>
           <div class="field"><label for="rnBy">Rank By</label><select id="rnBy" name="rank-by"><option value="sharpe" selected>Sharpe ratio</option><option value="cagr">CAGR</option><option value="total_return">Total return</option><option value="sortino">Sortino ratio</option><option value="calmar">Calmar ratio</option><option value="max_drawdown">Max drawdown (shallowest first)</option><option value="volatility">Volatility (lowest first)</option><option value="information_ratio">Information ratio</option><option value="alpha">Alpha</option><option value="psr">Probabilistic Sharpe</option></select></div>
-          <fieldset class="field"><legend class="label">Strategies</legend><div class="checks" id="rnGroups"></div></fieldset>
+          <fieldset class="field"><legend class="label">Strategies</legend><div class="optlist" id="rnGroups"></div></fieldset>
           <p class="help" id="rnWhere"></p>
           <div class="row"><button class="btn primary" id="rnRun" type="submit">Rank Strategies</button><button class="btn" id="rnStop" type="button" hidden>Cancel</button><span class="muted tnum" id="rnCount" aria-live="polite"></span></div>
           <div class="bar" id="rnBar" hidden role="progressbar" aria-label="Ranking progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
