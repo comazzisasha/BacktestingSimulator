@@ -6273,6 +6273,155 @@ def delta_hedged(ds, start=None, end=None, kind="call", otm=0.0, days=21, iv="re
 
 
 # =============================================================================
+# 7e. One strategy on many instruments; the stock dashboard
+# =============================================================================
+
+def strategy_breadth(rows, stat="sharpe"):
+    """One strategy run on many instruments, each against its own benchmark (usually its
+    buy & hold): rows [{ticker, metrics, bench}] or {ticker, error}.
+
+    For `stat`: each instrument's strategy value, benchmark value and improvement (strategy
+    minus benchmark, or the reverse for statistics where lower is better), ranked best
+    first; how many instruments improved, a one-sided exact sign test of "improves on more
+    than half" (ties left out) and a one-sided t-test of the mean improvement."""
+    lower = stat in RANK_LOWER_BETTER
+    fin = lambda v: v is not None and not isnan(v)
+    items, failed, missing = [], [], []
+    for r in rows:
+        if r.get("error"):
+            failed.append({"ticker": r["ticker"], "error": r["error"]})
+            continue
+        a, b = r["metrics"].get(stat), (r.get("bench") or {}).get(stat)
+        if not (fin(a) and fin(b)):
+            missing.append(r["ticker"])
+            continue
+        items.append({"ticker": r["ticker"], "value": a, "bench": b, "improvement": (b - a) if lower else (a - b), "metrics": r["metrics"]})
+    items.sort(key=lambda x: (x["value"] if lower else -x["value"], x["ticker"]))
+    for k, x in enumerate(items):
+        x["rank"] = k + 1
+    n = len(items)
+    out = {"stat": stat, "lower_better": lower, "rows": items, "failed": failed, "missing": missing, "n": n}
+    if not n:
+        return out
+    imp = [x["improvement"] for x in items]
+    wins, losses = sum(1 for v in imp if v > 0), sum(1 for v in imp if v < 0)
+    out.update(wins=wins, losses=losses, ties=n - wins - losses, share=wins / n,
+               sign_p=binom_sf(wins, wins + losses, 0.5) if wins + losses else NAN,
+               median_value=percentile([x["value"] for x in items], 50), median_bench=percentile([x["bench"] for x in items], 50),
+               mean_improvement=mean(imp), median_improvement=percentile(imp, 50))
+    if n >= 3:
+        sd = stdev(imp)
+        t = mean(imp) / (sd / math.sqrt(n)) if sd > 0 else NAN
+        out.update(t_stat=t, t_p=t_sf(t, n - 1) if not isnan(t) else NAN)
+    return out
+
+
+DASH_EVENTS = [
+    # key, label, side, what it means
+    ("golden_cross", "Golden cross", "bull", "The 50-day average crosses above the 200-day."),
+    ("death_cross", "Death cross", "bear", "The 50-day average crosses below the 200-day."),
+    ("above_sma200", "Close crosses above 200-day", "bull", "The close moves from below to above its 200-day average."),
+    ("below_sma200", "Close crosses below 200-day", "bear", "The close moves from above to below its 200-day average."),
+    ("macd_bull", "MACD bullish cross", "bull", "MACD(12, 26) crosses above its 9-day signal line."),
+    ("macd_bear", "MACD bearish cross", "bear", "MACD(12, 26) crosses below its 9-day signal line."),
+    ("rsi_oversold", "RSI below 30", "bull", "RSI(14) falls below 30 (oversold)."),
+    ("rsi_overbought", "RSI above 70", "bear", "RSI(14) rises above 70 (overbought)."),
+    ("bb_break_down", "Close below lower Bollinger", "bull", "The close crosses below the lower Bollinger band (20, 2)."),
+    ("bb_break_up", "Close above upper Bollinger", "bear", "The close crosses above the upper Bollinger band (20, 2)."),
+    ("high_52w", "New 52-week high", "bull", "The close beats the highest close of the previous 252 bars, after not doing so the bar before."),
+    ("low_52w", "New 52-week low", "bear", "The close falls below the lowest close of the previous 252 bars, after not doing so the bar before."),
+]
+
+
+def _clean(xs):
+    return [None if (v is None or isnan(v)) else round(v, 6) for v in xs]
+
+
+def dashboard(ds, start=None, end=None, sma_periods=(20, 50, 200), ema_periods=(12, 26), horizons=(5, 20, 60)):
+    """Everything the stock dashboard shows for ds between start and end: prices, moving
+    averages & channels, oscillators, pattern events, the latest readings and an event study.
+
+    Indicators are computed on the whole history (so they are warmed up at `start`) and
+    each uses only bars up to its own. An event on bar t depends only on bars t-1 and t.
+    The event study measures, for each pattern, the return over the next h bars (dividends
+    included when known) against the average over all bars in the range: a description
+    of the past, with overlapping windows, not a test."""
+    c, h, l, o, v = ds.close, ds.high, ds.low, ds.open, ds.volume
+    n = ds.n
+    s, e = _resolve_range(ds.dates, start, end, ds.ticker)
+    sl = slice(s, e + 1)
+    over = {}
+    for k in sma_periods:
+        over["sma_%d" % k] = sma(c, k)
+    for k in ema_periods:
+        over["ema_%d" % k] = ema(c, k)
+    bb_mid, bb_up, bb_lo = bbands(c, 20, 2.0)
+    kc_mid, kc_up, kc_lo = keltner(h, l, c, 20, 2.0)
+    dc_up, dc_lo, dc_mid = donchian(h, l, 20)
+    over.update(bb_mid=bb_mid, bb_up=bb_up, bb_lo=bb_lo, kc_mid=kc_mid, kc_up=kc_up, kc_lo=kc_lo, dc_up=dc_up, dc_lo=dc_lo, dc_mid=dc_mid)
+    r14 = rsi(c, 14)
+    m_line, m_sig, m_hist = macd(c, 12, 26, 9)
+    st_k, st_d = stochastic(h, l, c, 14, 3)
+    a_adx, a_pdi, a_mdi = adx(h, l, c, 14)
+    a14 = atr(h, l, c, 14)
+    panes = {"rsi": r14, "macd": m_line, "macd_signal": m_sig, "macd_hist": m_hist, "stoch_k": st_k, "stoch_d": st_d,
+             "adx": a_adx, "plus_di": a_pdi, "minus_di": a_mdi, "atr": a14, "atr_pct": [_div(a, x) if not isnan(a) else NAN for a, x in zip(a14, c)],
+             "obv": obv(c, v), "williams_r": williams_r(h, l, c, 14), "cci": cci(h, l, c, 20), "roc": roc(c, 20),
+             "vol20": realized_vol(c, 20)}
+    s50, s200 = sma(c, 50), sma(c, 200)
+    lvl = lambda x: [x] * n
+    prior_hi, prior_lo = shift(rolling_max(c, 252), 1), shift(rolling_min(c, 252), 1)
+    flags = {
+        "golden_cross": crossover(s50, s200), "death_cross": crossunder(s50, s200),
+        "above_sma200": crossover(c, s200), "below_sma200": crossunder(c, s200),
+        "macd_bull": crossover(m_line, m_sig), "macd_bear": crossunder(m_line, m_sig),
+        "rsi_oversold": crossunder(r14, lvl(30.0)), "rsi_overbought": crossover(r14, lvl(70.0)),
+        "bb_break_down": crossunder(c, bb_lo), "bb_break_up": crossover(c, bb_up),
+        "high_52w": crossover(c, prior_hi), "low_52w": crossunder(c, prior_lo),
+    }
+    tr = ds.total_return_index()
+    base = {}
+    for hz in horizons:
+        f = [tr[t + hz] / tr[t] - 1 for t in range(s, e + 1) if t + hz < n]
+        base[hz] = {"n": len(f), "mean": mean(f) if f else NAN, "hit": sum(1 for x in f if x > 0) / len(f) if f else NAN}
+    events = []
+    for key, label, side, about in DASH_EVENTS:
+        idx = [t for t in range(s, e + 1) if flags[key][t]]
+        study = {}
+        for hz in horizons:
+            f = [tr[t + hz] / tr[t] - 1 for t in idx if t + hz < n]
+            study[hz] = {"n": len(f), "mean": mean(f) if f else NAN, "median": percentile(f, 50) if f else NAN,
+                         "hit": sum(1 for x in f if x > 0) / len(f) if f else NAN,
+                         "vs_all": (mean(f) - base[hz]["mean"]) if f and not isnan(base[hz]["mean"]) else NAN}
+        events.append({"key": key, "label": label, "side": side, "about": about, "count": len(idx),
+                       "dates": [ds.dates[t] for t in idx], "index": [t - s for t in idx],
+                       "last": ds.dates[idx[-1]] if idx else None, "study": study})
+    # the latest readings
+    t = e
+    at = lambda xs: xs[t] if t < len(xs) else NAN
+    year = max(s, t - 251)
+    hi52, lo52 = max(c[year:t + 1]), min(c[year:t + 1])
+    ago = lambda k: (tr[t] / tr[t - k] - 1) if t - k >= 0 else NAN
+    read = {"date": ds.dates[t], "close": c[t], "sma50": at(s50), "sma200": at(s200),
+            "pct_vs_sma50": _div(c[t], at(s50)) - 1 if not isnan(at(s50)) else NAN,
+            "pct_vs_sma200": _div(c[t], at(s200)) - 1 if not isnan(at(s200)) else NAN,
+            "trend": ("up" if at(s50) > at(s200) else "down") if not (isnan(at(s50)) or isnan(at(s200))) else None,
+            "rsi": at(r14), "macd": at(m_line), "macd_signal": at(m_sig), "macd_hist": at(m_hist),
+            "stoch_k": at(st_k), "stoch_d": at(st_d), "adx": at(a_adx), "plus_di": at(a_pdi), "minus_di": at(a_mdi),
+            "atr": at(a14), "atr_pct": _div(at(a14), c[t]) if not isnan(at(a14)) else NAN,
+            "bb_pct_b": _div(c[t] - at(bb_lo), at(bb_up) - at(bb_lo)) if not isnan(at(bb_up)) and at(bb_up) != at(bb_lo) else NAN,
+            "bb_width": _div(at(bb_up) - at(bb_lo), at(bb_mid)) if not isnan(at(bb_mid)) else NAN,
+            "high_52w": hi52, "low_52w": lo52, "pos_52w": _div(c[t] - lo52, hi52 - lo52) if hi52 > lo52 else NAN,
+            "ret_1m": ago(21), "ret_3m": ago(63), "ret_6m": ago(126), "ret_1y": ago(252), "vol20": at(panes["vol20"]),
+            "williams_r": at(panes["williams_r"]), "cci": at(panes["cci"])}
+    return {"ticker": ds.ticker, "dates": ds.dates[sl], "open": _clean(o[sl]), "high": _clean(h[sl]), "low": _clean(l[sl]),
+            "close": _clean(c[sl]), "volume": [x for x in v[sl]], "overlays": {k: _clean(x[sl]) for k, x in over.items()},
+            "panes": {k: _clean(x[sl]) for k, x in panes.items()}, "events": events, "baseline": base, "readings": read,
+            "horizons": list(horizons), "sma_periods": list(sma_periods), "ema_periods": list(ema_periods),
+            "total_return": ds.dividend_source is not None or ds.price_basis == "total_return"}
+
+
+# =============================================================================
 # 8. JSON API for the web page
 # =============================================================================
 
@@ -6767,8 +6916,11 @@ def api_metrics(p):
     """Lightweight run for parameter sweeps: metrics only, optionally split. 'blocks': n
     adds block_stats for PBO; 'returns': true adds the daily returns (for walk-forward)."""
     res, _ = _run_payload(p)
-    m, _ = summarize(res)
+    m, bm = summarize(res)
     out = {"params": res.params, "full": m, "ann": res_ann(res)}
+    if p.get("bench_metrics"):
+        out["bench"] = bm
+        out["start"], out["end"], out["bars"] = res.dates[0], res.dates[-1], len(res.dates)
     r = daily_returns(res.equity)
     if p.get("blocks"):
         out["blocks"] = block_stats(r, int(p["blocks"]))
@@ -6854,6 +7006,25 @@ def api_costs(p):
 def api_rank(p):
     """Rank finished strategy runs (see rank_strategies)."""
     return rank_strategies(p["runs"], p.get("stat", "sharpe"), float(p.get("rf") or 0.0))
+
+
+def api_breadth(p):
+    """Summarize one strategy run on many instruments (see strategy_breadth)."""
+    return strategy_breadth(p["rows"], p.get("stat", "sharpe"))
+
+
+def _periods(v, default):
+    if not v:
+        return list(default)
+    out = sorted({int(x) for x in v})
+    if not out or out[0] < 2 or out[-1] > 1000 or len(out) > 6:
+        raise ValueError("Moving-average periods must be 2 to 1000 bars, at most 6 of them.")
+    return out
+
+
+def api_dashboard(p):
+    ds = _get(p["ticker"])
+    return dashboard(ds, p.get("start"), p.get("end"), _periods(p.get("sma"), (20, 50, 200)), _periods(p.get("ema"), (12, 26)))
 
 
 def api_pbo(p):
@@ -6980,7 +7151,7 @@ API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
     "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit,
-    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "rank": api_rank, "risk": api_risk, "capacity": api_capacity,
+    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "rank": api_rank, "breadth": api_breadth, "dashboard": api_dashboard, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,
     "load_rates": api_load_rates, "quality": api_quality,
