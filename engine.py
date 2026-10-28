@@ -7797,6 +7797,84 @@ def api_dashboard(p):
     return dashboard(ds, p.get("start"), p.get("end"), _periods(p.get("sma"), (20, 50, 200)), _periods(p.get("ema"), (12, 26)))
 
 
+def sweep_robustness(grid, flat=0.25, sharp=1.0, tie=0.05):
+    """How fragile each point of a parameter sweep is: grid[i][j] is the score at the i-th value
+    of the first parameter and the j-th of the second (one column for a one-parameter sweep),
+    None where a run failed. Higher scores are better.
+
+    curvature: the discrete Laplacian in grid steps, the sum over parameters of
+        S[i-1] + S[i+1] - 2 S[i]; at an edge (or next to a missing run) the missing
+        neighbour mirrors the one inside the grid, so the term is 2 (S[nb] - S[i]).
+    neighbours: S + curvature / (2 d), the mean of the 2d neighbours one step away
+        (mirrored ones included), d = the parameters with a neighbour.
+    drop: S - neighbours; robust: S - max(drop, 0), i.e. the lower of the score and its
+        neighbours' mean: a spike is marked down to what its neighbours earn, a plateau keeps its score.
+    sharpness: drop in standard deviations of all the sweep's scores; verdict 'flat' within
+        ±`flat`, 'sharp peak' above `sharp`, 'moderate' between, 'below its neighbours' when
+        they do better by more than `flat` (a slope or a valley, not a peak).
+    worst: the lowest neighbouring score. edge: the point is on the grid's boundary.
+    best_robust: the highest robust score; robust scores within `tie` sigmas of it count as
+    tied, and among those a point inside the grid wins over one on its edge (you can't see
+    what lies beyond an edge), then the higher score."""
+    n1 = len(grid)
+    n2 = max((len(r) for r in grid), default=0)
+    ok = lambda v: v is not None and not isnan(v)
+    at = lambda i, j: grid[i][j] if 0 <= i < n1 and 0 <= j < len(grid[i]) and ok(grid[i][j]) else None
+    vals = [v for r in grid for v in r if ok(v)]
+    sigma = stdev(vals, ddof=0) if len(vals) > 1 else 0.0
+    cells = []
+    for i in range(n1):
+        row = []
+        for j in range(n2):
+            S = at(i, j)
+            if S is None:
+                row.append(None)
+                continue
+            lap, d, nbs, edge = 0.0, 0, [], False
+            for (a, b), size in (((at(i - 1, j), at(i + 1, j)), n1), ((at(i, j - 1), at(i, j + 1)), n2)):
+                if size < 2:
+                    continue
+                if a is None and b is None:
+                    edge = True
+                    continue
+                if a is None or b is None:
+                    edge = True
+                    nb = a if b is None else b
+                    lap += 2 * (nb - S)
+                    nbs.append(nb)
+                else:
+                    lap += a + b - 2 * S
+                    nbs += [a, b]
+                d += 1
+            if d == 0:
+                row.append({"score": S, "curvature": None, "neighbours": None, "drop": None, "robust": S, "sharpness": None,
+                            "verdict": None, "worst": None, "edge": True})
+                continue
+            mean_nb = S + lap / (2 * d)
+            drop = S - mean_nb
+            sharp_v = drop / sigma if sigma > 0 else 0.0
+            row.append({"score": S, "curvature": lap, "neighbours": mean_nb, "drop": drop, "robust": S - max(drop, 0.0),
+                        "sharpness": sharp_v, "verdict": "below its neighbours" if sharp_v < -flat else "flat" if sharp_v <= flat
+                        else "sharp peak" if sharp_v > sharp else "moderate",
+                        "worst": min(nbs), "edge": edge})
+        cells.append(row)
+    pts = [(c["score"], c["robust"], i, j) for i, r in enumerate(cells) for j, c in enumerate(r) if c]
+    best = max(pts, key=lambda p: (p[0], p[1])) if pts else None
+    rob = None
+    if pts:   # robust scores within `tie` sigmas of the best count as tied: then interior beats edge, then the higher score
+        top_r = max(p[1] for p in pts)
+        near = [p for p in pts if p[1] >= top_r - tie * sigma]
+        rob = max(near, key=lambda p: (not cells[p[2]][p[3]]["edge"], p[0], p[1]))
+    rank_of = lambda key, ij: 1 + sum(1 for p in pts if p[key] > cells[ij[0]][ij[1]]["score" if key == 0 else "robust"])
+    return {"cells": cells, "sigma": sigma, "flat": flat, "sharp": sharp,
+            "best": {"i": best[2], "j": best[3], "robust_rank": rank_of(1, best[2:])} if best else None,
+            "best_robust": {"i": rob[2], "j": rob[3], "score_rank": rank_of(0, rob[2:])} if rob else None}
+
+
+def api_sweep_robustness(p):
+    return sweep_robustness(p["grid"], float(p.get("flat", 0.25)), float(p.get("sharp", 1.0)), float(p.get("tie", 0.05)))
+
+
 def api_pbo(p):
     A = float(p.get("ann") or TRADING_DAYS)
     out = pbo_cscv(p["blocks"], p.get("labels"), ann=A)
@@ -7921,7 +7999,7 @@ API = {
     "lint": api_lint, "tests": api_tests, "console": api_console, "completions": api_completions,
     "check_module": api_check_module, "build_futures": api_build_futures,
     "normalize_table": api_normalize_table, "read_parquet": api_read_parquet, "verify_audit": api_verify_audit,
-    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "rank": api_rank, "breadth": api_breadth, "dashboard": api_dashboard,
+    "options": api_options, "surface_grid": api_surface_grid, "surface": api_surface, "rank": api_rank, "sweep_robustness": api_sweep_robustness, "breadth": api_breadth, "dashboard": api_dashboard,
     "option_rows": api_option_rows, "load_options": api_load_options, "forget_options": api_forget_options, "risk": api_risk, "capacity": api_capacity,
     "parse_factors": api_parse_factors, "load_factors": api_load_factors,
     "load_data": api_load_data, "parse_csv": api_parse_csv, "set_events": api_set_events,

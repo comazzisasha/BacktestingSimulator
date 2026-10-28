@@ -436,6 +436,7 @@ pre.logs { margin: 0; padding: 10px 12px; background: var(--sunk); border-radius
 .out-empty { color: var(--fg-3); font-size: 13.5px; padding: 18px; border: 1px dashed var(--border); border-radius: var(--r); }
 tr.best td { background: color-mix(in srgb, var(--focus) 10%, var(--panel)); font-weight: 600; }
 td.best { outline: 2px solid var(--fg); outline-offset: -2px; font-weight: 600; }
+.heat td.spike span[aria-hidden] { color: var(--loss); font-size: 9px; margin-left: 2px; vertical-align: super; }
 fieldset { border: 0; margin: 0; padding: 0; min-width: 0; }
 legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); margin-bottom: 6px; }
 .checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 0 8px; }
@@ -3358,7 +3359,12 @@ async function runSweep(ev) {
       onDone: n => { progress(bar, n / combos.length); $('#swCount').textContent = `${fmt.int(n)} of ${fmt.int(combos.length)}`; },
     });
     combos.forEach(([a, b], i) => { if (rs[i]) results.push({ a, b, r: rs[i] }); });
-    renderSweep({ p1, p2, v1, v2, metric, split, results, cancelled: sweepCancel });
+    // robustness: how each value's score compares with its neighbours one grid step away
+    const sc = x => (split ? x.r.in_sample : x.r.full)[metric];
+    const grid = v1.map(a => v2.map(b => { const x = results.find(y => y.a === a && y.b === b); const v = x ? sc(x) : null; return v == null || !Number.isFinite(v) ? null : v; }));
+    let rob = null; try { if (results.length >= 2) rob = await py.call('sweep_robustness', { grid }); } catch (e) { console.warn('robustness', e); }
+    sweepLast = { p1, p2, v1, v2, metric, split, results, cancelled: sweepCancel, rob };
+    renderSweep(sweepLast);
     const fam = trials.family(base);
     trials.add(fam, results.map(x => [trials.key(base, p2 ? { [p1]: x.a, [p2]: x.b } : { [p1]: x.a }), x.r.full.sharpe]));
     if (results.length >= 2) await renderOverfit(results, p1, p2, fam);
@@ -3377,41 +3383,86 @@ async function renderOverfit(results, p1, p2, fam) {
       `<p class="help">The best full-period Sharpe here (${esc(labels[r.best])}: ${fmt.num(best.r.full.sharpe)}) has to beat <b>${fmt.num(r.sr_hurdle)}</b>, the best expected from ${fmt.int(results.length)} settings with no skill. Deflated Sharpe & trial counts on the Backtest tab now include these ${fmt.int(results.length)} runs (${fmt.int(n)} trials of this strategy so far).</p>`;
   } catch (e) { box.innerHTML = `<p class="ferr">Overfitting check failed: ${esc(e.info ? e.info.message : e.message)}</p>`; }
 }
-function renderSweep(s) {
+let sweepLast = null;
+// keep: re-draw only the sweep (the toggle), leaving the overfitting block below it in place
+function renderSweep(s, keep = false) {
+  if (!keep || !$('#swMain')) $('#swOut').innerHTML = '<div id="swMain" class="stack" style="gap:12px"></div>';
+  renderSweepBody(s); if (s.rob) $('#swMain').insertAdjacentHTML('beforeend', sweepRobustHelp(s));
+}
+function renderSweepBody(s) {
   const mm = METRICS.find(x => x.key === s.metric); const f = v => fmtMetric(mm.fmt, v, mm.key);
-  const score = x => (s.split ? x.r.in_sample : x.r.full)[s.metric];
+  const raw = x => (s.split ? x.r.in_sample : x.r.full)[s.metric];
+  const R = s.rob, iOf = x => s.v1.indexOf(x.a), jOf = x => s.v2.indexOf(x.b);
+  const cellOf = x => (R ? R.cells[iOf(x)][jOf(x)] : null);
+  const robustMode = !!R && store.get('sweepRank', 'score') === 'robust';
+  const score = x => { if (!robustMode) return raw(x); const c = cellOf(x); return c ? c.robust : null; };
   const valid = s.results.filter(x => score(x) != null);
-  const best = valid.reduce((acc, x) => (acc == null || score(x) > score(acc) ? x : acc), null);
-  const out = $('#swOut'); out.innerHTML = '';
+  const at = ij => (ij ? s.results.find(x => x.a === s.v1[ij.i] && x.b === s.v2[ij.j]) : null);
+  const top = R ? at(R.best) : valid.reduce((acc, x) => (acc == null || raw(x) > raw(acc) ? x : acc), null);
+  const sturdy = R ? at(R.best_robust) : null;
+  const best = robustMode ? sturdy : top;
+  const out = $('#swMain'); out.innerHTML = '';
   const head = document.createElement('div'); head.className = 'stack'; head.style.gap = '6px';
-  const bestTxt = best ? `${s.p1} = ${best.a}${s.p2 ? `, ${s.p2} = ${best.b}` : ''}` : '—';
-  head.innerHTML = `<div class="row"><span>Best ${s.split ? 'in-sample ' : ''}${esc(mm.label)}: <b translate="no">${esc(bestTxt)}</b> → ${f(best && score(best))}${s.split && best ? `; out-of-sample ${f(best.r.out_of_sample[s.metric])}` : ''}</span><span class="spacer"></span>` +
+  const name = x => (x ? `${s.p1} = ${x.a}${s.p2 ? `, ${s.p2} = ${x.b}` : ''}` : '—');
+  const why = x => {   // one sentence on how fragile a value is
+    const c = cellOf(x); if (!c || c.verdict == null) return '';
+    const v = c.verdict === 'sharp peak' ? `<b class="neg">a sharp peak</b>` : c.verdict === 'flat' ? '<b class="pos">on a plateau</b>' : c.verdict === 'moderate' ? 'moderately peaked' : 'below its neighbours (on a slope)';
+    return ` It is ${v}: one step away it averages ${f(c.neighbours)} (worst neighbour ${f(c.worst)}; curvature ${fmt.num(c.curvature, 3)} per step${s.p2 ? ', the Laplacian' : ''})${c.edge ? '; it sits on the edge of the grid, so widen the range to see what lies beyond' : ''}.${c.verdict === 'sharp peak' ? ` Expect about the neighbours’ ${f(c.neighbours)}, not ${f(c.score)}: the extra is likely luck.` : ''}`;
+  };
+  let txt = robustMode
+    ? `Most robust ${s.split ? 'in-sample ' : ''}${esc(mm.label)}: <b translate="no">${esc(name(sturdy))}</b> → ${f(cellOf(sturdy).robust)} after the robustness discount (score ${f(raw(sturdy))}, #${fmt.int(R.best_robust.score_rank)} by score).` + why(sturdy) +
+      (top !== sturdy ? ` The top score, <span translate="no">${esc(name(top))}</span> (${f(raw(top))}), averages ${f(cellOf(top).neighbours)} one step away.` : ' It is also the top score.')
+    : `Best ${s.split ? 'in-sample ' : ''}${esc(mm.label)}: <b translate="no">${esc(name(top))}</b> → ${f(top && raw(top))}.` + (top ? why(top) : '') +
+      (R && top !== sturdy ? ` Ranked by robustness it is #${fmt.int(R.best.robust_rank)}; the most robust is <span translate="no">${esc(name(sturdy))}</span>.` : '');
+  if (s.split && top) txt += ` Out of sample: ${top === sturdy ? `${f(top.r.out_of_sample[s.metric])}` : `the top score's setting made ${f(top.r.out_of_sample[s.metric])}, the most robust one's ${f(sturdy.r.out_of_sample[s.metric])}`}.`;
+  head.innerHTML = `<div class="row" style="align-items:flex-start"><p style="margin:0;flex:1 1 360px">${txt}</p>` +
+    (R ? `<div class="seg" id="swRank" role="group" aria-label="Rank the sweep by"><button type="button" data-rank="score" aria-pressed="${!robustMode}">Score</button><button type="button" data-rank="robust" aria-pressed="${robustMode}">Robustness</button></div>` : '') +
     (best ? '<button class="btn small" id="swApply" type="button">Use Best Values</button>' : '') + '</div>' +
-    (s.split && best ? `<p class="help">Tuned on data up to ${fmt.date(best.r.split_date)}. The out-of-sample number is the honest estimate; expect it to be worse.</p>` : '') +
+    (s.split && top ? `<p class="help">Tuned on data up to ${fmt.date(top.r.split_date)}. The out-of-sample numbers are the honest estimate; expect them to be worse.</p>` : '') +
     (s.cancelled ? '<p class="help">Cancelled early; showing completed runs.</p>' : '');
   out.appendChild(head);
   if (best) $('#swApply').onclick = () => applyParams(s.p2 ? { [s.p1]: best.a, [s.p2]: best.b } : { [s.p1]: best.a });
+  if (R) $('#swRank').onclick = e => { const b = e.target.closest('button[data-rank]'); if (!b) return; store.set('sweepRank', b.dataset.rank); renderSweep(s, true); $(`#swRank button[data-rank="${b.dataset.rank}"]`).focus(); };
+  const verdictCell = x => { const c = cellOf(x); return !c || c.verdict == null ? '—' : `<span class="${c.verdict === 'sharp peak' ? 'neg' : c.verdict === 'flat' ? 'pos' : ''}">${esc(c.verdict)}</span>${c.edge ? ' <span class="muted">(edge)</span>' : ''}`; };
   const P = palette();
   if (!s.p2) {
     const box = document.createElement('div'); box.className = 'chart mid'; box.innerHTML = '<canvas role="img"></canvas>'; out.appendChild(box);
     box.firstChild.setAttribute('aria-label', `${mm.label} for each value of ${s.p1}`); kill('sweep');
     const ds = [{ label: s.split ? 'In-sample' : 'Whole period', data: s.results.map(x => ({ x: x.a, y: score(x) })), borderColor: P.strat, backgroundColor: P.strat, pointRadius: 3, borderWidth: 2 }];
     if (s.split) ds.push({ label: 'Out-of-sample', data: s.results.map(x => ({ x: x.a, y: x.r.out_of_sample[s.metric] })), borderColor: P.bench, backgroundColor: P.bench, pointRadius: 3, pointStyle: 'rectRot', borderWidth: 1.5, borderDash: [5, 4] });
+    if (R) ds.push({ label: 'Robust score', data: s.results.map(x => ({ x: x.a, y: cellOf(x) ? cellOf(x).robust : null })), borderColor: P.gain, backgroundColor: P.gain, pointRadius: 2, borderWidth: 1.5, borderDash: [2, 3] });
+    ds[0].data = s.results.map(x => ({ x: x.a, y: raw(x) }));
+    ds[0].pointRadius = s.results.map(x => (x === best ? 6 : 3)); ds[0].pointBackgroundColor = s.results.map(x => (cellOf(x) && cellOf(x).verdict === 'sharp peak' ? P.loss : P.strat));
     charts.sweep = new Chart(box.firstChild, { type: 'line', data: { datasets: ds }, options: { animation: false, responsive: true, maintainAspectRatio: false,
       plugins: { legend: { display: true, align: 'end', labels: { color: P.fg2, boxWidth: 10, boxHeight: 10 } }, tooltip: { backgroundColor: P.primary, titleColor: P.panel, bodyColor: P.panel, callbacks: { title: it => `${s.p1} = ${it[0].parsed.x}`, label: c => ` ${c.dataset.label}: ${f(c.parsed.y)}` } } },
       scales: { x: { type: 'linear', title: { display: true, text: s.p1, color: P.fg3 }, grid: { color: P.grid }, ticks: { color: P.fg3 } }, y: { grid: { color: P.grid }, ticks: { color: P.fg3, callback: v => f(v) } } } } });
     const tbl = document.createElement('div'); tbl.className = 'tablebox'; tbl.tabIndex = 0; tbl.setAttribute('aria-label', 'Sweep results');
-    let h = `<table><thead><tr><th scope="col" class="n" translate="no">${esc(s.p1)}</th><th scope="col" class="n">${s.split ? 'In-Sample' : 'Score'}</th>${s.split ? '<th scope="col" class="n">Out-of-Sample</th>' : ''}<th scope="col" class="n">CAGR</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Trades</th></tr></thead><tbody>`;
-    for (const x of s.results) h += `<tr class="${x === best ? 'best' : ''}"><td class="n">${x.a}${x === best ? ' <span class="sr">(best)</span>' : ''}</td><td class="n">${f(score(x))}</td>${s.split ? `<td class="n">${f(x.r.out_of_sample[s.metric])}</td>` : ''}<td class="n">${fmt.pct(x.r.full.cagr, 2, true)}</td><td class="n">${fmt.pct(x.r.full.max_drawdown)}</td><td class="n">${fmt.int(x.r.full.n_trades)}</td></tr>`;
+    let h = `<table><thead><tr><th scope="col" class="n" translate="no">${esc(s.p1)}</th><th scope="col" class="n">${s.split ? 'In-Sample' : 'Score'}</th>${R ? '<th scope="col" class="n">Robust</th><th scope="col" class="n">Curvature</th><th scope="col">Shape</th>' : ''}${s.split ? '<th scope="col" class="n">Out-of-Sample</th>' : ''}<th scope="col" class="n">CAGR</th><th scope="col" class="n">Max DD</th><th scope="col" class="n">Trades</th></tr></thead><tbody>`;
+    for (const x of s.results) { const c = cellOf(x); h += `<tr class="${x === best ? 'best' : ''}"><td class="n">${x.a}${x === best ? ' <span class="sr">(best)</span>' : ''}</td><td class="n">${f(raw(x))}</td>${R ? `<td class="n">${c ? f(c.robust) : '—'}</td><td class="n">${c && c.curvature != null ? fmt.num(c.curvature, 3) : '—'}</td><td>${verdictCell(x)}</td>` : ''}${s.split ? `<td class="n">${f(x.r.out_of_sample[s.metric])}</td>` : ''}<td class="n">${fmt.pct(x.r.full.cagr, 2, true)}</td><td class="n">${fmt.pct(x.r.full.max_drawdown)}</td><td class="n">${fmt.int(x.r.full.n_trades)}</td></tr>`; }
     tbl.innerHTML = h + '</tbody></table>'; out.appendChild(tbl);
   } else {
     const vals = valid.map(score); const lo = Math.min(...vals), hi = Math.max(...vals);
-    const cell = x => { if (!x || score(x) == null) return '<td>—</td>'; const t = hi > lo ? (score(x) - lo) / (hi - lo) : 0.5; return `<td class="${x === best ? 'best' : ''}" style="background:${alpha(P.strat, 0.06 + 0.55 * t)}" title="${s.split ? 'Out-of-sample ' + f(x.r.out_of_sample[s.metric]) : ''}">${f(score(x))}${x === best ? '<span class="sr"> (best)</span>' : ''}</td>`; };
+    const cell = x => {
+      if (!x || score(x) == null) return '<td>—</td>'; const t = hi > lo ? (score(x) - lo) / (hi - lo) : 0.5, c = cellOf(x), spike = c && c.verdict === 'sharp peak';
+      const tip = [`score ${f(raw(x))}`, c ? `robust ${f(c.robust)}` : '', c && c.curvature != null ? `Laplacian ${fmt.num(c.curvature, 3)}, ${c.verdict}${c.edge ? ' (edge)' : ''}` : '', s.split ? 'out-of-sample ' + f(x.r.out_of_sample[s.metric]) : ''].filter(Boolean).join(' · ');
+      return `<td class="${x === best ? 'best' : ''}${spike ? ' spike' : ''}" style="background:${alpha(P.strat, 0.06 + 0.55 * t)}" title="${esc(tip)}">${f(score(x))}${spike ? '<span aria-hidden="true">▲</span><span class="sr"> (sharp peak)</span>' : ''}${x === best ? '<span class="sr"> (best)</span>' : ''}</td>`;
+    };
     let h = `<div class="scroll"><table class="heat"><caption class="sr">${esc(mm.label)} by ${esc(s.p1)} (rows) & ${esc(s.p2)} (columns)</caption><thead><tr><th scope="col" translate="no">${esc(s.p1)} ↓ ${esc(s.p2)} →</th>${s.v2.map(b => `<th scope="col">${b}</th>`).join('')}</tr></thead><tbody>`;
     for (const a of s.v1) h += `<tr><th scope="row">${a}</th>${s.v2.map(b => cell(s.results.find(x => x.a === a && x.b === b))).join('')}</tr>`;
-    const box = document.createElement('div'); box.innerHTML = h + `</tbody></table></div><p class="help">Cells show ${esc(mm.label)}${s.split ? ' on the in-sample part; hover a cell for its out-of-sample value' : ''}. The best cell is outlined. A broad region of good values is more trustworthy than one bright cell.</p>`;
+    const box = document.createElement('div'); box.innerHTML = h + `</tbody></table></div><p class="help">Cells show ${robustMode ? 'the robust ' : ''}${esc(mm.label)}${s.split ? ' on the in-sample part' : ''}; hover a cell for its score, robust score, Laplacian${s.split ? ' & out-of-sample value' : ''}. The best cell is outlined; ▲ marks a sharp peak. A broad region of good values is more trustworthy than one bright cell.</p>`;
     out.appendChild(box);
+    if (R) {
+      const ranked = valid.slice().sort((a, b) => score(b) - score(a)).slice(0, 10);
+      const t = document.createElement('div'); t.className = 'tablebox'; t.tabIndex = 0; t.setAttribute('aria-label', 'Top settings');
+      t.innerHTML = `<table><caption class="sr">Top settings by ${robustMode ? 'robust score' : 'score'}</caption><thead><tr><th scope="col" class="n">Rank</th><th scope="col" class="n" translate="no">${esc(s.p1)}</th><th scope="col" class="n" translate="no">${esc(s.p2)}</th><th scope="col" class="n">Score</th><th scope="col" class="n">Robust</th><th scope="col" class="n">Laplacian</th><th scope="col">Shape</th>${s.split ? '<th scope="col" class="n">Out-of-Sample</th>' : ''}</tr></thead><tbody>` +
+        ranked.map((x, k) => { const c = cellOf(x); return `<tr class="${x === best ? 'best' : ''}"><td class="n">${k + 1}</td><td class="n">${x.a}</td><td class="n">${x.b}</td><td class="n">${f(raw(x))}</td><td class="n">${c ? f(c.robust) : '—'}</td><td class="n">${c && c.curvature != null ? fmt.num(c.curvature, 3) : '—'}</td><td>${verdictCell(x)}</td>${s.split ? `<td class="n">${f(x.r.out_of_sample[s.metric])}</td>` : ''}</tr>`; }).join('') + '</tbody></table>';
+      out.appendChild(t);
+    }
   }
+}
+function sweepRobustHelp(s) {
+  if (!s.rob) return '';
+  return `<p class="help"><b>Robustness.</b> The curvature of the score at a setting is its second difference along each parameter, one grid step either side${s.p2 ? ', summed into the discrete Laplacian' : ''}: strongly negative means a peak that falls away fast. The robust score is the lower of the score & the average of its neighbours one step away (at an edge the missing neighbour mirrors the one inside), so a lone spike is marked down to what nearby values earn while a plateau keeps its score. Shape compares the drop to the neighbours with the spread of all the sweep's scores: flat within ${fmt.num(s.rob.flat, 2)} standard deviations, a sharp peak beyond ${fmt.num(s.rob.sharp, 1)}, & below its neighbours when they do better (a slope: the good values lie further along). Steps are grid steps, so space the values evenly (e.g. 20:100:10). Near-ties in robust score go to a setting inside the grid rather than on its edge. A good value that is also flat & holds up out of sample is the one to trust.</p>`;
 }
 function applyParams(values) {
   let code = strategyCode(); const missing = [];

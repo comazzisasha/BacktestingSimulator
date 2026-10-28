@@ -3047,6 +3047,76 @@ def test_options_api_and_provenance():
         engine.OPTIONS.clear()
 
 
+# ------------------------------------------------------------ sweep robustness -----
+
+def test_sweep_curvature_is_the_discrete_laplacian():
+    import numpy as np
+    one = [[-(i - 3) ** 2 * 0.5] for i in range(8)]                # a parabola: second difference -1 per step
+    r = engine.sweep_robustness(one)
+    assert all(approx(r["cells"][i][0]["curvature"], -1.0) for i in range(1, 7))
+    assert approx(r["cells"][0][0]["curvature"], 2 * (one[1][0] - one[0][0])) and r["cells"][0][0]["edge"], "mirrored at the edge"
+    two = [[-(x * x + y * y) for y in range(-3, 4)] for x in range(-3, 4)]
+    r2 = engine.sweep_robustness(two)
+    assert all(approx(r2["cells"][i][j]["curvature"], -4.0) for i in range(1, 6) for j in range(1, 6)), "the Laplacian of -(x² + y²)"
+    rng = random.Random(3)
+    g = [[rng.gauss(0, 1) for _ in range(6)] for _ in range(5)]
+    a = np.pad(np.array(g), 1, mode="reflect")                     # numpy's reflect = the mirrored neighbour
+    lap = a[:-2, 1:-1] + a[2:, 1:-1] + a[1:-1, :-2] + a[1:-1, 2:] - 4 * a[1:-1, 1:-1]
+    r3 = engine.sweep_robustness(g)
+    sigma = float(np.std(np.array(g)))
+    for i in range(5):
+        for j in range(6):
+            c = r3["cells"][i][j]
+            assert approx(c["curvature"], float(lap[i, j]), 1e-12)
+            assert approx(c["neighbours"], g[i][j] + lap[i, j] / 4, 1e-12) and approx(c["robust"], min(g[i][j], c["neighbours"]), 1e-12)
+            assert approx(c["sharpness"], (g[i][j] - c["neighbours"]) / sigma, 1e-12)
+    assert approx(r3["sigma"], sigma, 1e-12)
+
+
+def test_sweep_robustness_marks_spikes_down_and_keeps_plateaus():
+    # a lone spike beats a broad plateau on score but not on robustness
+    row = [0.2, 0.25, 1.5, 0.3, 0.2, 0.8, 0.85, 0.9, 0.85, 0.8, 0.2]
+    r = engine.sweep_robustness([[v] for v in row])
+    spike, top = r["cells"][2][0], r["cells"][7][0]
+    assert r["best"]["i"] == 2 and spike["verdict"] == "sharp peak" and approx(spike["robust"], (0.25 + 0.3) / 2)
+    assert r["best_robust"]["i"] == 7 and top["verdict"] == "flat" and approx(top["robust"], 0.85)
+    assert r["best"]["robust_rank"] > 1 and r["best_robust"]["score_rank"] == 2 and spike["worst"] == 0.25
+    # a missing run counts as an edge; a valley isn't rewarded for its neighbours
+    gap = engine.sweep_robustness([[1.0, 2.0, None, 2.0], [1.0, 0.5, 1.0, 1.0]])
+    c = gap["cells"][0][1]
+    assert gap["cells"][0][2] is None and c["edge"]
+    assert approx(c["curvature"], 2 * (1.0 - 2.0) + 2 * (0.5 - 2.0)), "left neighbour mirrored; below mirrored"
+    valley = gap["cells"][1][1]
+    assert valley["drop"] < 0 and valley["robust"] == valley["score"]
+    assert valley["verdict"] == "below its neighbours"
+    flat3 = engine.sweep_robustness([[0.5], [0.5], [0.5], [0.1]])
+    assert flat3["best_robust"]["i"] in (1, 2) and not flat3["cells"][flat3["best_robust"]["i"]][0]["edge"], "ties go to the inside"
+    slope = engine.sweep_robustness([[0.672], [0.82], [0.667], [0.64], [0.55], [0.50]])
+    assert slope["best_robust"]["i"] == 1, "a near-tie with an edge point goes to the interior peak's plateau"
+    lone = engine.sweep_robustness([[None, 3.0, None]])
+    assert lone["cells"][0][1]["curvature"] is None and lone["cells"][0][1]["robust"] == 3.0
+
+
+def test_sweep_robustness_api_on_a_real_sweep():
+    engine.DATA["DEMO-STOCK"] = DEMO
+    code = load_templates()["sma_cross"]
+    v1, v2 = [20, 40, 60], [150, 200, 250]
+    grid = []
+    for a in v1:
+        row = []
+        for b in v2:
+            out = json.loads(engine.handle("metrics", json.dumps({"ticker": "DEMO-STOCK", "code": code, "params": {"fast": a, "slow": b}})))
+            row.append(out["result"]["full"]["sharpe"])
+        grid.append(row)
+    r = json.loads(engine.handle("sweep_robustness", json.dumps({"grid": grid})))
+    assert r["ok"], r
+    res = r["result"]
+    best = max(((i, j) for i in range(3) for j in range(3)), key=lambda ij: grid[ij[0]][ij[1]])
+    assert (res["best"]["i"], res["best"]["j"]) == best
+    c = res["cells"][1][1]
+    assert approx(c["curvature"], grid[0][1] + grid[2][1] + grid[1][0] + grid[1][2] - 4 * grid[1][1], 1e-12) and not c["edge"]
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
