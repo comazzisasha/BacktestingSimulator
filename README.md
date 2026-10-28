@@ -117,6 +117,19 @@ a cache, and `signals()` output is reused when only settings change.
 Strategies can `import numpy`, `pandas`, `scipy` and `sklearn`; they load on first use
 (NumPy is bundled in `pyodide/`, the rest come from the Pyodide CDN). `walk_forward(X, y, fit_predict, ...)`
 trains and retrains a model on past data only. See the *Machine Learning* templates.
+
+For neural networks, the built-in `nn` module (`lib/nn.py`, plain NumPy) does the boilerplate:
+
+```python
+import nn
+LAYERS = [nn.Dense(32, "relu"), nn.Dropout(0.1), nn.Dense(16, "relu"), nn.Dense(1, "sigmoid")]
+
+def signals(data):
+    return nn.signals(data, LAYERS)   # features, labels, walk-forward training, early stopping, positions, report
+```
+
+It has Dense, Dropout and LSTM layers, Adam, early stopping and ensembles. To change how any of it
+works, choose **Modules → Edit a Copy** next to `nn.py`: your copy replaces the built-in one.
 PyTorch can't run in a browser, but works when you run the engine from Python as below.
 
 ## Use the engine from Python
@@ -138,7 +151,8 @@ print(engine.attribution(res)["rows"])
 | Path | What it is |
 |---|---|
 | `engine.py` | Indicators, backtest loop, statistics, research tools, JSON API (pure Python, no dependencies) |
-| `templates.py` | 30 built-in strategies, including 5 portfolio and 3 machine-learning ones |
+| `templates.py` | 36 built-in strategies, including 5 portfolio, 3 options and 6 machine-learning ones |
+| `lib/` | Built-in modules strategies can import: `nn.py` (neural networks) |
 | `index.html` | The web app |
 | `runtime.js`, `worker.js` | Start Pyodide in a background Web Worker (plus helper workers for sweeps) |
 | `github-sync.js` | Optional GitHub Sync, loaded only when used |

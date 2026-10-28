@@ -345,10 +345,47 @@ def on_bar(ctx):
     <p>Strategies can <code>import numpy</code>, <code>pandas</code>, <code>scipy</code> and <code>sklearn</code> (scikit-learn). QuantLab loads what your code imports the first time you run it. NumPy (12&nbsp;MB) ships with the site. pandas, SciPy and scikit-learn download from the Pyodide CDN on first use: scikit-learn needs SciPy, about 75&nbsp;MB in all. The browser caches them afterwards.</p>
     <p><b>PyTorch and TensorFlow don’t run in browsers</b>: they have no WebAssembly build. There are three ways around that:</p>
     <ul>
-      <li>Write the network in NumPy. The <i>Neural Network (NumPy)</i> template is a two-layer network trained with Adam: the same forward pass, backward pass and optimizer step PyTorch runs for you.</li>
+      <li>Use the built-in <a href="#nn"><code>nn</code> module</a>: dense, dropout and LSTM layers written in NumPy, with the training and walk-forward boilerplate done for you. The <i>Neural Network (NumPy)</i> template shows the same idea written out by hand: a two-layer network trained with Adam, the forward pass, backward pass and optimizer step PyTorch runs for you.</li>
       <li>Use scikit-learn’s models, including <code>MLPClassifier</code> / <code>MLPRegressor</code> neural networks, random forests and gradient boosting.</li>
       <li>Run the engine in regular Python (see <a href="#running">Running It Yourself</a>). Strategy code is plain Python there, so <code>import torch</code> works like any other package.</li>
     </ul>
+    <h3 id="nn">Neural Networks with nn</h3>
+    <p><code>nn</code> is a module that ships with QuantLab. A strategy describes the network as a list of layers, and <code>nn.signals</code> does everything else. Start from the <i>Neural Network Template (nn)</i> strategy:</p>
+<pre><code>import nn
+
+LAYERS = [nn.Dense(32, "relu"), nn.Dropout(0.1), nn.Dense(16, "relu"), nn.Dense(1, "sigmoid")]
+
+def signals(data):
+    return nn.signals(data, LAYERS, horizon=1, retrain=126, epochs=60, threshold=0.55)</code></pre>
+    <p>Behind that one call, <code>nn.signals</code>:</p>
+    <ol>
+      <li>builds features from past bars only: returns over 1, 5, 20 and 60 days, RSI, distance from the 50- and 200-day averages, volatility and its trend, position in the 52-week range, and a volume z-score (<code>nn.DEFAULT_FEATURES</code>; pass <code>features={name: function of data}</code> for your own);</li>
+      <li>labels each bar with the return over the next <code>horizon</code> bars;</li>
+      <li>retrains a fresh network through <a href="#ml"><code>walk_forward</code></a> every <code>retrain</code> bars, on labels that were already known. With <code>window</code>, it trains on only the most recent rows;</li>
+      <li>scales the inputs with the training rows' means and standard deviations, clipped at ±5;</li>
+      <li>trains with Adam in mini-batches, using weight decay and gradient clipping. It holds out the latest 20% of the training rows and stops once their loss hasn't improved for <code>patience</code> epochs, keeping the best weights;</li>
+      <li>averages <code>ensemble</code> networks with different seeds, if you ask for more than one;</li>
+      <li>turns the predictions into target weights (<code>position</code> below);</li>
+      <li>prints a report to the Log, as in this example:</li>
+    </ol>
+<pre><code>nn: Dense(32, relu) → Dropout(0.1) → Dense(16, relu) → Dense(1, sigmoid) · 929 parameters · 11 features × lookback 1
+Retrained 15 times on 504–2,268 rows: median 26 epochs, median validation loss 0.6972.
+Out of sample (1,852 bars, 1-bar horizon): hit rate 50.3%, against 50.4% for always guessing the more common side.
+AUC 0.502 (0.5 = no skill); mean predicted P(up) 0.513.</code></pre>
+    <p>Read the report before the equity curve. A hit rate that doesn't beat the base rate, or an AUC near 0.5, means the network found nothing, however good the curve looks. <code>nn.LAST</code> holds the latest report, the predictions and each retrain's training history.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Piece</th><th>What it is</th></tr></thead>
+      <tbody>
+        <tr><td><code>nn.Dense(units, activation)</code></td><td>A fully connected layer. Activations: <code>relu</code>, <code>leaky_relu</code>, <code>elu</code>, <code>gelu</code>, <code>tanh</code>, <code>sigmoid</code>, <code>linear</code>.</td></tr>
+        <tr><td><code>nn.Dropout(rate)</code></td><td>Zeroes a share of its inputs while training.</td></tr>
+        <tr><td><code>nn.LSTM(units)</code></td><td>A recurrent layer over the last <code>lookback</code> bars. See the <i>LSTM Sequence Model (nn)</i> template.</td></tr>
+        <tr><td><code>target</code></td><td><code>"direction"</code> to classify up or not (end with <code>Dense(1, "sigmoid")</code>; the loss is cross-entropy) or <code>"return"</code> to predict the return (end with <code>Dense(1, "linear")</code>; Huber loss on standardized returns).</td></tr>
+        <tr><td><code>position</code></td><td><code>long_flat</code>: long when P(up) &gt; <code>threshold</code>. <code>long_short</code>: also short below 1 − <code>threshold</code>. <code>sized</code>: scales from 0 at 50% to full at the threshold. For returns, the threshold is the smallest predicted return to act on.</td></tr>
+        <tr><td><code>nn.Network(layers, loss, seed)</code></td><td>The model on its own: <code>.fit(X, y, epochs, batch_size, lr, weight_decay, val, patience)</code> returns the loss history, <code>.predict(X)</code>, <code>.summary()</code>.</td></tr>
+        <tr><td><code>nn.build_features</code>, <code>nn.labels</code>, <code>nn.stack</code>, <code>nn.Scaler</code>, <code>nn.to_positions</code></td><td>The individual steps, for when you write your own <code>fit_predict</code>. The <i>Neural Network, Your Own Pieces (nn)</i> template uses them.</td></tr>
+      </tbody>
+    </table></div>
+    <p><b>Changing the boilerplate.</b> Click <b>Modules</b> above the editor and choose <b>Edit a Copy</b> next to <code>nn.py</code>. The copy goes into your <a href="#modules">module library</a>. From then on, your strategies import it instead of the built-in module, so you can change the features, the training loop or a layer's maths. <b>Reset to Built-in</b> deletes the copy. Run history records which version each run used. Training is seeded, so the same code and data give the same network. Networks train on every run, so keep them small and retrain every few months; an LSTM is several times slower than dense layers.</p>
     <h3>Training Without Look-Ahead</h3>
     <p>The easy mistake in ML backtests is training on labels from the future. A label such as “the next day’s return” for bar <i>i</i> is only known at bar <i>i</i> + 1. <code>walk_forward</code> (available in every strategy) handles this. It retrains on a fixed schedule, gives each model only the rows whose labels were already known, and returns one out-of-sample prediction per bar:</p>
 <pre><code>import numpy as np
@@ -602,6 +639,7 @@ print(f"CAGR {stats['cagr']:.2%}  Sharpe {stats['sharpe']:.2f}  MaxDD {stats['ma
       <thead><tr><th>File</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>engine.py</code></td><td>Indicators (<code>qt</code>), data handling, the backtest loop, statistics, research tools and the JSON API the page calls. Pure Python, no dependencies.</td></tr>
+        <tr><td><code>lib/</code></td><td>Built-in modules strategies can import, such as <code>nn.py</code> (neural networks). A module of the same name in your library replaces one.</td></tr>
         <tr><td><code>templates.py</code></td><td>The built-in strategies, separated by <code>#%% id:</code> markers. Add your own by following the same format.</td></tr>
         <tr><td><code>index.html</code></td><td>The app: layout, editor, charts (Chart.js), CSV parsing, storage, and tool screens.</td></tr>
         <tr><td><code>runtime.js</code>, <code>worker.js</code></td><td>Start Pyodide in a background Web Worker so long runs don’t freeze the page and can be stopped, and load the packages a strategy imports. Sweeps and walk-forward grids start helper workers too.</td></tr>

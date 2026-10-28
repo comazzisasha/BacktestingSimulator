@@ -563,7 +563,7 @@ legend { padding: 0; font-size: 13px; font-weight: 500; color: var(--fg-2); marg
                 <div class="field grow"><label for="modName">New Module</label><input type="text" id="modName" name="module-name" placeholder="my_signals" maxlength="40" autocomplete="off" spellcheck="false" translate="no" aria-describedby="modName-help modName-err"><p class="ferr" id="modName-err" hidden></p></div>
                 <button class="btn small primary" type="submit">Create</button>
               </form>
-              <p class="help" id="modName-help">A module is a Python file your strategies import: <code translate="no">from my_signals import trend</code>. Save it with <span class="kbdSave"></span>; runs use what is in the editor.</p>
+              <p class="help" id="modName-help">A module is a Python file your strategies import: <code translate="no">from my_signals import trend</code>. Save it with <span class="kbdSave"></span>; runs use what is in the editor. Built-in modules such as <code translate="no">nn</code> (neural networks) are listed too: <b>Edit a Copy</b> to change one.</p>
               <div class="tablebox" id="modList"></div>
             </div>
             <div class="findbar" id="findBar" role="search" aria-label="Find and replace" hidden>
@@ -1917,7 +1917,7 @@ class PyError extends Error { constructor(info) { super(info.message || 'Python 
 const py = {
   mode: null, worker: null, seq: 0, waiting: new Map(), loaded: new Set(), ready: null, engineSrc: null,
   indexURLs() { return [new URL('pyodide/', location.href).href, PYODIDE_CDN]; },
-  initMsg() { return { type: 'init', engineSrc: this.engineSrc, indexURLs: this.indexURLs(), packageURL: PYODIDE_PACKAGES }; },
+  initMsg() { return { type: 'init', engineSrc: this.engineSrc, libs: builtinLibs, indexURLs: this.indexURLs(), packageURL: PYODIDE_PACKAGES }; },
   start(engineSrc) { this.engineSrc = engineSrc; this.ready = this._start(); return this.ready; },
   async _start() {
     try {
@@ -2312,8 +2312,10 @@ const files = {
     }
     this.render(); if (focus) editor.ta.focus({ preventScroll: true });
   },
+  // The library's modules, else the built-in ones (lib/*.py): what `import name` gets.
+  importable() { return { ...builtinLibs, ...this.payload() }; },
   openModule(name, line) {
-    if (!(name in this.drafts())) this.saveDraft(name, this.library()[name] ?? '');
+    if (!(name in this.drafts())) this.saveDraft(name, this.library()[name] ?? builtinLibs[name] ?? '');
     const o = store.get('openMods', []); if (!o.includes(name)) store.set('openMods', [...o, name]);
     this.show(name); if (line) editor.goTo(line);
   },
@@ -2353,13 +2355,17 @@ const files = {
 };
 const strategyCode = () => files.code('strategy');
 
+// Modules that ship with QuantLab in lib/ (strategies import them; Edit a Copy makes one yours).
+const BUILTIN_LIBS = ['nn'];
+const builtinLibs = {};
 const RESERVED_MODULES = ['engine', 'templates', 'strategy', 'qt', 'numpy', 'pandas', 'scipy', 'sklearn', 'torch', 'matplotlib', 'math', 'random', 'statistics', 'datetime', 'json', 'os', 'sys', 're', 'time', 'io'];
 async function createModule(ev) {
   ev.preventDefault();
   const name = $('#modName').value.trim();
   let problem = !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? 'Use letters, digits & _, starting with a letter, e.g. my_signals.'
     : KW.split('|').includes(name) || RESERVED_MODULES.includes(name) ? `${name} is taken by Python or QuantLab. Try ${name}_lib.`
-    : name in files.library() || name in files.drafts() ? `There is already a module called ${name}.` : null;
+    : name in files.library() || name in files.drafts() ? `There is already a module called ${name}.`
+    : name in builtinLibs ? `${name} is a built-in module. To change it, choose Edit a Copy next to ${name}.py below.` : null;
   if (!problem && py.ready) { try { await py.ready; problem = (await py.call('check_module', { name })).problem; } catch (e) { /* checked again when it runs */ } }
   if (!setFieldError('modName', problem)) { $('#modName').focus(); return; }
   const lib = files.library(); lib[name] = MODULE_TEMPLATE(name); store.set('modules', lib);
@@ -2367,20 +2373,29 @@ async function createModule(ev) {
   toast(`Created ${name}.py. Import it with: from ${name} import trend`);
 }
 function renderModules() {
-  const lib = files.library(), names = Object.keys({ ...lib, ...files.drafts() }).sort();
+  const lib = files.library(), names = Object.keys({ ...lib, ...files.drafts(), ...builtinLibs }).sort();
   if (!names.length) { $('#modList').innerHTML = '<p class="muted" style="margin:0">No modules yet.</p>'; return; }
   const mine = myStrategies(), uses = n => Object.entries(mine).filter(([, c]) => new RegExp(`^\\s*(from\\s+${n}\\s+import|import\\s+(\\w+\\s*,\\s*)*${n}\\b)`, 'm').test(c)).map(([k]) => k);
+  const btn = (cls, attr, n, text, label) => `<button class="btn small${cls}" type="button" ${attr}="${esc(n)}"${label ? ` aria-label="${esc(label)}"` : ''}>${text}</button>`;
   $('#modList').innerHTML = '<table><caption class="sr">Module library</caption><thead><tr><th scope="col">Module</th><th scope="col" class="n">Lines</th><th scope="col">Used By</th><th scope="col"><span class="sr">Actions</span></th></tr></thead><tbody>' +
-    names.map(n => { const c = lib[n] ?? files.drafts()[n] ?? ''; const u = uses(n);
-      return `<tr><td translate="no"><b>${esc(n)}.py</b>${n in lib ? '' : ' <span class="chip">not saved</span>'}</td><td class="n">${fmt.int(c.split('\n').length)}</td><td>${u.length ? esc(u.join(', ')) : '<span class="muted">—</span>'}</td>` +
-        `<td><div class="row" style="flex-wrap:nowrap;justify-content:flex-end"><button class="btn small" type="button" data-mod-open="${esc(n)}">Open</button><button class="btn small danger" type="button" data-mod-del="${esc(n)}">Delete</button></div></td></tr>`; }).join('') +
+    names.map(n => { const own = n in lib || n in files.drafts(), b = n in builtinLibs, c = lib[n] ?? files.drafts()[n] ?? builtinLibs[n] ?? ''; const u = uses(n);
+      const tag = b ? (own ? ' <span class="chip">your copy of the built-in</span>' : ' <span class="chip">built in</span>') : '';
+      const acts = b && !own ? btn('', 'data-mod-copy', n, 'Edit a Copy', `Edit a copy of ${n}.py`)
+        : btn('', 'data-mod-open', n, 'Open') + (b ? btn(' danger', 'data-mod-reset', n, 'Reset to Built-in', `Reset ${n}.py to the built-in version`) : btn(' danger', 'data-mod-del', n, 'Delete'));
+      return `<tr><td translate="no"><b>${esc(n)}.py</b>${tag}${own && !(n in lib) ? ' <span class="chip">not saved</span>' : ''}</td><td class="n">${fmt.int(c.split('\n').length)}</td><td>${u.length ? esc(u.join(', ')) : '<span class="muted">—</span>'}</td>` +
+        `<td><div class="row" style="flex-wrap:nowrap;justify-content:flex-end">${acts}</div></td></tr>`; }).join('') +
     '</tbody></table>';
+}
+// A built-in module becomes yours to change: a copy in the library, which replaces it for your strategies.
+function copyBuiltin(name) {
+  const lib = files.library(); lib[name] = builtinLibs[name]; store.set('modules', lib); renderModules(); files.openModule(name);
+  toast(`${name}.py is now your copy: your strategies use it instead of the built-in one. Reset to Built-in from Modules undoes it.`);
 }
 function deleteModule(name) {
   const code = files.library()[name], draft = files.drafts()[name], wasOpen = files.open().includes(name);
   if (wasOpen) { const d = files.drafts(); if (files.active === name) files.show('strategy', false); delete d[name]; store.set('modDrafts', d); store.set('openMods', store.get('openMods', []).filter(n => n !== name)); }
   const lib = files.library(); delete lib[name]; store.set('modules', lib); files.render(); renderModules();
-  toast(`Deleted ${name}.py.`, { label: 'Undo', run: () => {
+  toast(name in builtinLibs ? `${name}.py is the built-in version again.` : `Deleted ${name}.py.`, { label: 'Undo', run: () => {
     const l = files.library(); if (code !== undefined) l[name] = code; store.set('modules', l);
     if (wasOpen) { files.saveDraft(name, draft); files.openModule(name); } renderModules(); } });
 }
@@ -2421,7 +2436,7 @@ function moduleDefs(src) {
 }
 // Names a file imports from the module library: alias -> module (import x as y, from x import a).
 function moduleImports(src) {
-  const mods = files.payload(), alias = {}, from = {};
+  const mods = files.importable(), alias = {}, from = {};
   for (const m of src.matchAll(/^[ \t]*import[ \t]+([\w \t,.]+?)[ \t]*(?:#.*)?$/gm))
     for (const part of m[1].split(',')) { const [mod, as] = part.trim().split(/\s+as\s+/); if (mod in mods) alias[as || mod] = mod; }
   for (const m of src.matchAll(/^[ \t]*from[ \t]+(\w+)[ \t]+import[ \t]+\(?([\w \t,]+)\)?/gm))
@@ -2440,13 +2455,13 @@ const complete = {
     if (quote) return null;
     const C = COMPLETE || {}, uniq = list => { const s = new Set(); return list.filter(x => !s.has(x.name) && s.add(x.name)); };
     let m, items = null, prefix = '';
-    if ((m = line.match(/^\s*from\s+(\w+)\s+import\s+(?:[\w\s,()]*,\s*|\(\s*)?(\w*)$/))) { prefix = m[2]; items = m[1] in files.payload() ? moduleDefs(files.payload()[m[1]]) : []; }
-    else if ((m = line.match(/^\s*(?:import|from)\s+(\w*)$/))) { prefix = m[1]; items = [...Object.keys(files.payload()).map(n => ({ name: n, kind: 'your module' })), ...PY_PACKAGES.map(n => ({ name: n, kind: 'package' }))]; }
+    if ((m = line.match(/^\s*from\s+(\w+)\s+import\s+(?:[\w\s,()]*,\s*|\(\s*)?(\w*)$/))) { prefix = m[2]; items = m[1] in files.importable() ? moduleDefs(files.importable()[m[1]]) : []; }
+    else if ((m = line.match(/^\s*(?:import|from)\s+(\w*)$/))) { prefix = m[1]; items = [...Object.keys(files.payload()).map(n => ({ name: n, kind: 'your module' })), ...Object.keys(builtinLibs).filter(n => !(n in files.payload())).map(n => ({ name: n, kind: 'built-in module' })), ...PY_PACKAGES.map(n => ({ name: n, kind: 'package' }))]; }
     else if ((m = line.match(/(\bctx\s*\[[^\]]*\]|\b[A-Za-z_]\w*)\.(\w*)$/))) {
       prefix = m[2]; const base = m[1].replace(/\s/g, ''), imp = moduleImports(text);
       if (base.startsWith('ctx[')) items = C.asset; else if (base === 'ctx') items = uniq([...(C.ctx || []), ...(C.portfolio || [])]);
       else if (base === 'qt') items = C.qt; else if (base === 'data') items = uniq([...(C.data || []), ...(C.panel || [])]);
-      else if (imp.alias[base]) items = moduleDefs(files.payload()[imp.alias[base]]);
+      else if (imp.alias[base]) items = moduleDefs(files.importable()[imp.alias[base]]);
       else return null;
     } else if ((m = line.match(/(?:^|[^\w.])([A-Za-z_]\w*)$/)) && (force || m[1].length >= 2)) {
       prefix = m[1];
@@ -2531,7 +2546,7 @@ async function goToDefinition() {
   }
   const d = findDef(text, word); if (d) { editor.goTo(d.line, d.col); return; }
   if (imp.from[word]) return jump(imp.from[word].mod, imp.from[word].name);
-  if (imp.alias[word] || word in files.payload()) return files.openModule(imp.alias[word] || word);
+  if (imp.alias[word] || word in files.importable()) return files.openModule(imp.alias[word] || word);
   const g = (C.globals || []).find(x => x.name === word); if (g) return describe(g, '');
   toast(`No definition of ${word} in this file or your modules.`);
 }
@@ -5013,7 +5028,7 @@ async function saveRun(p, r) {
   const rec = {
     id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), ts: new Date().toISOString(),
     strategy: { kind: currentSource().kind, name: currentSource().name, template: $('#template').value },
-    code: p.code, modules: Object.fromEntries(Object.keys(r.provenance.modules || {}).map(n => [n, (p.modules || {})[n]])),
+    code: p.code, modules: Object.fromEntries(Object.keys(r.provenance.modules || {}).map(n => [n, (p.modules || {})[n] ?? builtinLibs[n]])),
     market: { benchmark_spec: p.benchmark, ticker: p.ticker || null, tickers: p.tickers || null, benchmark: r.benchmark, start: p.start, end: p.end },
     provenance: { ...r.provenance, engine_file: engineHash }, metrics: r.metrics, bench_metrics: r.bench_metrics,
     curve: { dates: idx.map(i => r.dates[i]), equity: idx.map(i => r.equity[i]), bench: idx.map(i => r.bench_equity[i]) },
@@ -5070,7 +5085,7 @@ async function restoreRun(x) {
   // unless that module has unsaved edits of its own.
   const opened = [], kept = [];
   for (const [n, src] of Object.entries(x.modules || {})) {
-    if (src == null || files.payload()[n] === src) continue;
+    if (src == null || files.importable()[n] === src) continue;
     if (n in files.drafts() && files.dirty(n)) { kept.push(n); continue; }
     files.saveDraft(n, src); files.openModule(n); opened.push(n);
   }
@@ -5734,6 +5749,8 @@ function wire() {
   $('#modList').addEventListener('click', e => {
     const o = e.target.closest('[data-mod-open]'); if (o) { togglePicker($('#modBtn'), $('#modPick')); files.openModule(o.dataset.modOpen); return; }
     const d = e.target.closest('[data-mod-del]'); if (d) armConfirm(d, 'Confirm Delete', () => deleteModule(d.dataset.modDel));
+    const c = e.target.closest('[data-mod-copy]'); if (c) { togglePicker($('#modBtn'), $('#modPick')); copyBuiltin(c.dataset.modCopy); return; }
+    const r = e.target.closest('[data-mod-reset]'); if (r) armConfirm(r, 'Confirm Reset', () => deleteModule(r.dataset.modReset));
   });
   $('#findInput').addEventListener('input', () => { find.refresh(true); editor.renderMarks(); if (find.matches.length) editor.reveal(editor.lineOf(find.matches[find.idx][0])); });
   $('#findBar').addEventListener('keydown', e => {
@@ -6009,7 +6026,9 @@ async function boot() {
 
   let engineSrc, tplText;
   try {
+    const libs = BUILTIN_LIBS.map(n => fetch(`lib/${n}.py`).then(r => (r.ok ? r.text() : null), () => null).then(src => { if (src != null) builtinLibs[n] = src; }));
     [engineSrc, tplText] = await Promise.all(['engine.py', 'templates.py'].map(f => fetch(f).then(r => { if (!r.ok) throw new Error(f); return r.text(); })));
+    await Promise.all(libs);
   } catch (e) {
     setStatus('error', 'Needs a web server');
     $('#resTitle').textContent = 'Serve QuantLab from a Web Server';

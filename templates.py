@@ -492,6 +492,106 @@ def signals(data):
                         retrain_every=PARAMS["retrain"], horizon=h)
     return [1.0 if p > PARAMS["threshold"] else 0.0 for p in prob]
 
+#%% id: nn_template
+#%% name: Neural Network Template (nn)
+#%% group: Machine Learning
+#%% about: Describe a network as a list of layers and nn.signals() does the rest: features, labels, walk-forward retraining, scaling, early stopping, positions and an out-of-sample report in the Log.
+# The built-in nn module does the boilerplate, so a deep-learning strategy is a list of layers.
+# Layers: nn.Dense(units, activation), nn.Dropout(rate), nn.LSTM(units). Activations: relu,
+# leaky_relu, elu, gelu, tanh, sigmoid, linear. End with Dense(1, "sigmoid") to predict
+# P(up) or Dense(1, "linear") with target="return" to predict the return itself.
+#
+# Every model is trained only on bars whose outcome was already known, then predicts the
+# bars until the next retrain. The Log shows how it did out of sample: compare the hit rate
+# with the base rate before trusting the equity curve.
+#
+# To change what happens behind the scenes (features, training loop, how predictions become
+# positions), open Modules above the editor and choose Edit a Copy next to nn.py.
+import nn
+
+PARAMS = {"epochs": 60, "lr": 0.001, "dropout": 0.1, "retrain": 126, "threshold": 0.55}
+
+def layers():
+    return [
+        nn.Dense(32, "relu"),
+        nn.Dropout(PARAMS["dropout"]),
+        nn.Dense(16, "relu"),
+        nn.Dense(1, "sigmoid"),        # P(the next bar is up)
+    ]
+
+def signals(data):
+    return nn.signals(
+        data, layers(),
+        target="direction",            # or "return" (with a linear output)
+        horizon=1,                     # bars ahead the prediction is about
+        min_train=504,                 # labelled bars before the first model
+        retrain=PARAMS["retrain"],     # bars between retrains
+        epochs=PARAMS["epochs"], lr=PARAMS["lr"], batch_size=256, patience=8,
+        position="long_flat",          # long_flat, long_short or sized
+        threshold=PARAMS["threshold"],
+        ensemble=1,                    # >1 averages networks trained with different seeds
+    )
+
+#%% id: nn_lstm
+#%% name: LSTM Sequence Model (nn)
+#%% group: Machine Learning
+#%% about: A recurrent network (LSTM) reads the last 10 bars of features as a sequence and predicts whether the next week is up. Slower to train than a plain network: it retrains once a year.
+# lookback=10 gives the network the last 10 bars of every feature, in order, instead of one
+# bar. An LSTM layer reads that sequence and passes its final state on. Training takes longer
+# than a dense network, so this retrains once a year and stops at 20 epochs.
+import nn
+
+PARAMS = {"lookback": 10, "units": 12, "horizon": 5, "epochs": 20, "threshold": 0.55}
+
+def signals(data):
+    return nn.signals(
+        data,
+        [nn.LSTM(PARAMS["units"]), nn.Dense(1, "sigmoid")],
+        lookback=PARAMS["lookback"], horizon=PARAMS["horizon"],
+        retrain=252, epochs=PARAMS["epochs"], lr=0.003, patience=5,
+        threshold=PARAMS["threshold"],
+    )
+
+#%% id: nn_custom
+#%% name: Neural Network, Your Own Pieces (nn)
+#%% group: Machine Learning
+#%% about: The same building blocks with the boilerplate opened up: your own features, a return-predicting network trained with nn.Network inside walk_forward, and position sizing you write.
+# nn.signals() is a shortcut. Here its steps are written out, so each one can change:
+#   1. features: a dict of name -> function of the data (each may only look backwards)
+#   2. labels: what happens after each bar (here: the return over the next 5 bars)
+#   3. fit_predict: scale with the training rows' statistics, train a network, predict
+#   4. walk_forward: calls fit_predict on a schedule, never training on unknown labels
+#   5. positions: from predictions to target weights
+import nn
+
+PARAMS = {"horizon": 5, "epochs": 40, "scale": 0.02}
+
+FEATURES = {
+    "ret_5d": lambda d: qt.roc(d.close, 5),
+    "ret_20d": lambda d: qt.roc(d.close, 20),
+    "ret_60d": lambda d: qt.roc(d.close, 60),
+    "rsi_14": lambda d: [x / 100 - 0.5 for x in qt.rsi(d.close, 14)],
+    "vol_20": lambda d: qt.realized_vol(d.close, 20),
+    "trend_200": lambda d: [c / s - 1 if s == s else NAN for c, s in zip(d.close, qt.sma(d.close, 200))],
+}
+
+LAYERS = [nn.Dense(24, "gelu"), nn.Dropout(0.2), nn.Dense(1, "linear")]
+
+def fit_predict(X, y, X_new):
+    scaler = nn.Scaler().fit(X)
+    mu, sd = y.mean(), y.std() or 1.0
+    net = nn.Network(LAYERS, loss="huber", seed=0)
+    hist = net.fit(scaler.transform(X), (y - mu) / sd, epochs=PARAMS["epochs"], lr=0.003, weight_decay=1e-3, val=0.2, patience=6)
+    print("trained on %d rows: %d epochs, best %s" % (len(X), hist["epochs"], hist["best_epoch"]))
+    return net.predict(scaler.transform(X_new)) * sd + mu        # predicted 5-bar return
+
+def signals(data):
+    X, names = nn.build_features(data, FEATURES)
+    y = nn.labels(data, "return", PARAMS["horizon"])
+    pred = walk_forward(X, y, fit_predict, min_train=504, retrain_every=126, horizon=PARAMS["horizon"])
+    # Size by conviction: full long at a predicted +2% (PARAMS["scale"]), flat at 0 or below.
+    return [0.0 if p != p else max(0.0, min(1.0, p / PARAMS["scale"])) for p in pred]
+
 #%% id: pf_equal_weight
 #%% name: Equal Weight, Monthly Rebalance
 #%% group: Portfolio

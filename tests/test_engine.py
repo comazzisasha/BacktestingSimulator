@@ -3117,6 +3117,168 @@ def test_sweep_robustness_api_on_a_real_sweep():
     assert approx(c["curvature"], grid[0][1] + grid[2][1] + grid[1][0] + grid[1][2] - 4 * grid[1][1], 1e-12) and not c["edge"]
 
 
+
+# ---------------------------------------------------------------- nn (built-in module)
+def _nn():
+    """A fresh import of the built-in nn module, the way a strategy gets it."""
+    import importlib
+    engine.set_modules({})
+    return importlib.import_module("nn")
+
+
+def _num_grad(f, x, eps=1e-6):
+    g = [0.0] * x.size
+    flat = x.reshape(-1)
+    for i in range(x.size):
+        old = flat[i]
+        flat[i] = old + eps
+        up = f()
+        flat[i] = old - eps
+        dn = f()
+        flat[i] = old
+        g[i] = (up - dn) / (2 * eps)
+    return g
+
+
+def _check_grads(nn, layers, X, y, loss=None, tol=1e-5):
+    import numpy as np
+    net = nn.Network(layers, loss=loss, seed=3).build(X.shape[1:])
+    lossf = lambda: nn._loss(net.loss, net.forward(X), y)[0]  # noqa: E731
+    net._backward(net.forward(X), y)
+    grads = [g for layer in net.layers for g in layer.grads]
+    for p, g in zip(net._params(), grads):
+        num = np.array(_num_grad(lossf, p)).reshape(p.shape)
+        err = float(np.max(np.abs(num - g)) / max(1e-8, float(np.max(np.abs(num))) + float(np.max(np.abs(g)))))
+        assert err < tol, (layers, net.loss, err)
+
+
+def test_nn_backward_matches_numerical_gradients():
+    import numpy as np
+    nn = _nn()
+    rng = np.random.default_rng(1)
+    X = rng.normal(size=(12, 4))
+    yb = (rng.random((12, 1)) > 0.5).astype(float)
+    yr = rng.normal(size=(12, 1))
+    for act in nn.ACTIVATIONS:
+        if act == "relu" or act == "leaky_relu":
+            continue                                   # kinks: checked below away from zero
+        _check_grads(nn, [nn.Dense(5, act), nn.Dense(1, "linear")], X, yr, "mse")
+    _check_grads(nn, [nn.Dense(6, "tanh"), nn.Dense(1, "sigmoid")], X, yb, "bce")       # sigmoid + cross-entropy shortcut
+    _check_grads(nn, [nn.Dense(6, "elu"), nn.Dense(1, "sigmoid")], X, yb, "mse")        # sigmoid through the general path
+    _check_grads(nn, [nn.Dense(6, "gelu"), nn.Dense(1, "linear")], X, yr * 3, "huber")   # both sides of the Huber kink
+    _check_grads(nn, [nn.Dense(6, "relu"), nn.Dense(1, "linear")], X + 0.0, yr, "mse", tol=1e-4)
+    seq = rng.normal(size=(7, 5, 3))
+    _check_grads(nn, [nn.LSTM(4), nn.Dense(1, "sigmoid")], seq, yb[:7], "bce")
+    _check_grads(nn, [nn.LSTM(3), nn.Dense(4, "tanh"), nn.Dense(1, "linear")], seq, yr[:7], "mse")
+    _check_grads(nn, [nn.Dense(3, "tanh"), nn.Dense(1, "linear")], seq, yr[:7], "mse")  # Dense flattens a sequence
+    d = nn.Dropout(0.5)
+    out = d.forward(np.ones((200, 10)), train=True, rng=np.random.default_rng(0))
+    assert set(np.unique(out)) <= {0.0, 2.0} and 0.4 < (out == 0).mean() < 0.6
+    assert np.array_equal(d.backward(np.ones((200, 10))), out), "dropout's gradient goes through the kept inputs only"
+    assert np.array_equal(d.forward(np.ones((3, 2))), np.ones((3, 2))), "no dropout when predicting"
+
+
+def test_nn_learns_and_is_repeatable():
+    import numpy as np
+    nn = _nn()
+    rng = np.random.default_rng(0)
+    X = rng.uniform(-1, 1, size=(800, 2))
+    y = (X[:, 0] * X[:, 1] > 0).astype(float)            # XOR: no linear model can do this
+    net = nn.Network([nn.Dense(16, "tanh"), nn.Dense(1, "sigmoid")], seed=0)
+    hist = net.fit(X, y, epochs=200, batch_size=64, lr=0.01, val=0.2, patience=30)
+    acc = float(np.mean((net.predict(X) > 0.5) == y))
+    assert acc > 0.93, acc
+    assert hist["loss"][-1] < hist["loss"][0] and hist["best_epoch"] is not None
+    assert net.loss == "bce" and "parameters" in net.summary()
+    again = nn.Network([nn.Dense(16, "tanh"), nn.Dense(1, "sigmoid")], seed=0)
+    again.fit(X, y, epochs=200, batch_size=64, lr=0.01, val=0.2, patience=30)
+    assert np.array_equal(again.predict(X), net.predict(X)), "same seed, same network"
+    reg = nn.Network([nn.Dense(32, "gelu"), nn.Dense(1, "linear")], seed=0)   # regression defaults to mse
+    reg.fit(X, np.sin(3 * X[:, 0]), epochs=300, lr=0.01, val=0)
+    assert reg.loss == "mse" and float(np.mean((reg.predict(X) - np.sin(3 * X[:, 0])) ** 2)) < 0.01
+    seqX = rng.normal(size=(600, 6, 1))
+    seqy = (seqX[:, 0, 0] > 0).astype(float)            # the answer is at the start of the sequence
+    lstm = nn.Network([nn.LSTM(8), nn.Dense(1, "sigmoid")], seed=0)
+    lstm.fit(seqX, seqy, epochs=60, lr=0.01, val=0.2, patience=15)
+    assert float(np.mean((lstm.predict(seqX) > 0.5) == seqy)) > 0.9, "an LSTM carries information along the sequence"
+    for bad in (lambda: nn.Dense(3, "swish"), lambda: nn.Network([]), lambda: nn.Network([nn.Dense(1)], loss="hinge"),
+                lambda: nn.Dropout(1.0), lambda: nn.Network([nn.LSTM(3)]).build((4,))):
+        try:
+            bad()
+            assert False, "should fail"
+        except ValueError:
+            pass
+
+
+def test_nn_helpers_features_labels_scaler_positions():
+    import numpy as np
+    nn = _nn()
+    d = engine.DataView(DEMO)
+    X, names = nn.build_features(d)
+    assert X.shape == (DEMO.n, len(nn.DEFAULT_FEATURES)) and names == list(nn.DEFAULT_FEATURES)
+    cut = engine.DataView(DEMO, 1000)
+    Xc, _ = nn.build_features(cut)
+    assert np.allclose(Xc, X[:1000], equal_nan=True), "features only look backwards"
+    y = nn.labels(d, "direction", 5)
+    assert approx(y[10], DEMO.close[15] / DEMO.close[10] - 1) and all(v != v for v in y[-5:])
+    W = nn.stack(X, 3)
+    assert W.shape == (DEMO.n, 3, X.shape[1]) and np.isnan(W[1]).all() and np.array_equal(W[400], X[398:401])
+    sc = nn.Scaler().fit(X[:500])
+    Z = sc.transform(X[:500])
+    ok = ~np.isnan(X[:500]).any(1)
+    assert np.allclose(Z[ok].mean(0), 0, atol=0.2) and Z.max() <= 5 and not np.isnan(Z).any()
+    assert nn.to_positions([0.6, 0.5, 0.4, float("nan")]) == [1.0, 0.0, 0.0, 0.0]
+    assert nn.to_positions([0.6, 0.5, 0.4], position="long_short") == [1.0, 0.0, -1.0]
+    assert [round(w, 9) for w in nn.to_positions([0.55, 0.525, 0.45], position="sized")] == [1.0, 0.5, -1.0]
+    assert nn.to_positions([0.01, -0.01], classify=False, position="long_short") == [1.0, -1.0]
+
+
+def test_nn_signals_are_causal_and_reported():
+    nn = _nn()
+    kw = dict(min_train=300, retrain=200, epochs=8, report=False)
+    full = nn.signals(engine.DataView(DEMO), **kw)
+    assert len(full) == DEMO.n and set(full) <= {0.0, 1.0} and all(w == 0 for w in full[:300])
+    assert "hit rate" in nn.LAST["report"] and nn.LAST["features"] == list(nn.DEFAULT_FEATURES)
+    for k in (900, 1500):
+        part = nn.signals(engine.DataView(DEMO, k), **kw)
+        assert part == full[:k], "a prefix of the data gives the same signals for those bars"
+    seq = nn.signals(engine.DataView(DEMO), [nn.LSTM(4), nn.Dense(1, "sigmoid")], lookback=5, horizon=3, **kw)
+    assert seq[:1700] == nn.signals(engine.DataView(DEMO, 1700), [nn.LSTM(4), nn.Dense(1, "sigmoid")], lookback=5, horizon=3, **kw)
+    reg = nn.signals(engine.DataView(DEMO), target="return", position="sized", **kw)
+    assert "correlation" in nn.LAST["report"] and all(-1 <= w <= 1 for w in reg)
+    short = nn.signals(engine.DataView(DEMO, 200), **kw)
+    assert short == [0.0] * 200 and "no model was trained" in nn.LAST["report"]
+
+
+def test_nn_template_strategy_runs_with_lookahead_check_and_provenance():
+    engine.set_modules({})
+    engine.DATA["DEMO-STOCK"] = DEMO
+    code = load_templates()["nn_template"].replace('"epochs": 60', '"epochs": 10')
+    out = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code})))
+    assert out["ok"], out
+    r = out["result"]
+    assert r["lookahead"]["checked"] >= 2 and not r["lookahead"]["violations"]
+    assert "Out of sample" in r["logs"] and "hit rate" in r["logs"]
+    import hashlib
+    assert r["provenance"]["modules"] == {"nn": hashlib.sha256(engine.BUILTIN_MODULES["nn"].encode("utf-8")).hexdigest()}
+
+
+def test_a_library_copy_replaces_the_builtin_nn():
+    engine.DATA["DEMO-STOCK"] = DEMO
+    code = "import nn\ndef signals(data):\n    return nn.signals(data, min_train=300, retrain=400, epochs=3)\n"
+    run_ = lambda: json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code, "lookahead_budget": 0})))  # noqa: E731
+    base = run_()["result"]
+    assert "nn:" in base["logs"]
+    mine = engine.BUILTIN_MODULES["nn"].replace("def signals(data, layers=None,", "def signals_original(data, layers=None,") + \
+        "\n\ndef signals(data, **kw):\n    print('my copy')\n    return [1.0] * len(data.close)\n"
+    out = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code, "modules": {"nn": mine}, "lookahead_budget": 0})))
+    assert out["ok"], out
+    assert "my copy" in out["result"]["logs"] and out["result"]["provenance"]["modules"]["nn"] != base["provenance"]["modules"]["nn"]
+    back = json.loads(engine.handle("run", json.dumps({"ticker": "DEMO-STOCK", "code": code, "modules": {}, "lookahead_budget": 0})))["result"]
+    assert back["equity"] == base["equity"], "removing the copy brings the built-in back (and the cache doesn't mix them up)"
+    assert engine.module_name_problem("nn") is None, "a library module may be called nn"
+
+
 if __name__ == "__main__":
     failed = 0
     tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]

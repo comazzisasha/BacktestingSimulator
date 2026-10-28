@@ -14,6 +14,7 @@
   let packagesFor = null;   // last strategy code whose imports loaded successfully
   let pyflakes = null;      // loading the bundled pyflakes wheel (lint falls back to a simpler check without it)
   const NO_IMPORTS = { lint: 1, completions: 1, check_module: 1 };   // calls that read code without running it
+  let libs = {};            // built-in modules (lib/*.py): name -> source
 
   function loadScript(url) {
     if (typeof importScripts === 'function') {
@@ -72,6 +73,9 @@
     if (!py) throw new Error('The Python runtime could not be loaded from ' + errors.join(' or '));
     py.FS.mkdirTree('/home/pyodide/quantlab');
     py.FS.writeFile('/home/pyodide/quantlab/engine.py', msg.engineSrc);
+    libs = msg.libs || {};    // written before engine is imported, which reads them
+    py.FS.mkdirTree('/home/pyodide/quantlab/lib');
+    Object.keys(libs).forEach(function (name) { py.FS.writeFile('/home/pyodide/quantlab/lib/' + name + '.py', libs[name]); });
     py.runPython('import sys\nsys.path.insert(0, "/home/pyodide/quantlab")\nimport engine');
     handle = py.globals.get('engine').handle;
     return { version: py.version };
@@ -111,6 +115,9 @@
           const p = JSON.parse(msg.payload);
           code = p.code || null;
           if (code && p.modules) code = [code].concat(Object.values(p.modules)).join('\n');   // modules' imports too
+          if (code) Object.keys(libs).forEach(function (name) {   // and a built-in module's, unless the library replaces it
+            if (!(p.modules && name in p.modules) && new RegExp('^\\s*(import|from)\\s+' + name + '\\b', 'm').test(code)) code += '\n' + libs[name];
+          });
         } catch (e) { /* no code in this call */ }
         if (msg.method === 'lint') await loadPyflakes();
         else if (!NO_IMPORTS[msg.method]) await loadImports(code, function (text) { reply({ id: msg.id, progress: text }); });

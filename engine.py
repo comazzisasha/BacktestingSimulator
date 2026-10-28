@@ -31,6 +31,7 @@ import random
 import statistics
 import sys
 import io
+import os
 import traceback
 import linecache
 import datetime as _dt
@@ -2278,6 +2279,32 @@ _RESERVED = {"engine", "templates", "strategy", "qt", "numpy", "pandas", "scipy"
              "torch", "matplotlib", "micropip", "pyodide", "js", "pyflakes"}
 
 
+# Built-in modules ship in lib/ next to engine.py (nn: neural networks). Strategies import
+# them like library modules; a library module with the same name replaces the built-in one,
+# which is how "Edit a Copy" works.
+BUILTIN_MODULES = {}
+
+
+def _load_builtin_modules():
+    here = os.path.dirname(os.path.abspath(globals().get("__file__") or "."))
+    folder = os.path.join(here, "lib")
+    BUILTIN_MODULES.clear()
+    if os.path.isdir(folder):
+        for fn in sorted(os.listdir(folder)):
+            if fn.endswith(".py") and fn[:-3].isidentifier():
+                with open(os.path.join(folder, fn), encoding="utf-8") as f:
+                    BUILTIN_MODULES[fn[:-3]] = f.read()
+
+
+_load_builtin_modules()
+
+
+def module_source(name):
+    """The source a strategy gets for `import name`: the library's module, else the built-in one."""
+    src = MODULES.get(name)
+    return BUILTIN_MODULES.get(name) if src is None else src
+
+
 def module_filename(name):
     return "<%s.py>" % name
 
@@ -2286,7 +2313,7 @@ def _module_of(filename):
     """'my_signals' for '<my_signals.py>'; None for the strategy or anything else."""
     if filename and filename.startswith("<") and filename.endswith(".py>"):
         name = filename[1:-4]
-        return name if name in MODULES else None
+        return name if module_source(name) is not None else None
     return None
 
 
@@ -2305,7 +2332,7 @@ class _ModuleFinder:
     quantlab = True
 
     def find_spec(self, name, path=None, target=None):
-        if path is None and name in MODULES:
+        if path is None and module_source(name) is not None:
             import importlib.util
             return importlib.util.spec_from_loader(name, self, origin=module_filename(name))
         return None
@@ -2315,7 +2342,7 @@ class _ModuleFinder:
 
     def exec_module(self, module):
         name = module.__name__
-        src, fn = MODULES[name], module_filename(name)
+        src, fn = module_source(name), module_filename(name)
         linecache.cache[fn] = (len(src), None, src.splitlines(True), fn)
         for k, v in _namespace().items():     # the same helpers a strategy gets: qt, isnan, math ...
             if k != "__name__":
@@ -2355,7 +2382,7 @@ def set_modules(mods):
 
 def module_hashes(names):
     import hashlib
-    return {n: hashlib.sha256(MODULES[n].encode("utf-8")).hexdigest() for n in names if n in MODULES}
+    return {n: hashlib.sha256(module_source(n).encode("utf-8")).hexdigest() for n in names if module_source(n) is not None}
 
 
 class Strategy:
@@ -7454,7 +7481,7 @@ def _prepare(p):
 def _signal_key(p, strat):
     """What signals(data) depends on besides the data: the code, its parameters and the modules it imported."""
     import hashlib
-    mods = "".join("\0%s\0%s" % (n, MODULES.get(n, "")) for n in strat.modules)
+    mods = "".join("\0%s\0%s" % (n, module_source(n) or "") for n in strat.modules)
     return hashlib.sha256((p["code"] + "\0" + json.dumps(p.get("params"), sort_keys=True) + mods).encode()).hexdigest()
 
 
